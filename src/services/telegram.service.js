@@ -93,6 +93,25 @@ bot.on("text", async (ctx) => {
 
     const lowerText = text.toLowerCase();
 
+    if (lowerText === "/help") {
+      await bot.telegram.sendMessage(
+        chatId,
+        `📊 Nexa — Command Menu
+📈 Analysis
+/analyze TICKER — Full AI report
+/quick TICKER — Fast verdict only
+⚖ Comparison
+/compare TICKER1 TICKER2 — Compare two stocks
+🏆 Rankings
+/top — Rank your best watchlist opportunities
+💼 Portfolio
+/portfolio — Analyze your holdings
+⚠️ For educational purposes only.
+Not SEBI registered investment advice.`
+      );
+      return;
+    }
+
     /**
      * 1. Waiting state for stock input
      */
