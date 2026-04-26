@@ -153,6 +153,57 @@ Not SEBI registered investment advice.
       return;
     }
 
+    if (lowerText.startsWith("/compare ")) {
+      const parts = text.split(" ");
+      if (parts.length < 3) {
+        await bot.telegram.sendMessage(
+          chatId,
+          "Please provide two stock tickers.\nExample: /compare TCS.NS INFY.NS"
+        );
+        return;
+      }
+      const ticker1 = parts[1].trim();
+      const ticker2 = parts[2].trim();
+      await bot.telegram.sendMessage(
+        chatId,
+        `⚖ Comparing ${ticker1} vs ${ticker2}...`
+      );
+      try {
+        const stock1 = await getCompanyOverview(ticker1);
+        const stock2 = await getCompanyOverview(ticker2);
+        const result1 = await masterAgent(stock1);
+        const result2 = await masterAgent(stock2);
+        const score1 = result1.decision.finalConfidenceScore;
+        const score2 = result2.decision.finalConfidenceScore;
+        const winner =
+          score1 >= score2
+            ? ticker1.toUpperCase()
+            : ticker2.toUpperCase();
+        const message = `
+⚖ STOCK COMPARISON
+📈 ${ticker1.toUpperCase()}
+Verdict: ${result1.decision.finalDecision}
+Confidence: ${score1}/10
+Risk: ${result1.risk.riskLevel}
+📈 ${ticker2.toUpperCase()}
+Verdict: ${result2.decision.finalDecision}
+Confidence: ${score2}/10
+Risk: ${result2.risk.riskLevel}
+🏆 Better Opportunity:
+${winner}
+⚠️ Educational only.
+Not SEBI registered investment advice.
+`.trim();
+        await bot.telegram.sendMessage(chatId, message);
+      } catch (error) {
+        await bot.telegram.sendMessage(
+          chatId,
+          "❌ Comparison failed. Please check ticker symbols."
+        );
+      }
+      return;
+    }
+
     /**
      * 1. Waiting state for stock input
      */
