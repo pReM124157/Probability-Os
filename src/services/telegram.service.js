@@ -112,6 +112,47 @@ Not SEBI registered investment advice.`
       return;
     }
 
+    if (lowerText.startsWith("/quick ")) {
+      const ticker = text.substring(7).trim();
+      if (!ticker) {
+        await bot.telegram.sendMessage(
+          chatId,
+          "Please provide a stock ticker.\nExample: /quick RELIANCE.NS"
+        );
+        return;
+      }
+      await bot.telegram.sendMessage(
+        chatId,
+        `⚡ Quick scan: ${ticker}...`
+      );
+      try {
+        const stockData = await getCompanyOverview(ticker);
+        const result = await masterAgent(stockData);
+        const message = `
+⚡ QUICK VERDICT
+📈 Stock: ${ticker.toUpperCase()}
+📊 Verdict: ${result.decision.finalDecision}
+🎯 Confidence: ${result.decision.finalConfidenceScore}/10
+⚠ Risk Level: ${result.risk.riskLevel}
+📝 Summary:
+${result.decision.reason}
+📌 Suggested Action:
+${result.rebalancing.action}
+For full report:
+${"/analyze " + ticker}
+⚠️ Educational only.
+Not SEBI registered investment advice.
+`.trim();
+        await bot.telegram.sendMessage(chatId, message);
+      } catch (error) {
+        await bot.telegram.sendMessage(
+          chatId,
+          `❌ Could not analyze ${ticker}`
+        );
+      }
+      return;
+    }
+
     /**
      * 1. Waiting state for stock input
      */
