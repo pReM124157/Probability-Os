@@ -25,7 +25,7 @@ export async function masterAgent(stockData) {
     // PHASE 2: Execution Intelligence (Entry Timing)
     const entryTiming = await analyzeEntryTiming({
       stock: ticker,
-      currentPrice: liveMarketData.currentPrice || 0,
+      currentPrice: liveMarketData.currentPrice || technical.currentPrice || 0,
       confidenceScore: decision.finalConfidenceScore || 5,
       riskLevel: risk.riskLevel || "MEDIUM",
       valuationScore: valuation.score || 5,

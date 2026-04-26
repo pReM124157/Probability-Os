@@ -16,10 +16,18 @@ export async function technicalAgent(symbol) {
     console.log(`Fetching historical data for ${symbol}...`);
     const history = await yahooFinance.historical(symbol, queryOptions);
     
-    if (!history || history.length < 20) {
+    if (!history || !history.length || history.length < 20) {
       console.warn(`Insufficient history for ${symbol}`);
-      return { score: 5, rsi: 50, trend: "NEUTRAL", message: "Insufficient data" };
+      return { 
+        score: 5, 
+        rsi: 50, 
+        trend: "NEUTRAL", 
+        message: "Insufficient data",
+        currentPrice: 0 
+      };
     }
+
+    const currentPrice = history[history.length - 1]?.close || 0;
 
     const prices = history.map(h => h.close).filter(p => p != null);
     const latestPrice = prices[prices.length - 1];
@@ -65,6 +73,7 @@ export async function technicalAgent(symbol) {
       rsi: Math.round(rsi),
       sma20: Number(sma20.toFixed(2)),
       sma50: Number(sma50.toFixed(2)),
+      currentPrice,
       trend: latestPrice > sma20 ? "BULLISH" : "BEARISH",
       momentumStrength: score >= 8 ? "STRONG" : score >= 6 ? "MODERATE" : "WEAK"
     };
