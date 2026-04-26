@@ -1,13 +1,9 @@
-import TelegramBot from "node-telegram-bot-api";
+import { Telegraf } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { getCompanyOverview } from "./marketData.service.js";
 import { analyzePortfolio } from "../agents/portfolioAgent.js";
 
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
-  polling: true,
-});
-
-
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 const userStates = new Map();
 
@@ -15,14 +11,17 @@ const userStates = new Map();
  * Helper to perform analysis and send message
  */
 async function performAnalysis(chatId, symbol) {
-  await bot.sendMessage(chatId, `Analyzing ${symbol}...`);
+  await bot.telegram.sendMessage(chatId, `Analyzing ${symbol}...`);
+
   try {
     const stockData = await getCompanyOverview(symbol);
     const result = await masterAgent(stockData);
 
     const entryTiming = result.entryTiming;
     const ticker = symbol.toUpperCase();
+
     let executionAdvice = "";
+
     if (entryTiming.strategy === "BUY ON DIP") {
       executionAdvice = `Strong long-term buy, but wait for dip near ${entryTiming.entryZone} before accumulating.`;
     } else if (entryTiming.strategy === "IMMEDIATE BUY") {
@@ -43,10 +42,13 @@ async function performAnalysis(chatId, symbol) {
 🏆 Priority Level: ${result.ranking.priority}
 📊 Rank Score: ${result.ranking.rankScore}/10
 💰 Suggested Allocation: ${result.capital.suggestedAllocation}
+
 🔄 Rebalancing Action:
 ${result.rebalancing.rebalancingAction}
+
 🧠 Reason:
 ${result.decision.reason}
+
 📌 Recommended Action:
 ${result.rebalancing.action}
 
@@ -58,6 +60,7 @@ ${result.rebalancing.action}
 🎯 Initial Target: ₹${result.entryTiming.target || "-"}
 📊 Reward/Risk Ratio: ${result.entryTiming.rewardRiskRatio || "-"}
 ⚡ Entry Urgency: ${result.entryTiming.urgency}
+
 🧠 Reason:
 ${result.entryTiming.reason}
 
@@ -67,45 +70,59 @@ ${executionAdvice}
 ⚠️ For educational purposes only.
 Not SEBI registered investment advice.
 Do your own research before investing.
-`;
-    await bot.sendMessage(chatId, message);
+`.trim();
+
+    await bot.telegram.sendMessage(chatId, message);
   } catch (err) {
-    await bot.sendMessage(
+    await bot.telegram.sendMessage(
       chatId,
       `❌ Error analyzing ${symbol}: ${err.message}`
     );
   }
 }
 
-bot.on("message", async (msg) => {
+/**
+ * Main message handler
+ */
+bot.on("text", async (ctx) => {
   try {
-    const chatId = msg.chat.id;
-    const text = msg.text?.trim() || "";
+    const chatId = ctx.chat.id;
+    const text = ctx.message.text?.trim() || "";
 
     if (!text) return;
 
     const lowerText = text.toLowerCase();
 
-    // 1. Check if user is in a waiting state for a stock name
+    /**
+     * 1. Waiting state for stock input
+     */
     if (userStates.get(chatId) === "AWAITING_STOCK") {
       userStates.delete(chatId);
       await performAnalysis(chatId, text);
       return;
     }
 
-    // 2. PORTFOLIO COMMAND
+    /**
+     * 2. Portfolio command
+     */
     if (lowerText.startsWith("/portfolio")) {
       const lines = text.split("\n").slice(1);
+
       const stocks = lines
         .map((line) => {
           const [symbol, allocation] = line.trim().split(" ");
+
           if (!symbol || !allocation) return null;
-          return { symbol, allocation: Number(allocation) };
+
+          return {
+            symbol,
+            allocation: Number(allocation),
+          };
         })
         .filter(Boolean);
 
       if (!stocks.length) {
-        await bot.sendMessage(
+        await bot.telegram.sendMessage(
           chatId,
           `Please provide portfolio in format:
 
@@ -118,6 +135,7 @@ reliance 30`
       }
 
       const result = await analyzePortfolio(stocks);
+
       const message = `
 📊 Portfolio Health Score: ${result.healthScore}/10
 
@@ -135,49 +153,72 @@ ${result.suggestion}
 ⚠️ For educational purposes only.
 Not SEBI registered investment advice.
 Do your own research before investing.
-      `.trim();
+`.trim();
 
-      await bot.sendMessage(chatId, message);
+      await bot.telegram.sendMessage(chatId, message);
       return;
     }
 
-    // 3. ANALYZE COMMANDS
+    /**
+     * 3. Analyze commands
+     */
     if (lowerText === "analyze" || lowerText === "/analyze") {
       userStates.set(chatId, "AWAITING_STOCK");
-      await bot.sendMessage(chatId, "Please enter the stock/company name");
+
+      await bot.telegram.sendMessage(
+        chatId,
+        "Please enter the stock/company name"
+      );
       return;
     }
 
     if (lowerText.startsWith("analyze ")) {
       const ticker = text.substring(8).trim();
+
       if (!ticker) {
         userStates.set(chatId, "AWAITING_STOCK");
-        await bot.sendMessage(chatId, "Please enter the stock/company name");
+
+        await bot.telegram.sendMessage(
+          chatId,
+          "Please enter the stock/company name"
+        );
         return;
       }
+
       await performAnalysis(chatId, ticker);
       return;
     }
 
     if (lowerText.startsWith("/analyze ")) {
       const ticker = text.substring(9).trim();
+
       if (!ticker) {
         userStates.set(chatId, "AWAITING_STOCK");
-        await bot.sendMessage(chatId, "Please enter the stock/company name");
+
+        await bot.telegram.sendMessage(
+          chatId,
+          "Please enter the stock/company name"
+        );
         return;
       }
+
       await performAnalysis(chatId, ticker);
       return;
     }
-
   } catch (error) {
     console.error("Telegram Bot Error:", error);
-    await bot.sendMessage(
-      msg.chat.id,
-      "❌ Error while processing your request."
-    );
+
+    await ctx.reply("❌ Error while processing your request.");
   }
 });
+
+/**
+ * Start bot
+ */
+bot.launch();
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 console.log("✅ Telegram Bot Started");
 
