@@ -204,6 +204,53 @@ Not SEBI registered investment advice.
       return;
     }
 
+    if (lowerText === "/top") {
+      await bot.telegram.sendMessage(
+        chatId,
+        "🏆 Ranking top opportunities..."
+      );
+      try {
+        const topStocks = [
+          "TCS.NS",
+          "INFY.NS",
+          "RELIANCE.NS",
+          "HDFCBANK.NS",
+          "ICICIBANK.NS"
+        ];
+        const results = [];
+        for (const ticker of topStocks) {
+          try {
+            const stockData = await getCompanyOverview(ticker);
+            const result = await masterAgent(stockData);
+            results.push({
+              ticker,
+              verdict: result.decision.finalDecision,
+              confidence: result.decision.finalConfidenceScore,
+              risk: result.risk.riskLevel
+            });
+          } catch (err) {
+            console.log(`Skipping ${ticker}`);
+          }
+        }
+        results.sort((a, b) => b.confidence - a.confidence);
+        let message = `🏆 TOP OPPORTUNITIES\n\n`;
+        results.forEach((stock, index) => {
+          message += `${index + 1}. ${stock.ticker}\n`;
+          message += `Verdict: ${stock.verdict}\n`;
+          message += `Confidence: ${stock.confidence}/10\n`;
+          message += `Risk: ${stock.risk}\n\n`;
+        });
+        message += `⚠️ Educational only.\nNot SEBI registered investment advice.`;
+        await bot.telegram.sendMessage(chatId, message);
+      } catch (error) {
+        await bot.telegram.sendMessage(
+          chatId,
+          "❌ Could not rank top opportunities right now."
+        );
+      }
+      return;
+    }
+
     /**
      * 1. Waiting state for stock input
      */
