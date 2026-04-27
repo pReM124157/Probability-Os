@@ -89,6 +89,9 @@ export async function analyzeEntryTiming({
             }
         }
 
+        console.log("ENTRY AGENT SYMBOL:", fetchSymbol);
+        console.log("ENTRY AGENT PRICE:", activePrice);
+
         return {
             stock: stock || "UNKNOWN",
             currentPrice: activePrice,
