@@ -46,7 +46,8 @@ export default function Home() {
     try {
       setLoading(true);
 
-      const res = await axios.post('http://localhost:5005/api/analyze', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5005';
+      const res = await axios.post(`${apiUrl}/api/analyze`, {
         symbol: inputValue,
       });
 
