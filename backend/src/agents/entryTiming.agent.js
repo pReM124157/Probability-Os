@@ -44,74 +44,7 @@ export async function analyzeEntryTiming({
         Strategy Logic
         */
 
-        if (
-            confidenceScore >= 9 &&
-            momentumScore >= 9 &&
-            valuationScore >= 8 &&
-            activePrice > 0
-        ) {
-            strategy = "IMMEDIATE BUY";
-            urgency = "VERY HIGH";
-
-            entryZone = `₹${activePrice}`;
-            stopLoss = Math.round(activePrice * 0.94);
-            target = Math.round(activePrice * 1.12);
-
-            reason =
-                "Exceptional conviction with strong momentum and attractive valuation.";
-        }
-
-        else if (
-            confidenceScore >= 8 &&
-            valuationScore >= 7
-        ) {
-            strategy = "BUY ON DIP";
-            urgency = "HIGH";
-
-            const lower = Math.round(activePrice * 0.97);
-            const upper = Math.round(activePrice * 0.99);
-
-            entryZone = `₹${lower} – ₹${upper}`;
-            stopLoss = Math.round(activePrice * 0.93);
-            target = Math.round(activePrice * 1.10);
-
-            reason =
-                "Strong stock but better accumulation expected near support levels.";
-        }
-
-        else if (
-            confidenceScore >= 7 &&
-            momentumScore >= 8
-        ) {
-            strategy = "BREAKOUT BUY";
-            urgency = "MEDIUM";
-
-            const breakout = Math.round(activePrice * 1.02);
-
-            entryZone = `Above ₹${breakout}`;
-            stopLoss = Math.round(activePrice * 0.95);
-            target = Math.round(activePrice * 1.11);
-
-            reason =
-                "Wait for price confirmation before aggressive entry.";
-        }
-
-        else if (
-            confidenceScore >= 5
-        ) {
-            strategy = "WAIT FOR CONFIRMATION";
-            urgency = "LOW";
-
-            const watchEntry = Math.round(activePrice * 0.98);
-            entryZone = `Watch near ₹${watchEntry}`;
-            stopLoss = Math.round(activePrice * 0.94);
-            target = Math.round(activePrice * 1.08);
-
-            reason =
-                "Good stock, but wait for stronger confirmation before aggressive capital deployment.";
-        }
-
-        else {
+        if (confidenceScore <= 4 || activePrice <= 0) {
             strategy = "AVOID ENTRY";
             urgency = "VERY LOW";
 
@@ -119,8 +52,33 @@ export async function analyzeEntryTiming({
             stopLoss = 0;
             target = 0;
 
-            reason =
-                "Weak setup with poor conviction and elevated uncertainty.";
+            reason = "Weak setup or invalid price data. Elevated uncertainty makes entry risky.";
+        }
+        else if (confidenceScore <= 6) {
+            strategy = "CAUTIOUS ENTRY";
+            urgency = "MEDIUM";
+
+            const lower = Math.round(activePrice * 0.97);
+            const upper = Math.round(activePrice * 1.01);
+
+            entryZone = `₹${lower} – ₹${upper}`;
+            stopLoss = Math.round(activePrice * 0.94);
+            target = Math.round(activePrice * 1.10);
+
+            reason = "Moderate conviction. Build position gradually on pullbacks.";
+        }
+        else {
+            strategy = "STRONG ENTRY";
+            urgency = "HIGH";
+
+            const lower = Math.round(activePrice * 0.98);
+            const upper = Math.round(activePrice * 1.02);
+
+            entryZone = `₹${lower} – ₹${upper}`;
+            stopLoss = Math.round(activePrice * 0.95);
+            target = Math.round(activePrice * 1.15);
+
+            reason = "High conviction setup. Attractive entry levels with solid target potential.";
         }
 
         /*

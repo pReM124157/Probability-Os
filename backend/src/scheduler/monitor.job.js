@@ -11,7 +11,7 @@ export const startMonitoringJob = () => {
   console.log("🚀 Monitoring Job Started");
 
   /*
-    Runs every day at 9:00 AM
+    Runs every hour
     Cron Format:
     ┌──────── minute (0 - 59)
     │ ┌────── hour (0 - 23)
@@ -20,10 +20,10 @@ export const startMonitoringJob = () => {
     │ │ │ │ ┌ day of week (0 - 7)
     │ │ │ │ │
     │ │ │ │ │
-    0 9 * * *
+    0 * * * *
   */
 
-  cron.schedule("0 9 * * *", async () => {
+  cron.schedule("0 * * * *", async () => {
     console.log("📊 Running daily portfolio monitoring...");
 
     try {
