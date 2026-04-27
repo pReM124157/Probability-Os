@@ -1,4 +1,5 @@
 // agents/entryTiming.agent.js
+import { getLiveMarketData } from "../services/marketData.service.js";
 
 export async function analyzeEntryTiming({
     stock,
@@ -17,6 +18,28 @@ export async function analyzeEntryTiming({
         let urgency = "LOW";
         let reason = "";
 
+        // Fix for missing .NS suffix and price fetch fallback
+        let activePrice = currentPrice;
+        let fetchSymbol = stock.toUpperCase();
+
+        if (!fetchSymbol.includes(".NS")) {
+            fetchSymbol = `${fetchSymbol}.NS`;
+        }
+
+        if (!activePrice || activePrice <= 0) {
+            console.log("Price is 0, attempting recovery fetch for:", fetchSymbol);
+            try {
+                const liveData = await getLiveMarketData(fetchSymbol);
+                activePrice = liveData.currentPrice;
+
+                if (!activePrice || activePrice <= 0) {
+                    console.log("Price fetch failed for:", fetchSymbol);
+                }
+            } catch (err) {
+                console.log("Price fetch failed for:", fetchSymbol);
+            }
+        }
+
         /*
         Strategy Logic
         */
@@ -25,14 +48,14 @@ export async function analyzeEntryTiming({
             confidenceScore >= 9 &&
             momentumScore >= 9 &&
             valuationScore >= 8 &&
-            currentPrice > 0
+            activePrice > 0
         ) {
             strategy = "IMMEDIATE BUY";
             urgency = "VERY HIGH";
 
-            entryZone = `₹${currentPrice}`;
-            stopLoss = Math.round(currentPrice * 0.94);
-            target = Math.round(currentPrice * 1.12);
+            entryZone = `₹${activePrice}`;
+            stopLoss = Math.round(activePrice * 0.94);
+            target = Math.round(activePrice * 1.12);
 
             reason =
                 "Exceptional conviction with strong momentum and attractive valuation.";
@@ -45,12 +68,12 @@ export async function analyzeEntryTiming({
             strategy = "BUY ON DIP";
             urgency = "HIGH";
 
-            const lower = Math.round(currentPrice * 0.97);
-            const upper = Math.round(currentPrice * 0.99);
+            const lower = Math.round(activePrice * 0.97);
+            const upper = Math.round(activePrice * 0.99);
 
             entryZone = `₹${lower} – ₹${upper}`;
-            stopLoss = Math.round(currentPrice * 0.93);
-            target = Math.round(currentPrice * 1.10);
+            stopLoss = Math.round(activePrice * 0.93);
+            target = Math.round(activePrice * 1.10);
 
             reason =
                 "Strong stock but better accumulation expected near support levels.";
@@ -63,11 +86,11 @@ export async function analyzeEntryTiming({
             strategy = "BREAKOUT BUY";
             urgency = "MEDIUM";
 
-            const breakout = Math.round(currentPrice * 1.02);
+            const breakout = Math.round(activePrice * 1.02);
 
             entryZone = `Above ₹${breakout}`;
-            stopLoss = Math.round(currentPrice * 0.95);
-            target = Math.round(currentPrice * 1.11);
+            stopLoss = Math.round(activePrice * 0.95);
+            target = Math.round(activePrice * 1.11);
 
             reason =
                 "Wait for price confirmation before aggressive entry.";
@@ -79,10 +102,10 @@ export async function analyzeEntryTiming({
             strategy = "WAIT FOR CONFIRMATION";
             urgency = "LOW";
 
-            const watchEntry = Math.round(currentPrice * 0.98);
+            const watchEntry = Math.round(activePrice * 0.98);
             entryZone = `Watch near ₹${watchEntry}`;
-            stopLoss = Math.round(currentPrice * 0.94);
-            target = Math.round(currentPrice * 1.08);
+            stopLoss = Math.round(activePrice * 0.94);
+            target = Math.round(activePrice * 1.08);
 
             reason =
                 "Good stock, but wait for stronger confirmation before aggressive capital deployment.";
@@ -105,8 +128,8 @@ export async function analyzeEntryTiming({
         */
 
         if (stopLoss > 0 && target > 0) {
-            const reward = target - currentPrice;
-            const risk = currentPrice - stopLoss;
+            const reward = target - activePrice;
+            const risk = activePrice - stopLoss;
 
             if (risk > 0) {
                 rewardRiskRatio = (reward / risk).toFixed(2);
@@ -115,7 +138,7 @@ export async function analyzeEntryTiming({
 
         return {
             stock,
-            currentPrice,
+            currentPrice: activePrice,
             strategy,
             entryZone,
             stopLoss,
