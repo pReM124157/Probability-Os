@@ -16,7 +16,7 @@ interface AnalysisData {
     majorRisks: any;
   };
   learning: {
-    confidenceBoost: number;
+    learningBoost: number;
     learningInsight: string;
   };
   performance: {
@@ -74,7 +74,7 @@ export default function Home() {
         },
         {
           title: 'Learning Agent',
-          content: `Boost: +${analysis.learning?.confidenceBoost || 0}\nInsight: ${analysis.learning?.learningInsight || 'N/A'}`,
+          content: `Boost: +${analysis.learning?.learningBoost || 0}\nInsight: ${analysis.learning?.learningInsight || 'N/A'}`,
         },
         {
           title: 'Performance Agent',
@@ -167,7 +167,7 @@ export default function Home() {
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Learning Boost</p>
-                <p className="text-2xl font-bold">+{analysis.learning.confidenceBoost}</p>
+                <p className="text-2xl font-bold">+{analysis.learning.learningBoost}</p>
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Performance Score</p>
