@@ -6,9 +6,9 @@ import axios from 'axios';
 interface AnalysisData {
   stock: string;
   decision: {
-    finalAction: string;
-    confidenceScore: number;
-    reasoning: string;
+    finalDecision: string;
+    finalConfidenceScore: number;
+    reason: string;
   };
   risk: {
     riskLevel: string;
@@ -150,16 +150,16 @@ export default function Home() {
             </h2>
 
             <div className={`text-5xl font-black p-8 rounded-3xl mb-8 inline-block ${
-              analysis.decision.finalAction.includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
-              analysis.decision.finalAction.includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
+              analysis.decision.finalDecision.includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
+              analysis.decision.finalDecision.includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
             }`}>
-              {analysis.decision.finalAction}
+              {analysis.decision.finalDecision}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Confidence Score</p>
-                <p className="text-2xl font-bold">{analysis.decision.confidenceScore}/10</p>
+                <p className="text-2xl font-bold">{analysis.decision.finalConfidenceScore}/10</p>
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Risk Level</p>
@@ -177,16 +177,16 @@ export default function Home() {
 
             <div className="mt-10 p-6 bg-white/5 rounded-2xl border border-white/10 text-left">
               <p className="text-lg opacity-90 leading-relaxed">
-                <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision.reasoning}
+                <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision.reason}
               </p>
               <div className="mt-6 flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
                 <span className="text-blue-400 font-bold">Recommended Action:</span>
                 <span className="text-white font-medium italic">
-                  {analysis.decision.finalAction === "STRONG BUY"
+                  {analysis.decision.finalDecision === "STRONG BUY"
                     ? "Accumulate aggressively"
-                    : analysis.decision.finalAction === "BUY"
+                    : analysis.decision.finalDecision === "BUY"
                     ? "Accumulate gradually"
-                    : analysis.decision.finalAction === "SELL"
+                    : analysis.decision.finalDecision === "SELL"
                     ? "Reduce exposure"
                     : "Monitor closely"}
                 </span>
