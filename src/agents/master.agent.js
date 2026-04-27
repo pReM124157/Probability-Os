@@ -9,9 +9,35 @@ import { getLiveMarketData } from "../services/marketData.service.js";
 import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
 
-export async function masterAgent(stockData) {
+import { generateInvestmentAnalysis } from "../services/claude.service.js";
+
+export async function masterAgent(input) {
   try {
+    // Check if it's a conversation mode request
+    if (input && input.mode === "conversation") {
+      const { userQuery } = input;
+      const masterPrompt = `
+You are Finsight AI, a sophisticated financial assistant. 
+Your goal is to provide intelligent, data-driven financial insights.
+
+User Question: ${userQuery}
+
+Guidelines:
+1. Be professional, concise, and helpful.
+2. If asked about your work, explain that you are a multi-agent AI system designed to analyze stocks, rank opportunities, and provide portfolio insights.
+3. If asked for investment advice (e.g., "Should I buy TCS?"), provide a balanced view based on general market principles but emphasize that you are an AI and not a SEBI registered advisor. Mention that users can use /analyze TICKER for a deep dive report.
+4. If asked about specific investment amounts (e.g., "Can I invest 50k?"), discuss general asset allocation and risk management principles.
+5. Always maintain a neutral but informative tone.
+`.trim();
+
+      const response = await generateInvestmentAnalysis(masterPrompt);
+      return { response };
+    }
+
+    // Otherwise, treat as stock analysis request
+    const stockData = input;
     const ticker = stockData.Symbol || stockData.ticker || "UNKNOWN";
+
 
     // PHASE 1: Core Analysis (Risk, Fundamentals, Technicals, Valuation)
     const [risk, decision, liveMarketData, technical, valuation] = await Promise.all([

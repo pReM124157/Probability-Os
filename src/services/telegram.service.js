@@ -363,7 +363,25 @@ Do your own research before investing.
       await performAnalysis(chatId, ticker);
       return;
     }
+
+    /**
+     * Conversational AI Fallback
+     * If message is not a command, handle like a financial assistant
+     */
+    const aiResponse = await masterAgent({
+      userQuery: text,
+      mode: "conversation"
+    });
+    await bot.telegram.sendMessage(
+      chatId,
+      `${aiResponse.response}
+⚠️ For educational purposes only.
+Not SEBI registered investment advice.
+Do your own research before investing.`
+    );
+    return;
   } catch (error) {
+
     console.error("Telegram Bot Error:", error);
 
     await ctx.reply("❌ Error while processing your request.");
