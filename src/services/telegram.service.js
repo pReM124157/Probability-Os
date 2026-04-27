@@ -368,10 +368,24 @@ Do your own research before investing.
      * Conversational AI Fallback
      * If message is not a command, handle like a financial assistant
      */
+    let contextualQuery = text;
+    // Check if user replied to a previous bot message
+    if (ctx.message.reply_to_message && ctx.message.reply_to_message.text) {
+      const repliedText = ctx.message.reply_to_message.text;
+      contextualQuery = `
+Previous Context:
+${repliedText}
+
+User Follow-up:
+${text}
+      `.trim();
+    }
+
     const aiResponse = await masterAgent({
-      userQuery: text,
+      userQuery: contextualQuery,
       mode: "conversation"
     });
+
     await bot.telegram.sendMessage(
       chatId,
       `${aiResponse.response}
