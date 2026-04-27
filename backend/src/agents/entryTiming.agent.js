@@ -10,29 +10,21 @@ export async function analyzeEntryTiming({
     momentumScore
 }) {
     try {
-        let strategy = "WAIT";
-        let entryZone = "";
-        let stopLoss = 0;
-        let target = 0;
-        let rewardRiskRatio = 0;
-        let urgency = "LOW";
-        let reason = "";
-
         // Fix for missing .NS suffix and price fetch fallback
-        let activePrice = currentPrice;
-        let fetchSymbol = stock.toUpperCase();
+        let activePrice = currentPrice || 0;
+        let fetchSymbol = (stock || "UNKNOWN").toUpperCase();
 
-        if (!fetchSymbol.includes(".NS")) {
+        if (!fetchSymbol.includes(".NS") && fetchSymbol !== "UNKNOWN") {
             fetchSymbol = `${fetchSymbol}.NS`;
         }
 
-        if (!activePrice || activePrice <= 0) {
+        if (activePrice <= 0 && fetchSymbol !== "UNKNOWN") {
             console.log("Price is 0, attempting recovery fetch for:", fetchSymbol);
             try {
                 const liveData = await getLiveMarketData(fetchSymbol);
-                activePrice = liveData.currentPrice;
+                activePrice = liveData?.currentPrice || 0;
 
-                if (!activePrice || activePrice <= 0) {
+                if (activePrice <= 0) {
                     console.log("Price fetch failed for:", fetchSymbol);
                 }
             } catch (err) {
@@ -40,78 +32,89 @@ export async function analyzeEntryTiming({
             }
         }
 
-        /*
-        Strategy Logic
-        */
+        // Initialize variables
+        let strategy = "AVOID ENTRY";
+        let idealEntryZone = "Avoid";
+        let stopLoss = "-";
+        let initialTarget = "-";
+        let rewardRiskRatio = "-";
+        let entryUrgency = "VERY LOW";
+        let reasoning = "Unable to generate reliable entry signal due to missing or invalid market data.";
+        let finalExecutionAdvice = "Maintain caution and monitor price action.";
 
-        if (confidenceScore <= 4 || activePrice <= 0) {
-            strategy = "AVOID ENTRY";
-            urgency = "VERY LOW";
+        // Success path safety check
+        if (activePrice > 0) {
+            if (confidenceScore <= 4) {
+                strategy = "AVOID ENTRY";
+                entryUrgency = "VERY LOW";
+                idealEntryZone = "Avoid";
+                reasoning = "Weak setup with poor conviction and elevated uncertainty.";
+                finalExecutionAdvice = "Avoid entry. Look for better opportunities elsewhere.";
+            }
+            else if (confidenceScore <= 6) {
+                strategy = "CAUTIOUS ENTRY";
+                entryUrgency = "MEDIUM";
 
-            entryZone = "Avoid";
-            stopLoss = 0;
-            target = 0;
+                const lower = Math.round(activePrice * 0.97);
+                const upper = Math.round(activePrice * 1.01);
 
-            reason = "Weak setup or invalid price data. Elevated uncertainty makes entry risky.";
-        }
-        else if (confidenceScore <= 6) {
-            strategy = "CAUTIOUS ENTRY";
-            urgency = "MEDIUM";
+                idealEntryZone = `₹${lower} – ₹${upper}`;
+                stopLoss = `₹${Math.round(activePrice * 0.94)}`;
+                initialTarget = `₹${Math.round(activePrice * 1.10)}`;
+                
+                const reward = Math.round(activePrice * 1.10) - activePrice;
+                const risk = activePrice - Math.round(activePrice * 0.94);
+                if (risk > 0) rewardRiskRatio = (reward / risk).toFixed(2);
 
-            const lower = Math.round(activePrice * 0.97);
-            const upper = Math.round(activePrice * 1.01);
+                reasoning = "Moderate conviction. Build position gradually on pullbacks.";
+                finalExecutionAdvice = `Accumulate gradually near ${idealEntryZone} with strict stop loss.`;
+            }
+            else {
+                strategy = "STRONG ENTRY";
+                entryUrgency = "HIGH";
 
-            entryZone = `₹${lower} – ₹${upper}`;
-            stopLoss = Math.round(activePrice * 0.94);
-            target = Math.round(activePrice * 1.10);
+                const lower = Math.round(activePrice * 0.98);
+                const upper = Math.round(activePrice * 1.02);
 
-            reason = "Moderate conviction. Build position gradually on pullbacks.";
-        }
-        else {
-            strategy = "STRONG ENTRY";
-            urgency = "HIGH";
+                idealEntryZone = `₹${lower} – ₹${upper}`;
+                stopLoss = `₹${Math.round(activePrice * 0.95)}`;
+                initialTarget = `₹${Math.round(activePrice * 1.15)}`;
 
-            const lower = Math.round(activePrice * 0.98);
-            const upper = Math.round(activePrice * 1.02);
+                const reward = Math.round(activePrice * 1.15) - activePrice;
+                const risk = activePrice - Math.round(activePrice * 0.95);
+                if (risk > 0) rewardRiskRatio = (reward / risk).toFixed(2);
 
-            entryZone = `₹${lower} – ₹${upper}`;
-            stopLoss = Math.round(activePrice * 0.95);
-            target = Math.round(activePrice * 1.15);
-
-            reason = "High conviction setup. Attractive entry levels with solid target potential.";
-        }
-
-        /*
-        Reward Risk Calculation
-        */
-
-        if (stopLoss > 0 && target > 0) {
-            const reward = target - activePrice;
-            const risk = activePrice - stopLoss;
-
-            if (risk > 0) {
-                rewardRiskRatio = (reward / risk).toFixed(2);
+                reasoning = "High conviction setup. Attractive entry levels with solid target potential.";
+                finalExecutionAdvice = `Strong buy opportunity. Consider entry within ${idealEntryZone}.`;
             }
         }
 
         return {
-            stock,
+            stock: stock || "UNKNOWN",
             currentPrice: activePrice,
             strategy,
-            entryZone,
+            idealEntryZone,
             stopLoss,
-            target,
+            initialTarget,
             rewardRiskRatio,
-            urgency,
-            reason
+            entryUrgency,
+            reasoning,
+            finalExecutionAdvice
         };
+
     } catch (error) {
         console.error("Entry Timing Agent Error:", error.message);
-
         return {
-            stock,
-            strategy: "ERROR",
-            reason: error.message
+            stock: stock || "UNKNOWN",
+            strategy: "AVOID ENTRY",
+            currentPrice: 0,
+            idealEntryZone: "Avoid",
+            stopLoss: "-",
+            initialTarget: "-",
+            rewardRiskRatio: "-",
+            entryUrgency: "VERY LOW",
+            reasoning: "Unable to generate reliable entry signal due to internal agent error.",
+            finalExecutionAdvice: "Maintain caution and monitor price action."
         };
     }
 }

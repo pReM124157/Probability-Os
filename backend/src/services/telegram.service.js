@@ -17,52 +17,41 @@ async function performAnalysis(chatId, symbol) {
     const stockData = await getCompanyOverview(symbol);
     const result = await masterAgent(stockData);
 
-    const entryTiming = result.entryTiming;
+    const entryTiming = result.entryTiming || {};
     const ticker = symbol.toUpperCase();
 
-    let executionAdvice = "";
-
-    if (entryTiming.strategy === "BUY ON DIP") {
-      executionAdvice = `Strong long-term buy, but wait for dip near ${entryTiming.entryZone} before accumulating.`;
-    } else if (entryTiming.strategy === "IMMEDIATE BUY") {
-      executionAdvice = `Strong long-term buy and current price offers a good entry opportunity.`;
-    } else if (entryTiming.strategy === "WAIT FOR CONFIRMATION") {
-      executionAdvice = `Good stock, but wait for stronger confirmation before deploying capital.`;
-    } else if (entryTiming.strategy === "BREAKOUT BUY") {
-      executionAdvice = `Momentum is building; consider entry ${entryTiming.entryZone} for confirmation.`;
-    } else {
-      executionAdvice = `No clear entry signal at this time. Maintain caution and monitor price action.`;
-    }
+    // Use the final execution advice directly from the agent
+    const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
 
     const message = `
-🚨 ${result.decision.finalDecision} Signal Detected
+🚨 ${result.decision?.finalDecision || "HOLD"} Signal Detected
 📈 Stock: ${ticker}
-🎯 Confidence Score: ${result.decision.finalConfidenceScore}/10
-⚠ Risk Level: ${result.risk.riskLevel}
-🏆 Priority Level: ${result.ranking.priority}
-📊 Rank Score: ${result.ranking.rankScore}/10
-💰 Suggested Allocation: ${result.capital.suggestedAllocation}
+🎯 Confidence Score: ${result.decision?.finalConfidenceScore || 0}/10
+⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}
+🏆 Priority Level: ${result.ranking?.priority || "MEDIUM"}
+📊 Rank Score: ${result.ranking?.rankScore || 0}/10
+💰 Suggested Allocation: ${result.capital?.suggestedAllocation || "0%"}
 
 🔄 Rebalancing Action:
-${result.rebalancing.rebalancingAction}
+${result.rebalancing?.rebalancingAction || "No action required"}
 
 🧠 Reason:
-${result.decision.reason}
+${result.decision?.reason || "No reasoning available"}
 
 📌 Recommended Action:
-${result.rebalancing.action}
+${result.rebalancing?.action || "Monitor and wait for confirmation"}
 
 🚨 ENTRY SIGNAL DETECTED
-🎯 Strategy: ${result.entryTiming.strategy}
-📍 Current Market Price: ₹${result.entryTiming.currentPrice}
-💰 Ideal Entry Zone: ${result.entryTiming.entryZone}
-🛑 Stop Loss: ₹${result.entryTiming.stopLoss || "-"}
-🎯 Initial Target: ₹${result.entryTiming.target || "-"}
-📊 Reward/Risk Ratio: ${result.entryTiming.rewardRiskRatio || "-"}
-⚡ Entry Urgency: ${result.entryTiming.urgency}
+🎯 Strategy: ${entryTiming?.strategy || "AVOID ENTRY"}
+📍 Current Market Price: ₹${entryTiming?.currentPrice || 0}
+💰 Ideal Entry Zone: ${entryTiming?.idealEntryZone || "Avoid"}
+🛑 Stop Loss: ${entryTiming?.stopLoss || "-"}
+🎯 Initial Target: ${entryTiming?.initialTarget || "-"}
+📊 Reward/Risk Ratio: ${entryTiming?.rewardRiskRatio || "-"}
+⚡ Entry Urgency: ${entryTiming?.entryUrgency || "VERY LOW"}
 
 🧠 Reason:
-${result.entryTiming.reason}
+${entryTiming?.reasoning || "Insufficient market conviction"}
 
 📌 Final Execution Advice:
 ${executionAdvice}
@@ -132,13 +121,13 @@ Not SEBI registered investment advice.`
         const message = `
 ⚡ QUICK VERDICT
 📈 Stock: ${ticker.toUpperCase()}
-📊 Verdict: ${result.decision.finalDecision}
-🎯 Confidence: ${result.decision.finalConfidenceScore}/10
-⚠ Risk Level: ${result.risk.riskLevel}
+📊 Verdict: ${result.decision?.finalDecision || "HOLD"}
+🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10
+⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}
 📝 Summary:
-${result.decision.reason}
+${result.decision?.reason || "No summary available"}
 📌 Suggested Action:
-${result.rebalancing.action}
+${result.rebalancing?.action || "Monitor closely"}
 For full report:
 ${"/analyze " + ticker}
 ⚠️ Educational only.
@@ -183,13 +172,13 @@ Not SEBI registered investment advice.
         const message = `
 ⚖ STOCK COMPARISON
 📈 ${ticker1.toUpperCase()}
-Verdict: ${result1.decision.finalDecision}
-Confidence: ${score1}/10
-Risk: ${result1.risk.riskLevel}
+Verdict: ${result1.decision?.finalDecision || "HOLD"}
+Confidence: ${score1 || 0}/10
+Risk: ${result1.risk?.riskLevel || "N/A"}
 📈 ${ticker2.toUpperCase()}
-Verdict: ${result2.decision.finalDecision}
-Confidence: ${score2}/10
-Risk: ${result2.risk.riskLevel}
+Verdict: ${result2.decision?.finalDecision || "HOLD"}
+Confidence: ${score2 || 0}/10
+Risk: ${result2.risk?.riskLevel || "N/A"}
 🏆 Better Opportunity:
 ${winner}
 ⚠️ Educational only.
@@ -225,9 +214,9 @@ Not SEBI registered investment advice.
             const result = await masterAgent(stockData);
             results.push({
               ticker,
-              verdict: result.decision.finalDecision,
-              confidence: result.decision.finalConfidenceScore,
-              risk: result.risk.riskLevel
+              verdict: result.decision?.finalDecision || "HOLD",
+              confidence: result.decision?.finalConfidenceScore || 0,
+              risk: result.risk?.riskLevel || "N/A"
             });
           } catch (err) {
             console.log(`Skipping ${ticker}`);

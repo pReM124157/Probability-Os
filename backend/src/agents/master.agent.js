@@ -61,13 +61,11 @@ Guidelines:
     // PHASE 3: Confidence Alignment
     // Adjusting confidence based on execution readiness to ensure internal consistency
     let adjustedConfidence = decision.finalConfidenceScore || 5;
-    if (entryTiming.strategy === "WAIT FOR CONFIRMATION") {
-      adjustedConfidence = Math.min(adjustedConfidence, 7);
-    } else if (entryTiming.strategy === "BUY ON DIP") {
-      adjustedConfidence = Math.min(adjustedConfidence, 8);
+    if (entryTiming.strategy === "CAUTIOUS ENTRY") {
+      adjustedConfidence = Math.min(adjustedConfidence, 6);
     } else if (entryTiming.strategy === "AVOID ENTRY") {
       adjustedConfidence = Math.min(adjustedConfidence, 4);
-    } else if (entryTiming.strategy === "IMMEDIATE BUY") {
+    } else if (entryTiming.strategy === "STRONG ENTRY") {
       adjustedConfidence = Math.min(adjustedConfidence, 10);
     }
 
@@ -124,7 +122,7 @@ Guidelines:
 
     rebalancing.action = getRecommendedAction(
       finalDecision.finalDecision,
-      entryTiming.urgency
+      entryTiming.entryUrgency
     );
 
     return {
