@@ -87,6 +87,7 @@ Do your own research before investing.
 bot.on("text", async (ctx) => {
   try {
     const chatId = ctx.chat.id;
+    console.log("CHAT ID:", chatId);
     const text = ctx.message.text?.trim() || "";
 
     if (!text) return;
