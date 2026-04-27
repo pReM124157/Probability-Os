@@ -6,9 +6,9 @@ import axios from 'axios';
 interface AnalysisData {
   stock: string;
   decision: {
-    finalDecision: string;
-    finalConfidenceScore: number;
-    reason: string;
+    finalAction: string;
+    confidenceScore: number;
+    reasoning: string;
   };
   risk: {
     riskLevel: string;
@@ -16,7 +16,7 @@ interface AnalysisData {
     majorRisks: any;
   };
   learning: {
-    learningBoost: number;
+    confidenceBoost: number;
     learningInsight: string;
   };
   performance: {
@@ -64,27 +64,27 @@ export default function Home() {
 
   const agentCards = analysis
     ? [
-        {
-          title: 'Research Agent',
-          content: analysis.analysis?.stockFundamentals || 'No research analysis available',
-        },
-        {
-          title: 'Risk Agent',
-          content: `Risk Level: ${analysis.risk?.riskLevel || 'N/A'}\nScore: ${analysis.risk?.riskScore || 0}/10\nDetails: ${typeof analysis.risk?.majorRisks === 'string' ? analysis.risk.majorRisks : JSON.stringify(analysis.risk?.majorRisks)}`,
-        },
-        {
-          title: 'Learning Agent',
-          content: `Boost: +${analysis.learning?.learningBoost || 0}\nInsight: ${analysis.learning?.learningInsight || 'N/A'}`,
-        },
-        {
-          title: 'Performance Agent',
-          content: `Validation Score: +${analysis.performance?.performanceScore || 0}\nInsight: ${analysis.performance?.performanceInsight || 'N/A'}`,
-        },
-        {
-          title: 'Portfolio Agent',
-          content: `Health: ${analysis.portfolio?.healthScore || 0}/10\nSector: ${analysis.portfolio?.dominantSector || 'N/A'}`,
-        },
-      ]
+      {
+        title: 'Research Agent',
+        content: analysis.analysis?.stockFundamentals || 'No research analysis available',
+      },
+      {
+        title: 'Risk Agent',
+        content: `Risk Level: ${analysis.risk?.riskLevel || 'N/A'}\nScore: ${analysis.risk?.riskScore || 0}/10\nDetails: ${typeof analysis.risk?.majorRisks === 'string' ? analysis.risk.majorRisks : JSON.stringify(analysis.risk?.majorRisks)}`,
+      },
+      {
+        title: 'Learning Agent',
+        content: `Boost: +${analysis.learning?.confidenceBoost || 0}\nInsight: ${analysis.learning?.learningInsight || 'N/A'}`,
+      },
+      {
+        title: 'Performance Agent',
+        content: `Validation Score: +${analysis.performance?.performanceScore || 0}\nInsight: ${analysis.performance?.performanceInsight || 'N/A'}`,
+      },
+      {
+        title: 'Portfolio Agent',
+        content: `Health: ${analysis.portfolio?.healthScore || 0}/10\nSector: ${analysis.portfolio?.dominantSector || 'N/A'}`,
+      },
+    ]
     : [];
 
   return (
@@ -150,45 +150,45 @@ export default function Home() {
             </h2>
 
             <div className={`text-5xl font-black p-8 rounded-3xl mb-8 inline-block ${
-              (analysis.decision?.finalDecision || '').includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
-              (analysis.decision?.finalDecision || '').includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
+              (analysis.decision?.finalAction || '').includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
+              (analysis.decision?.finalAction || '').includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
             }`}>
-              {analysis.decision?.finalDecision || 'N/A'}
+              {analysis.decision?.finalAction || 'N/A'}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Confidence Score</p>
-                <p className="text-2xl font-bold">{analysis.decision?.finalConfidenceScore || 0}/10</p>
+                <p className="text-2xl font-bold">{analysis.decision?.confidenceScore || 0}/10</p>
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Risk Level</p>
-                <p className="text-2xl font-bold">{analysis.risk?.riskLevel || 'N/A'}</p>
+                <p className="text-2xl font-bold">{analysis.risk.riskLevel}</p>
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Learning Boost</p>
-                <p className="text-2xl font-bold">+{analysis.learning?.learningBoost || 0}</p>
+                <p className="text-2xl font-bold">+{analysis.learning?.confidenceBoost || 0}</p>
               </div>
               <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
                 <p className="text-xs uppercase opacity-60 mb-1">Performance Score</p>
-                <p className="text-2xl font-bold">+{analysis.performance?.performanceScore || 0}</p>
+                <p className="text-2xl font-bold">+{analysis.performance.performanceScore}</p>
               </div>
             </div>
 
             <div className="mt-10 p-6 bg-white/5 rounded-2xl border border-white/10 text-left">
               <p className="text-lg opacity-90 leading-relaxed">
-                <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision?.reason || 'No reasoning provided.'}
+                <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision?.reasoning || 'No reasoning provided.'}
               </p>
               <div className="mt-6 flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
                 <span className="text-blue-400 font-bold">Recommended Action:</span>
                 <span className="text-white font-medium italic">
-                  {analysis.decision?.finalDecision === "STRONG BUY"
+                  {analysis.decision?.finalAction === "STRONG BUY"
                     ? "Accumulate aggressively"
-                    : analysis.decision?.finalDecision === "BUY"
-                    ? "Accumulate gradually"
-                    : analysis.decision?.finalDecision === "SELL"
-                    ? "Reduce exposure"
-                    : "Monitor closely"}
+                    : analysis.decision?.finalAction === "BUY"
+                      ? "Accumulate gradually"
+                      : analysis.decision?.finalAction === "SELL"
+                        ? "Reduce exposure"
+                        : "Monitor closely"}
                 </span>
               </div>
             </div>

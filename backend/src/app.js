@@ -108,7 +108,35 @@ app.post("/api/analyze", async (req, res) => {
     const multiAgentAnalysis = await masterAgent(companyData);
     return res.json({
       success: true,
-      data: multiAgentAnalysis
+      stock: symbol,
+      decision: {
+        finalAction: multiAgentAnalysis.decision?.finalDecision || "HOLD",
+        confidenceScore: multiAgentAnalysis.decision?.finalConfidenceScore || 0,
+        reasoning: multiAgentAnalysis.decision?.reason || "No reasoning available"
+      },
+      risk: {
+        riskLevel: multiAgentAnalysis.risk?.riskLevel || "N/A",
+        riskScore: multiAgentAnalysis.risk?.riskScore || 0,
+        majorRisks: multiAgentAnalysis.risk?.majorRisks || []
+      },
+      learning: {
+        confidenceBoost: multiAgentAnalysis.learning?.learningBoost || 0,
+        learningInsight: multiAgentAnalysis.learning?.learningInsight || "N/A"
+      },
+      performance: {
+        performanceScore: multiAgentAnalysis.performance?.performanceScore || 0,
+        performanceInsight: multiAgentAnalysis.performance?.performanceInsight || "N/A"
+      },
+      rebalancing: {
+        rebalancingAdvice: multiAgentAnalysis.rebalancing?.rebalancingAdvice || "No rebalancing needed"
+      },
+      portfolio: {
+        healthScore: multiAgentAnalysis.portfolio?.healthScore || 0,
+        dominantSector: multiAgentAnalysis.portfolio?.dominantSector || "Unknown"
+      },
+      analysis: {
+        stockFundamentals: multiAgentAnalysis.analysis?.stockFundamentals || "No research analysis available"
+      }
     });
   } catch (error) {
     console.error("Analysis Error:", error.message);
