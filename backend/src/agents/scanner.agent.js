@@ -1,4 +1,5 @@
 import { masterAgent } from "./master.agent.js";
+import { getCompanyOverview } from "../services/marketData.service.js";
 
 const STOCK_UNIVERSE = [
   "RELIANCE",
@@ -21,7 +22,8 @@ export async function scannerAgent() {
     for (const symbol of STOCK_UNIVERSE) {
       try {
         console.log(`Scanning: ${symbol}`);
-        const analysis = await masterAgent({ symbol });
+        const stockData = await getCompanyOverview(symbol);
+        const analysis = await masterAgent(stockData);
 
         results.push({
           stock: symbol,
