@@ -16,9 +16,38 @@ export async function masterAgent(input) {
     // Check if it's a conversation mode request
     if (input && input.mode === "conversation") {
       const { userQuery } = input;
+      
+      // Attempt to extract ticker (uppercase words 3-10 chars, excluding common small words)
+      const tickerMatch = userQuery.match(/\b(?!(?:THE|AND|FOR|FOR|BUY|SELL|STOCK|THIS|THAT|WHAT|WITH|YOUR|WORK|FROM|INTO|ONTO)\b)[A-Z]{3,10}\b/);
+      let liveDataSnippet = "";
+      
+      if (tickerMatch) {
+          const ticker = tickerMatch[0];
+          try {
+              const data = await getLiveMarketData(ticker);
+              if (data && data.currentPrice > 0) {
+                  liveDataSnippet = `
+[LIVE MARKET DATA FOR ${ticker}]
+Current Price: ₹${data.currentPrice}
+Day Range: ₹${data.dayLow} - ₹${data.dayHigh}
+52W Range: ₹${data.fiftyTwoWeekLow} - ₹${data.fiftyTwoWeekHigh}
+Volume: ${data.volume}
+Market Cap: ${data.marketCap}
+Previous Close: ₹${data.previousClose}
+
+INSTRUCTION: You MUST use these exact numbers for ${ticker}. Never guess or use stale training data for prices, volume, or ranges.
+                  `.trim();
+              }
+          } catch (err) {
+              console.log("Failed to fetch live data for conversation context:", ticker);
+          }
+      }
+
       const masterPrompt = `
 You are Finsight AI, a sophisticated financial assistant. 
 Your goal is to provide intelligent, data-driven financial insights.
+
+${liveDataSnippet}
 
 User Question: ${userQuery}
 
@@ -27,7 +56,8 @@ Guidelines:
 2. If asked about your work, explain that you are a multi-agent AI system designed to analyze stocks, rank opportunities, and provide portfolio insights.
 3. If asked for investment advice (e.g., "Should I buy TCS?"), provide a balanced view based on general market principles but emphasize that you are an AI and not a SEBI registered advisor. Mention that users can use /analyze TICKER for a deep dive report.
 4. If asked about specific investment amounts (e.g., "Can I invest 50k?"), discuss general asset allocation and risk management principles.
-5. Always maintain a neutral but informative tone.
+5. If live data is provided above, incorporate it naturally into your response to ensure absolute factual accuracy.
+6. Always maintain a neutral but informative tone.
 `.trim();
 
       const response = await generateInvestmentAnalysis(masterPrompt);
