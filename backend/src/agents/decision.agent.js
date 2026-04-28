@@ -63,28 +63,28 @@ export async function runDecisionAgent({
     score += learningBoost;
 
     let finalAction = "HOLD";
+    const confidenceScore = Math.min(Math.max(score, 1), 10);
 
-    const confidenceScore = Math.min(
-      Math.max(score, 1),
-      10
-    );
-
-    if (score >= 9) {
+    let recommendation = "Monitor closely";
+    if (confidenceScore >= 8) {
       finalAction = "STRONG BUY";
-    } else if (score >= 6) {
+      recommendation = "Accumulate aggressively";
+    } else if (confidenceScore >= 6) {
       finalAction = "BUY";
-    } else if (score >= 4) {
+      recommendation = "Accumulate gradually";
+    } else if (confidenceScore >= 4) {
       finalAction = "HOLD";
-    } else if (score >= 2) {
-      finalAction = "REDUCE";
+      recommendation = "Monitor closely";
     } else {
       finalAction = "SELL";
+      recommendation = "Reduce exposure";
     }
 
     return {
       finalAction,
       confidenceScore,
-      reasoning: `${companyOverview?.Name || "This company"} shows a ${finalAction} profile based on financial strength, valuation quality, risk profile, and historical learning performance.`
+      recommendation,
+      reasoning: `${companyOverview?.Name || "This company"} shows a ${finalAction} profile (${recommendation}) based on financial strength, valuation quality, risk profile, and historical learning performance.`
     };
 
   } catch (error) {
@@ -111,6 +111,7 @@ export async function decisionAgent(stockData) {
   return {
     finalDecision: result.finalAction,
     finalConfidenceScore: result.confidenceScore,
+    recommendation: result.recommendation,
     reason: result.reasoning
   };
 }
