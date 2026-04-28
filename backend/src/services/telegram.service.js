@@ -3,6 +3,7 @@ import { masterAgent } from "../agents/master.agent.js";
 import { getCompanyOverview } from "./marketData.service.js";
 import { analyzePortfolio } from "../agents/portfolioAgent.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
+import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -217,6 +218,32 @@ Not SEBI registered investment advice.
         message += `💰 Allocation: ${stock.allocation}\n`;
         message += `⚡ Entry: ${stock.entrySignal}\n`;
         message += `📊 Urgency: ${stock.entryUrgency}\n\n`;
+      });
+      message += "⚠️ For educational purposes only.\n";
+      message += "Not SEBI registered investment advice.";
+      return await bot.telegram.sendMessage(chatId, message);
+    }
+
+    if (
+      text.toLowerCase() === "/sector" ||
+      text.toLowerCase() === "/sectors" ||
+      text.toLowerCase() === "/rotation"
+    ) {
+      await bot.telegram.sendMessage(
+        chatId,
+        "📊 Running Sector Rotation Scanner...\nAnalyzing strongest sectors now..."
+      );
+      const sectors = await sectorScannerAgent();
+      if (!sectors.length) {
+        return await bot.telegram.sendMessage(
+          chatId,
+          "No sector strength data available right now."
+        );
+      }
+      let message = "📊 SECTOR ROTATION REPORT\n\n";
+      sectors.slice(0, 5).forEach((item, index) => {
+        message += `#${index + 1} ${item.sector}\n`;
+        message += `🏆 Strength Score: ${item.avgScore}/10\n\n`;
       });
       message += "⚠️ For educational purposes only.\n";
       message += "Not SEBI registered investment advice.";

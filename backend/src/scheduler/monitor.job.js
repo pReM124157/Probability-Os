@@ -4,6 +4,7 @@ import supabase from "../services/supabase.service.js";
 import { runRiskAgent } from "../agents/risk.agent.js";
 import { analyzePortfolio as runPortfolioAgent } from "../agents/portfolioAgent.js";
 import { runRebalancingAgent } from "../agents/rebalancing.agent.js";
+import { scannerAgent } from "../agents/scanner.agent.js";
 
 import { sendTelegramAlert } from "../services/alert.service.js";
 
@@ -23,49 +24,30 @@ export const startMonitoringJob = () => {
     0 * * * *
   */
 
-  cron.schedule("0 * * * *", async () => {
-    console.log("📊 Running daily portfolio monitoring...");
-
+  cron.schedule("30 8 * * *", async () => {
     try {
-      const { data: portfolio, error } = await supabase
-        .from("portfolio")
-        .select("*");
-
-      if (error || !portfolio?.length) {
-        console.log("No portfolio data found");
+      console.log("⏰ Morning Scanner Alert Triggered");
+      const opportunities = await scannerAgent();
+      if (!opportunities.length) {
+        console.log("No opportunities found");
         return;
       }
-
-      // Step 1 — Risk Analysis
-      const riskResult = await runRiskAgent(portfolio);
-
-      // Step 2 — Portfolio Analysis
-      const portfolioResult = await runPortfolioAgent(portfolio);
-
-      // Step 3 — Rebalancing Analysis
-      const rebalanceResult = await runRebalancingAgent(portfolio);
-
-      const finalAlert = `
-🚨 *FINSIGHT DAILY SUMMARY*
-
-📊 Portfolio Health Score:
-${portfolioResult.healthScore || "N/A"}/10
-
-⚠ Risk Level:
-${riskResult.riskLevel || "Moderate"}
-
-📌 Suggested Action:
-${rebalanceResult.suggestedAction || "Hold"}
-
-🧠 Top Concern:
-${portfolioResult.dominantSector || "None"}
-
-Generated automatically by Finsight AI
-`;
-
-      await sendTelegramAlert(finalAlert);
+      let message = "🏆 TOP OPPORTUNITIES TODAY\n\n";
+      opportunities.slice(0, 3).forEach((stock, index) => {
+        message += `#${index + 1} ${stock.stock}\n`;
+        message += `🎯 Confidence: ${stock.confidenceScore}/10\n`;
+        message += `🏆 Priority: ${stock.priorityLevel}\n`;
+        message += `💰 Allocation: ${stock.allocation}\n`;
+        message += `⚡ Entry: ${stock.entrySignal}\n`;
+        message += `📊 Urgency: ${stock.entryUrgency}\n\n`;
+      });
+      message += "⚠️ For educational purposes only.\n";
+      message += "Not SEBI registered investment advice.";
+      
+      await sendTelegramAlert(message);
+      console.log("✅ Morning scanner alert sent");
     } catch (error) {
-      console.error("Monitoring job failed:", error.message);
+      console.log("Monitor Job Error:", error.message);
     }
   });
 };
