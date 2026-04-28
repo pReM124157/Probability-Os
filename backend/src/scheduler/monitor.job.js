@@ -26,21 +26,25 @@ export const startMonitoringJob = () => {
   */
 
   cron.schedule("30 8 * * *", async () => {
+    console.log("⏰ Morning Scanner Alert Triggered");
     try {
-      console.log("⏰ Morning Scanner Alert Triggered");
       const opportunities = await scannerAgent();
       if (!opportunities.length) {
         console.log("No opportunities found");
         return;
       }
       let message = "🏆 TOP OPPORTUNITIES TODAY\n\n";
-      opportunities.slice(0, 3).forEach((stock, index) => {
+      opportunities.forEach((stock, index) => {
         message += `#${index + 1} ${stock.stock}\n`;
-        message += `🎯 Confidence: ${stock.confidenceScore}/10\n`;
-        message += `🏆 Priority: ${stock.priorityLevel}\n`;
-        message += `💰 Allocation: ${stock.allocation}\n`;
-        message += `⚡ Entry: ${stock.entrySignal}\n`;
-        message += `📊 Urgency: ${stock.entryUrgency}\n\n`;
+        message += `📊 Decision: ${stock.decision} (${stock.confidenceScore}/10)\n`;
+        message += `💰 Price: ₹${stock.currentPrice}\n`;
+        message += `🎯 Entry Zone: ${stock.idealEntryZone}\n`;
+        message += `🛑 Stop Loss: ${stock.stopLoss}\n`;
+        message += `🎯 Target: ${stock.initialTarget}\n`;
+        message += `⚖️ R/R Ratio: ${stock.rewardRiskRatio}\n`;
+        message += `⚡ Urgency: ${stock.entryUrgency}\n`;
+        message += `🧠 Reason:\n${stock.entryReasoning}\n`;
+        message += `📌 Advice:\n${stock.finalExecutionAdvice}\n\n`;
       });
       message += "⚠️ For educational purposes only.\n";
       message += "Not SEBI registered investment advice.";

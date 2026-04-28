@@ -7,7 +7,10 @@ export async function analyzeEntryTiming({
     confidenceScore,
     riskLevel,
     valuationScore,
-    momentumScore
+    momentumScore,
+    technicalData,
+    marketData,
+    companyData
 }) {
     try {
         // Fix for missing .NS suffix and price fetch fallback
@@ -43,6 +46,39 @@ export async function analyzeEntryTiming({
         let finalExecutionAdvice = "Maintain caution and monitor price action.";
 
         // Success path safety check
+        const generateReasoning = (strategyType) => {
+            let reasons = [];
+            
+            // Technical Reasons
+            if (technicalData?.trend === "BULLISH") reasons.push("bullish price structure");
+            if (technicalData?.rsi < 40) reasons.push("oversold conditions suggesting a bounce");
+            if (technicalData?.rsi > 60) reasons.push("strong relative strength");
+            if (activePrice > technicalData?.sma50) reasons.push("trading above 50-day support");
+            
+            // Market/Volume Reasons
+            if (marketData?.volume > marketData?.averageVolume * 1.5) reasons.push("high volume accumulation");
+            if (marketData?.fiftyTwoWeekHigh > 0 && activePrice > marketData.fiftyTwoWeekHigh * 0.95) reasons.push("proximity to multi-month breakout");
+            
+            // Fundamental/Valuation Reasons
+            if (valuationScore >= 7) reasons.push("attractive valuation metrics");
+            if (companyData?.ProfitMargin > 0.15) reasons.push("healthy institutional-grade margins");
+            if (companyData?.PERatio > 0 && companyData.PERatio < 25) reasons.push("reasonable P/E ratio");
+
+            if (reasons.length === 0) {
+                return strategyType === "STRONG ENTRY" 
+                    ? "High conviction setup based on overall technical alignment."
+                    : strategyType === "CAUTIOUS ENTRY"
+                    ? "Moderate conviction setup awaiting clearer volume confirmation."
+                    : "Balanced setup with limited directional conviction.";
+            }
+
+            // Shuffle and pick top 3 for variety
+            const selectedReasons = reasons.slice(0, 3);
+            const prefix = strategyType === "STRONG ENTRY" ? "Strong setup supported by " : "Strategic entry based on ";
+            
+            return `${prefix}${selectedReasons.join(", ")}.`.replace(/, ([^,]*)$/, " and $1");
+        };
+
         if (activePrice > 0) {
             if (confidenceScore <= 4) {
                 strategy = "AVOID ENTRY";
@@ -66,7 +102,7 @@ export async function analyzeEntryTiming({
                 const risk = activePrice - Math.round(activePrice * 0.94);
                 if (risk > 0) rewardRiskRatio = (reward / risk).toFixed(2);
 
-                reasoning = "Moderate conviction. Build position gradually on pullbacks.";
+                reasoning = generateReasoning("CAUTIOUS ENTRY");
                 finalExecutionAdvice = `Accumulate gradually near ${idealEntryZone} with strict stop loss.`;
             }
             else {
@@ -84,7 +120,7 @@ export async function analyzeEntryTiming({
                 const risk = activePrice - Math.round(activePrice * 0.95);
                 if (risk > 0) rewardRiskRatio = (reward / risk).toFixed(2);
 
-                reasoning = "High conviction setup. Attractive entry levels with solid target potential.";
+                reasoning = generateReasoning("STRONG ENTRY");
                 finalExecutionAdvice = `Strong buy opportunity. Consider entry within ${idealEntryZone}.`;
             }
         }

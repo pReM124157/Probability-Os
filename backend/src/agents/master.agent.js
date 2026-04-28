@@ -63,7 +63,10 @@ Guidelines:
       confidenceScore: decision.finalConfidenceScore || 5,
       riskLevel: risk.riskLevel || "MEDIUM",
       valuationScore: valuation.score || 5,
-      momentumScore: technical.score || 5
+      momentumScore: technical.score || 5,
+      technicalData: technical,
+      marketData: liveMarketData,
+      companyData: stockData
     });
 
     // PHASE 3: Confidence Alignment

@@ -5,7 +5,7 @@ import supabase from "./services/supabase.service.js";
 import { getCompanyOverview } from "./services/marketData.service.js";
 import { generateInvestmentAnalysis } from "./services/claude.service.js";
 import { masterAgent } from "./agents/master.agent.js";
-import { startPortfolioScheduler } from "./scheduler/portfolio.scheduler.js";
+
 
 const app = express();
 
@@ -147,6 +147,6 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
-startPortfolioScheduler();
+
 
 export default app;
