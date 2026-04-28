@@ -2,6 +2,7 @@ import { Telegraf } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { getCompanyOverview } from "./marketData.service.js";
 import { analyzePortfolio } from "../agents/portfolioAgent.js";
+import { scannerAgent } from "../agents/scanner.agent.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -194,51 +195,32 @@ Not SEBI registered investment advice.
       return;
     }
 
-    if (lowerText === "/top") {
+    if (text.toLowerCase() === "/scanner" || 
+        text.toLowerCase() === "/top" || 
+        text.toLowerCase() === "/opportunities") {
       await bot.telegram.sendMessage(
         chatId,
-        "🏆 Ranking top opportunities..."
+        "🔍 Running Institutional Scanner...\nPlease wait while FinSight analyzes top opportunities."
       );
-      try {
-        const topStocks = [
-          "TCS.NS",
-          "INFY.NS",
-          "RELIANCE.NS",
-          "HDFCBANK.NS",
-          "ICICIBANK.NS"
-        ];
-        const results = [];
-        for (const ticker of topStocks) {
-          try {
-            const stockData = await getCompanyOverview(ticker);
-            const result = await masterAgent(stockData);
-            results.push({
-              ticker,
-              verdict: result.decision?.finalDecision || "HOLD",
-              confidence: result.decision?.finalConfidenceScore || 0,
-              risk: result.risk?.riskLevel || "N/A"
-            });
-          } catch (err) {
-            console.log(`Skipping ${ticker}`);
-          }
-        }
-        results.sort((a, b) => b.confidence - a.confidence);
-        let message = `🏆 TOP OPPORTUNITIES\n\n`;
-        results.forEach((stock, index) => {
-          message += `${index + 1}. ${stock.ticker}\n`;
-          message += `Verdict: ${stock.verdict}\n`;
-          message += `Confidence: ${stock.confidence}/10\n`;
-          message += `Risk: ${stock.risk}\n\n`;
-        });
-        message += `⚠️ Educational only.\nNot SEBI registered investment advice.`;
-        await bot.telegram.sendMessage(chatId, message);
-      } catch (error) {
-        await bot.telegram.sendMessage(
+      const opportunities = await scannerAgent();
+      if (!opportunities.length) {
+        return await bot.telegram.sendMessage(
           chatId,
-          "❌ Could not rank top opportunities right now."
+          "No strong opportunities found right now. Please try again later."
         );
       }
-      return;
+      let message = "🏆 TOP OPPORTUNITIES TODAY\n\n";
+      opportunities.forEach((stock, index) => {
+        message += `#${index + 1} ${stock.stock}\n`;
+        message += `🎯 Confidence: ${stock.confidenceScore}/10\n`;
+        message += `🏆 Priority: ${stock.priorityLevel}\n`;
+        message += `💰 Allocation: ${stock.allocation}\n`;
+        message += `⚡ Entry: ${stock.entrySignal}\n`;
+        message += `📊 Urgency: ${stock.entryUrgency}\n\n`;
+      });
+      message += "⚠️ For educational purposes only.\n";
+      message += "Not SEBI registered investment advice.";
+      return await bot.telegram.sendMessage(chatId, message);
     }
 
     /**
