@@ -7,6 +7,7 @@ import { runRebalancingAgent } from "../agents/rebalancing.agent.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 
 import { sendTelegramAlert } from "../services/alert.service.js";
+import { sendEmailAlert } from "../services/email.service.js";
 
 export const startMonitoringJob = () => {
   console.log("🚀 Monitoring Job Started");
@@ -45,6 +46,10 @@ export const startMonitoringJob = () => {
       message += "Not SEBI registered investment advice.";
       
       await sendTelegramAlert(message);
+      await sendEmailAlert(
+        "FinSight Morning Scanner Report",
+        message
+      );
       console.log("✅ Morning scanner alert sent");
     } catch (error) {
       console.log("Monitor Job Error:", error.message);
