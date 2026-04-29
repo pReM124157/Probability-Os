@@ -224,6 +224,12 @@ Guidelines:
       positionSizing.allocation = "0%";
       positionSizing.reason = `Risk priority (${exitSignal.signal}) overrides fresh allocation decisions until structure improves.`;
 
+      // Override Rebalancing (Downstream must obey risk)
+      rebalancing.rebalancingAction = "Reduce exposure immediately. Avoid maintaining full position size.";
+      rebalancing.action = "Trim existing allocation and preserve capital.";
+      rebalancer.action = exitSignal.signal;
+      rebalancer.reason = `Exit signal (${exitSignal.signal}) takes precedence over allocation maintenance.`;
+
       // Downgrade conviction to reflect high-risk exit priority
       finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 4);
     }
