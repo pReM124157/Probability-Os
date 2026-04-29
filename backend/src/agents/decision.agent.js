@@ -8,52 +8,54 @@ export async function runDecisionAgent({
   try {
     let score = 0;
 
-    const marketCap = parseFloat(
-      companyOverview?.MarketCapitalization || 0
-    );
+    const marketCap = companyOverview?.MarketCapitalization;
+    const peRatio = companyOverview?.PERatio;
+    const profitMargin = companyOverview?.ProfitMargin;
 
-    const peRatio = parseFloat(
-      companyOverview?.PERatio || 0
-    );
-
-    const profitMargin = parseFloat(
-      companyOverview?.ProfitMargin || 0
-    );
-
-    const hasFinancialData =
-      marketCap > 0 || peRatio > 0 || profitMargin > 0;
+    const hasFinancialData = 
+        (marketCap !== null && marketCap !== undefined) || 
+        (peRatio !== null && peRatio !== undefined) || 
+        (profitMargin !== null && profitMargin !== undefined);
 
     if (!hasFinancialData) {
       return {
         finalAction: "HOLD",
-        confidenceScore: 4,
+        confidenceScore: 5, // Neutral starting point for unknown
         reasoning:
-          "Limited financial data available. Defaulting to HOLD until stronger conviction signals are available."
+          "Institutional data is currently unavailable for this ticker. Defaulting to a neutral HOLD until verifiable financial metrics are retrieved."
       };
     }
 
-    // Risk Scoring
+    // Risk Scoring (Always present)
     if (riskLevel === "LOW") score += 3;
     if (riskLevel === "MEDIUM") score += 2;
     if (riskLevel === "HIGH") score -= 2;
 
-    if (riskScore <= 3) score += 2;
-    if (riskScore >= 7) score -= 2;
+    if (riskScore !== null) {
+        if (riskScore <= 3) score += 2;
+        if (riskScore >= 7) score -= 2;
+    }
 
-    // Large cap quality boost
-    if (marketCap > 100000000000) score += 3;
-    else if (marketCap > 10000000000) score += 2;
-    else score -= 1;
+    // Large cap quality boost (Only if data exists)
+    if (marketCap !== null) {
+        if (marketCap > 100000000000) score += 3;
+        else if (marketCap > 10000000000) score += 2;
+        else if (marketCap < 1000000000) score -= 1; // Only penalize if we KNOW it's small
+    }
 
-    // PE valuation scoring
-    if (peRatio > 0 && peRatio < 25) score += 3;
-    else if (peRatio < 40) score += 1;
-    else if (peRatio > 60) score -= 2;
+    // PE valuation scoring (Only if data exists)
+    if (peRatio !== null && peRatio > 0) {
+        if (peRatio < 25) score += 3;
+        else if (peRatio < 40) score += 1;
+        else if (peRatio > 60) score -= 2;
+    }
 
-    // Profitability
-    if (profitMargin > 0.15) score += 2;
-    else if (profitMargin > 0.08) score += 1;
-    else score -= 1;
+    // Profitability (Only if data exists)
+    if (profitMargin !== null) {
+        if (profitMargin > 0.15) score += 2;
+        else if (profitMargin > 0.08) score += 1;
+        else if (profitMargin < 0.05) score -= 1; // Only penalize if we KNOW it's low
+    }
 
     // Portfolio fit
     if (portfolioHealth >= 7) score += 1;

@@ -41,16 +41,16 @@ export async function getCompanyOverview(symbol) {
         result?.shortName ||
         fetchSymbol,
 
-      MarketCapitalization: result?.marketCap || 0,
-      PERatio: result?.trailingPE || 0,
-      ProfitMargin: result?.profitMargins || 0.12,
-      ReturnOnEquityTTM: result?.returnOnEquity || 0,
-      DebtToEquityRatio: result?.debtToEquity || 0.5,
-      QuarterlyEarningsGrowthYOY: result?.earningsQuarterlyGrowth || 0,
-      QuarterlyRevenueGrowthYOY: result?.revenueQuarterlyGrowth || 0,
-      PriceToBookRatio: result?.priceToBook || 0,
-      Beta: result?.beta || 1.0,
-      Sector: result?.sector || "Unknown"
+      MarketCapitalization: result?.marketCap ?? null,
+      PERatio: result?.trailingPE ?? null,
+      ProfitMargin: result?.profitMargins ?? null,
+      ReturnOnEquityTTM: result?.returnOnEquity ?? null,
+      DebtToEquityRatio: result?.debtToEquity ?? null,
+      QuarterlyEarningsGrowthYOY: result?.earningsQuarterlyGrowth ?? null,
+      QuarterlyRevenueGrowthYOY: result?.revenueQuarterlyGrowth ?? null,
+      PriceToBookRatio: result?.priceToBook ?? null,
+      Beta: result?.beta ?? null,
+      Sector: result?.sector ?? null
     };
 
     console.log(

@@ -60,9 +60,9 @@ export async function analyzeEntryTiming({
             if (marketData?.fiftyTwoWeekHigh > 0 && activePrice > marketData.fiftyTwoWeekHigh * 0.95) reasons.push("proximity to multi-month breakout");
             
             // Fundamental/Valuation Reasons
-            if (valuationScore >= 7) reasons.push("attractive valuation metrics");
-            if (companyData?.ProfitMargin > 0.15) reasons.push("healthy institutional-grade margins");
-            if (companyData?.PERatio > 0 && companyData.PERatio < 25) reasons.push("reasonable P/E ratio");
+            if (valuationScore !== null && valuationScore >= 7) reasons.push("attractive valuation metrics");
+            if (companyData?.ProfitMargin !== null && companyData?.ProfitMargin > 0.15) reasons.push("healthy institutional-grade margins");
+            if (companyData?.PERatio !== null && companyData?.PERatio > 0 && companyData?.PERatio < 25) reasons.push("reasonable P/E ratio");
 
             if (reasons.length === 0) {
                 return strategyType === "STRONG ENTRY" 
