@@ -10,7 +10,7 @@ import { masterAgent } from "./agents/master.agent.js";
 const app = express();
 
 app.get("/", (req, res) => {
-  return res.status(200).send("FinSight Backend Live");
+  res.status(200).send("FinSight Backend Running");
 });
 
 
