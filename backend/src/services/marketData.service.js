@@ -24,22 +24,34 @@ export async function getCompanyOverview(symbol) {
   try {
     const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
 
-    const fetchSymbol = upperSymbol.includes(".")
-      ? upperSymbol
-      : `${upperSymbol}.NS`;
+    const symbolsToTry = upperSymbol.includes(".")
+      ? [upperSymbol]
+      : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
 
-    console.log("FETCH SYMBOL (Overview):", fetchSymbol);
+    let result = null;
+    let fetchSymbol = "";
 
-    // Fetch deep fundamentals using quoteSummary modules
-    const result = await yahooFinance.quoteSummary(fetchSymbol, {
-      modules: [
-        "financialData",
-        "defaultKeyStatistics",
-        "assetProfile",
-        "summaryDetail",
-        "calendarEvents"
-      ]
-    });
+    for (const sym of symbolsToTry) {
+        try {
+            console.log(`FETCH ATTEMPT (Overview): ${sym}`);
+            const tempResult = await yahooFinance.quoteSummary(sym, {
+                modules: ["financialData", "defaultKeyStatistics", "assetProfile", "summaryDetail", "calendarEvents"]
+            });
+            if (tempResult && tempResult.assetProfile) {
+                result = tempResult;
+                fetchSymbol = sym;
+                break;
+            }
+        } catch (e) {
+            console.warn(`[FAIL] quoteSummary for ${sym}: ${e.message}`);
+        }
+    }
+
+    if (!result) {
+        throw new Error(`Failed to fetch data for ${upperSymbol} after trying: ${symbolsToTry.join(", ")}`);
+    }
+
+    console.log("FETCH SUCCESS (Overview):", fetchSymbol);
 
     console.log("RAW YAHOO SUMMARY RESULT:", JSON.stringify(result).substring(0, 500));
 
@@ -83,7 +95,10 @@ export async function getCompanyOverview(symbol) {
     return companyOverview;
 
   } catch (error) {
-    console.error("Yahoo Finance Error:", error.message);
+    console.error("--- YAHOO OVERVIEW FAILURE ---");
+    console.error(`SYMBOL: ${symbol}`);
+    console.error(`ERROR: ${error.message}`);
+    console.error(`STACK: ${error.stack}`);
     
     // Return at least the symbol to prevent downstream "UNKNOWN" errors
     const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
@@ -97,14 +112,32 @@ export async function getLiveMarketData(symbol) {
   try {
     const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
     
-    const fetchSymbol = upperSymbol.includes(".")
-      ? upperSymbol
-      : `${upperSymbol}.NS`;
+    const symbolsToTry = upperSymbol.includes(".")
+        ? [upperSymbol]
+        : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
 
-    console.log("FETCH SYMBOL (Live):", fetchSymbol);
+    let result = null;
+    let fetchSymbol = "";
 
-    const result = await yahooFinance.quote(fetchSymbol);
-    console.log("RAW YAHOO RESULT (Live):", JSON.stringify(result).substring(0, 500));
+    for (const sym of symbolsToTry) {
+        try {
+            console.log(`FETCH ATTEMPT (Live): ${sym}`);
+            const tempResult = await yahooFinance.quote(sym);
+            if (tempResult && (tempResult.regularMarketPrice || tempResult.currentPrice)) {
+                result = tempResult;
+                fetchSymbol = sym;
+                break;
+            }
+        } catch (e) {
+            console.warn(`[FAIL] quote for ${sym}: ${e.message}`);
+        }
+    }
+
+    if (!result) {
+        throw new Error(`Failed to fetch live data for ${upperSymbol} after trying: ${symbolsToTry.join(", ")}`);
+    }
+
+    console.log("FETCH SUCCESS (Live):", fetchSymbol);
     
     const currentPrice = 
       result?.regularMarketPrice ||
@@ -142,10 +175,10 @@ export async function getLiveMarketData(symbol) {
 
     return liveMarketData;
   } catch (error) {
-    console.error(
-      "Live Market Data Error:",
-      error.message
-    );
+    console.error("--- YAHOO LIVE DATA FAILURE ---");
+    console.error(`SYMBOL: ${symbol}`);
+    console.error(`ERROR: ${error.message}`);
+    
     return {
       currentPrice: 0
     };

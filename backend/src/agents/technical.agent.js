@@ -5,13 +5,13 @@ const yahooFinance = new YahooFinance();
 export async function technicalAgent(symbol) {
   try {
     const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
-    const fetchSymbol = upperSymbol.includes(".")
-      ? upperSymbol
-      : `${upperSymbol}.NS`;
+    const symbolsToTry = upperSymbol.includes(".")
+      ? [upperSymbol]
+      : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
 
     const period2 = new Date();
     const period1 = new Date();
-    period1.setDate(period2.getDate() - 100); // Fetch 100 days to be safe
+    period1.setDate(period2.getDate() - 100);
 
     const queryOptions = {
       period1: period1.toISOString().split('T')[0],
@@ -19,8 +19,28 @@ export async function technicalAgent(symbol) {
       interval: '1d'
     };
 
-    console.log(`Fetching historical data for ${fetchSymbol}...`);
-    const history = await yahooFinance.historical(fetchSymbol, queryOptions);
+    let history = null;
+    let fetchSymbol = "";
+
+    for (const sym of symbolsToTry) {
+        try {
+            console.log(`FETCH ATTEMPT (Technical): ${sym}`);
+            const tempHistory = await yahooFinance.historical(sym, queryOptions);
+            if (tempHistory && tempHistory.length >= 20) {
+                history = tempHistory;
+                fetchSymbol = sym;
+                break;
+            }
+        } catch (e) {
+            console.warn(`[FAIL] technical historical for ${sym}: ${e.message}`);
+        }
+    }
+
+    if (!history) {
+        throw new Error(`Failed to fetch historical data for ${upperSymbol} after trying: ${symbolsToTry.join(", ")}`);
+    }
+
+    console.log("FETCH SUCCESS (Technical):", fetchSymbol);
     
     if (!history || !history.length || history.length < 20) {
       console.warn(`Insufficient history for ${symbol}`);
