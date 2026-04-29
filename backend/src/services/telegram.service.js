@@ -20,6 +20,7 @@ async function performAnalysis(chatId, symbol) {
     const result = await masterAgent(stockData);
 
     const entryTiming = result.entryTiming || {};
+    const exitSignal = result.exitSignal || {};
     const ticker = symbol.toUpperCase();
 
     // Use the final execution advice directly from the agent
@@ -57,6 +58,12 @@ ${entryTiming?.reasoning || "Insufficient market conviction"}
 
 📌 Final Execution Advice:
 ${executionAdvice}
+
+🚨 EXIT SIGNAL
+Signal: ${exitSignal?.signal || "HOLD"}
+Urgency: ${exitSignal?.urgency || "LOW"}
+Action: ${exitSignal?.action || "Continue holding"}
+Reason: ${exitSignal?.reason || "No significant exit triggers detected"}
 
 ⚠️ For educational purposes only.
 Not SEBI registered investment advice.

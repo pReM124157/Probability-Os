@@ -8,6 +8,7 @@ import { analyzeEntryTiming } from "./entryTiming.agent.js";
 import { getLiveMarketData } from "../services/marketData.service.js";
 import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
+import { analyzeExitSignal } from "./exitSignal.agent.js";
 
 import { generateInvestmentAnalysis } from "../services/claude.service.js";
 
@@ -104,6 +105,19 @@ Guidelines:
       marketData: liveMarketData,
       companyData: stockData
     });
+    // PHASE 2.5: Exit Strategy Analysis
+    const parseCurrency = (str) => Number(str?.replace(/[^0-9.]/g, "")) || 0;
+    
+    const exitSignal = await analyzeExitSignal({
+      stock: ticker,
+      currentPrice: activePrice,
+      stopLoss: parseCurrency(entryTiming.stopLoss),
+      target: parseCurrency(entryTiming.initialTarget),
+      technicalData: technical,
+      marketData: liveMarketData,
+      companyData: stockData,
+      valuationScore: valuation.score
+    });
 
     // PHASE 3: Confidence Alignment
     // Adjusting confidence based on execution readiness to ensure internal consistency
@@ -181,7 +195,8 @@ Guidelines:
       rebalancing,
       technical,
       valuation,
-      entryTiming
+      entryTiming,
+      exitSignal
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);
