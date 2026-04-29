@@ -1,39 +1,38 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // Use STARTTLS
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
+/**
+ * Backward compatibility wrapper
+ */
 export async function sendEmailAlert(subject, text) {
   return sendEmail({ subject, text });
 }
 
+/**
+ * Sends an email using the Resend API to avoid SMTP network issues.
+ */
 export async function sendEmail({ subject, text }) {
   try {
-    console.log("📨 EMAIL SEND STARTED TO:", process.env.TARGET_EMAIL);
+    console.log("📨 RESEND EMAIL SEND STARTED TO:", process.env.TARGET_EMAIL);
     
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+    // NOTE: If using the free tier of Resend without a verified domain, 
+    // the 'from' address MUST be 'onboarding@resend.dev' and 
+    // the 'to' address MUST be your account's registered email.
+    const { data, error } = await resend.emails.send({
+      from: "FinSight AI <onboarding@resend.dev>",
       to: process.env.TARGET_EMAIL,
       subject,
       text
     });
 
-    console.log("✅ EMAIL SENT SUCCESSFULLY:", info.response);
+    if (error) {
+      console.error("❌ RESEND API ERROR:", error);
+      return;
+    }
+
+    console.log("✅ EMAIL SENT SUCCESSFULLY VIA RESEND. ID:", data.id);
   } catch (error) {
-    console.error("❌ EMAIL ERROR:", error);
-    console.error("Check if EMAIL_USER and EMAIL_PASS (App Password) are correct.");
+    console.error("❌ RESEND SERVICE ERROR:", error);
   }
 }
