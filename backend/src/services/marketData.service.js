@@ -30,27 +30,41 @@ export async function getCompanyOverview(symbol) {
 
     console.log("FETCH SYMBOL (Overview):", fetchSymbol);
 
-    const result = await yahooFinance.quote(fetchSymbol);
+    // Fetch deep fundamentals using quoteSummary modules
+    const result = await yahooFinance.quoteSummary(fetchSymbol, {
+      modules: [
+        "financialData",
+        "defaultKeyStatistics",
+        "assetProfile",
+        "summaryDetail"
+      ]
+    });
 
-    console.log("RAW YAHOO RESULT:", result);
+    console.log("RAW YAHOO SUMMARY RESULT:", JSON.stringify(result).substring(0, 500));
+
+    const {
+      financialData = {},
+      defaultKeyStatistics = {},
+      assetProfile = {},
+      summaryDetail = {}
+    } = result;
 
     const companyOverview = {
       Symbol: fetchSymbol,
-      Name:
-        result?.longName ||
-        result?.shortName ||
-        fetchSymbol,
-
-      MarketCapitalization: result?.marketCap ?? null,
-      PERatio: result?.trailingPE ?? null,
-      ProfitMargin: result?.profitMargins ?? null,
-      ReturnOnEquityTTM: result?.returnOnEquity ?? null,
-      DebtToEquityRatio: result?.debtToEquity ?? null,
-      QuarterlyEarningsGrowthYOY: result?.earningsQuarterlyGrowth ?? null,
-      QuarterlyRevenueGrowthYOY: result?.revenueQuarterlyGrowth ?? null,
-      PriceToBookRatio: result?.priceToBook ?? null,
-      Beta: result?.beta ?? null,
-      Sector: result?.sector ?? null
+      Name: assetProfile.longName || fetchSymbol,
+      
+      MarketCapitalization: summaryDetail.marketCap ?? null,
+      PERatio: summaryDetail.trailingPE ?? null,
+      ProfitMargin: financialData.profitMargins ?? null,
+      ReturnOnEquityTTM: financialData.returnOnEquity ?? null,
+      DebtToEquityRatio: financialData.debtToEquity ?? null,
+      QuarterlyEarningsGrowthYOY: financialData.earningsGrowth ?? null,
+      QuarterlyRevenueGrowthYOY: financialData.revenueGrowth ?? null,
+      PriceToBookRatio: defaultKeyStatistics.priceToBook ?? null,
+      Beta: defaultKeyStatistics.beta ?? null,
+      Sector: assetProfile.sector ?? null,
+      Industry: assetProfile.industry ?? null,
+      BusinessSummary: assetProfile.longBusinessSummary ?? null
     };
 
     console.log("FINAL OVERVIEW:", companyOverview);
