@@ -74,10 +74,12 @@ Guidelines:
       stockData.symbol || 
       "UNKNOWN";
 
-    console.log("MASTER AGENT TICKER:", ticker);
-
+    console.log("--- MASTER AGENT DEBUG ---");
+    console.log("TICKER:", ticker);
+    console.log("INPUT DATA KEYS:", Object.keys(stockData));
 
     // PHASE 1: Core Analysis (Risk, Fundamentals, Technicals, Valuation)
+    console.log(`[Phase 1] Starting Core Analysis for ${ticker}...`);
     const [risk, decision, liveMarketData, technical, valuation] = await Promise.all([
       riskAgent(stockData),
       decisionAgent(stockData),
@@ -85,6 +87,7 @@ Guidelines:
       technicalAgent(ticker),
       valuationAgent(stockData)
     ]);
+    console.log(`[Phase 1] Completed. Live Price: ₹${liveMarketData.currentPrice}`);
 
     // PHASE 2: Execution Intelligence (Entry Timing)
     const entryTiming = await analyzeEntryTiming({

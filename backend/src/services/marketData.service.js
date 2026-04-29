@@ -82,14 +82,17 @@ export async function getLiveMarketData(symbol) {
     console.log("FETCH SYMBOL (Live):", fetchSymbol);
 
     const result = await yahooFinance.quote(fetchSymbol);
+    console.log("RAW YAHOO RESULT (Live):", JSON.stringify(result).substring(0, 500));
     
     const currentPrice = 
       result?.regularMarketPrice ||
       result?.currentPrice ||
+      result?.regularMarketPreviousClose ||
       result?.previousClose ||
       0;
 
-    console.log("LIVE PRICE:", currentPrice);
+    console.log("EXTRACTED PRICE:", currentPrice);
+    
     const liveMarketData = {
       symbol: fetchSymbol,
       currentPrice: currentPrice,
@@ -108,7 +111,7 @@ export async function getLiveMarketData(symbol) {
       currency: result?.currency || "INR"
     };
     console.log(
-      "LIVE MARKET DATA:",
+      "FINAL LIVE MARKET DATA OBJECT:",
       liveMarketData
     );
     return liveMarketData;

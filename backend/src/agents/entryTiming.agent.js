@@ -125,8 +125,11 @@ export async function analyzeEntryTiming({
             }
         }
 
-        console.log("ENTRY AGENT SYMBOL:", fetchSymbol);
-        console.log("ENTRY AGENT PRICE:", activePrice);
+        console.log("--- ENTRY TIMING DEBUG ---");
+        console.log("SYMBOL:", fetchSymbol);
+        console.log("CURRENT PRICE:", activePrice);
+        console.log("MARKET DATA:", JSON.stringify(marketData).substring(0, 200));
+        console.log("--------------------------");
 
         return {
             stock: stock || "UNKNOWN",

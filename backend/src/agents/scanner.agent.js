@@ -86,7 +86,7 @@ export async function scannerAgent() {
     
     // Step 1: Pre-filter (Layer 1)
     const shortlisted = await getShortlistedStocks(10);
-    console.log(`✅ Shortlisted: ${shortlisted.map(s => s.symbol).join(", ")}`);
+    console.log(`✅ Shortlisted: ${shortlisted.map(s => s.symbol).join(", ")} (Count: ${shortlisted.length})`);
 
     const results = [];
 
@@ -97,34 +97,42 @@ export async function scannerAgent() {
         const stockData = await getCompanyOverview(item.symbol);
         const analysis = await masterAgent(stockData);
 
-        results.push({
-          stock: item.symbol,
-          decision: analysis?.decision?.finalDecision || "HOLD",
-          confidenceScore: analysis?.decision?.finalConfidenceScore || 0,
-          priorityLevel: analysis?.capital?.priorityLevel || "MEDIUM",
-          allocation: analysis?.capital?.suggestedAllocation || "0%",
-          entrySignal: analysis?.entryTiming?.strategy || "AVOID ENTRY",
-          entryUrgency: analysis?.entryTiming?.entryUrgency || "LOW",
-          currentPrice: analysis?.entryTiming?.currentPrice || item.price || 0,
-          idealEntryZone: analysis?.entryTiming?.idealEntryZone || "N/A",
-          stopLoss: analysis?.entryTiming?.stopLoss || "N/A",
-          initialTarget: analysis?.entryTiming?.initialTarget || "N/A",
-          rewardRiskRatio: analysis?.entryTiming?.rewardRiskRatio || "N/A",
-          entryReasoning: analysis?.entryTiming?.reasoning || "N/A",
-          finalExecutionAdvice: analysis?.entryTiming?.finalExecutionAdvice || "N/A",
-          decisionReasoning: analysis?.decision?.reason || "N/A",
-          recommendedAction: analysis?.rebalancing?.action || "N/A"
-        });
+        if (analysis) {
+          results.push({
+            stock: item.symbol,
+            decision: analysis?.decision?.finalDecision || "HOLD",
+            confidenceScore: analysis?.decision?.finalConfidenceScore || 0,
+            priorityLevel: analysis?.capital?.priorityLevel || "MEDIUM",
+            allocation: analysis?.capital?.suggestedAllocation || "0%",
+            entrySignal: analysis?.entryTiming?.strategy || "AVOID ENTRY",
+            entryUrgency: analysis?.entryTiming?.entryUrgency || "LOW",
+            currentPrice: analysis?.entryTiming?.currentPrice || item.price || 0,
+            idealEntryZone: analysis?.entryTiming?.idealEntryZone || "N/A",
+            stopLoss: analysis?.entryTiming?.stopLoss || "N/A",
+            initialTarget: analysis?.entryTiming?.initialTarget || "N/A",
+            rewardRiskRatio: analysis?.entryTiming?.rewardRiskRatio || "N/A",
+            entryReasoning: analysis?.entryTiming?.reasoning || "N/A",
+            finalExecutionAdvice: analysis?.entryTiming?.finalExecutionAdvice || "N/A",
+            decisionReasoning: analysis?.decision?.reason || "N/A",
+            recommendedAction: analysis?.rebalancing?.action || "N/A"
+          });
+        }
       } catch (error) {
         console.log(`Deep scan failed for ${item.symbol}:`, error.message);
       }
     }
 
+    console.log(`📊 Deep Scan Results: ${results.length} stocks processed`);
+
     const sortedResults = results.sort(
       (a, b) => b.confidenceScore - a.confidenceScore
     );
 
-    return sortedResults.slice(0, 5);
+    // Apply confidence threshold (User requested reducing from 7 to 5)
+    const filteredResults = sortedResults.filter(r => r.confidenceScore >= 5);
+    console.log(`🎯 Filtered Results (Confidence >= 5): ${filteredResults.length}`);
+
+    return filteredResults.slice(0, 5);
   } catch (error) {
     console.log("Scanner Agent Error:", error.message);
     return [];
