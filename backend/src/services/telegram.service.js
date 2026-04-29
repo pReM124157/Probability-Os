@@ -565,6 +565,4 @@ export const startBot = () => {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-console.log("✅ Telegram Bot Started");
-
 export default bot;

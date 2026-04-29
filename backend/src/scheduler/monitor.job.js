@@ -69,14 +69,19 @@ ${exitSignal.action || eventRisk.action || "Immediate review recommended."}
 ${exitSignal.reason || eventRisk.reason || "Forced alert test for verification."}
 ⚠ Immediate review recommended.
 `.trim();
+      console.log(`[DEBUG] Attempting Telegram sendMessage for ${holding.symbol}`);
       await bot.telegram.sendMessage(
         holding.chat_id,
         message
       );
+      console.log(`[DEBUG] Telegram sent. REACHED BEFORE EMAIL SEND for ${holding.symbol}`);
+      
       await sendEmail({
         subject: `URGENT PORTFOLIO ALERT — ${holding.symbol}`,
         text: message
       });
+      console.log(`[DEBUG] EMAIL FUNCTION COMPLETED for ${holding.symbol}`);
+
       await saveAlert(
         holding.chat_id,
         holding.symbol,
@@ -94,6 +99,7 @@ ${exitSignal.reason || eventRisk.reason || "Forced alert test for verification."
 
 export const startMonitoringJob = () => {
   console.log("🚀 Monitoring Job Started");
+  console.log("🛠 Debug: Initializing monitoring schedule...");
 
   // TRIGGER IMMEDIATELY FOR TEST
   runPortfolioMonitor();
