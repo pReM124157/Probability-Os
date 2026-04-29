@@ -121,17 +121,25 @@ bot.on("text", async (ctx) => {
     if (lowerText === "/help") {
       await bot.telegram.sendMessage(
         chatId,
-        `📊 Nexa — Command Menu
-📈 Analysis
-/analyze TICKER — Full AI report
-/quick TICKER — Fast verdict only
-⚖ Comparison
-/compare TICKER1 TICKER2 — Compare two stocks
-🏆 Rankings
-/top — Rank your best watchlist opportunities
-💼 Portfolio
-/portfolio — Analyze your holdings
-⚠️ For educational purposes only.
+        `🏦 Finsight AI — Institutional Terminal
+━━━━━━━━━━━━━━━━━━
+🔍 ANALYSIS
+• /analyze <TICKER> — Deep-dive multi-agent report
+• /quick <TICKER> — ⚡ Fast verdict & summary
+• /compare <T1> <T2> — ⚖️ Side-by-side comparison
+
+💼 PORTFOLIO
+• /portfolio — 🏥 Health report & rebalancing
+• /add <T> <Q> <P> — ➕ Add holding (e.g. /add TCS 50 3400)
+• /update <T> <Q> <P> — 🔄 Synchronize holding
+• /remove <T> — 🗑 Remove from saved portfolio
+
+🏆 DISCOVERY
+• /top — 🚀 Rank top market opportunities
+• /sector — 📊 Institutional sector rotation report
+
+━━━━━━━━━━━━━━━━━━
+⚠️ Educational purposes only.
 Not SEBI registered investment advice.`
       );
       return;
@@ -330,7 +338,13 @@ Not SEBI registered investment advice.
         await addHolding(chatId, { symbol, quantity, avgPrice });
         await bot.telegram.sendMessage(
           chatId,
-          `✅ Holding Added\nStock: ${symbol}\nQuantity: ${quantity}\nAvg Buy Price: ₹${avgPrice}`
+          `✅ Holding Added Successfully
+📈 Stock: ${symbol.toUpperCase()}
+📦 Quantity: ${quantity}
+💰 Average Buy Price: ₹${avgPrice}
+📊 Total Invested: ₹${Number(quantity) * Number(avgPrice)}
+Your portfolio has been updated successfully.
+Use /portfolio to view full portfolio health.`
         );
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error adding holding: ${err.message}`);
@@ -363,7 +377,12 @@ Not SEBI registered investment advice.
         });
         await bot.telegram.sendMessage(
           chatId,
-          `✅ Holding Updated\nStock: ${symbol}\nNew Quantity: ${quantity}\nNew Avg Price: ₹${avgPrice}`
+          `🔄 Holding Updated
+📈 Stock: ${symbol.toUpperCase()}
+📦 New Quantity: ${quantity}
+💰 New Avg Price: ₹${avgPrice}
+📊 New Total Invested: ₹${Number(quantity) * Number(avgPrice)}
+Your portfolio has been synchronized.`
         );
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error updating holding: ${err.message}`);
@@ -377,7 +396,12 @@ Not SEBI registered investment advice.
 
       try {
         await removeHolding(chatId, symbol);
-        await bot.telegram.sendMessage(chatId, `✅ Removed ${symbol} from portfolio.`);
+        await bot.telegram.sendMessage(
+          chatId,
+          `🗑 Holding Removed
+📈 Stock: ${symbol.toUpperCase()}
+The stock has been removed from your saved portfolio.`
+        );
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error removing holding: ${err.message}`);
       }
@@ -411,24 +435,25 @@ Not SEBI registered investment advice.
       const health = await analyzePortfolioHealth(stocks);
 
       const message = `
-🏥 PORTFOLIO HEALTH
-Score: ${health.score}/10
-Status: ${health.status}
-Risk Level: ${health.riskLevel}
-Diversification: ${health.diversification}
-Concentration Risk: ${health.concentrationRisk}
+🏥 PORTFOLIO HEALTH REPORT
+━━━━━━━━━━━━━━━━━━
+📊 Health Score: ${health.score}/10
+🏅 Status: ${health.status}
+⚠️ Risk Level: ${health.riskLevel}
+🌐 Diversification: ${health.diversification}
+⚖️ Concentration: ${health.concentrationRisk}
 
-📌 Advice:
+🧠 Institutional Advice:
 ${health.action}
 
-📊 Stats:
-- Holdings: ${health.details.stockCount}
-- Top Weight: ${health.details.highestAllocation}
-- Unique Sectors: ${health.details.uniqueSectors}
+📈 Portfolio Stats:
+• Holdings: ${health.details.stockCount} Stocks
+• Max Weight: ${health.details.highestAllocation}
+• Sector Mix: ${health.details.uniqueSectors} Sectors
 
-⚠️ For educational purposes only.
-Not SEBI registered investment advice.
-Do your own research before investing.
+Use /analyze <TICKER> for deep dive on any holding.
+━━━━━━━━━━━━━━━━━━
+⚠️ Educational purposes only.
 `.trim();
 
       await bot.telegram.sendMessage(chatId, message);
