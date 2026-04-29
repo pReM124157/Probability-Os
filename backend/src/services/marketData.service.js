@@ -53,10 +53,15 @@ export async function getCompanyOverview(symbol) {
       Sector: result?.sector ?? null
     };
 
-    console.log(
-      "COMPANY OVERVIEW:",
-      companyOverview
-    );
+    console.log("FINAL OVERVIEW:", companyOverview);
+    console.log("DEBUG OVERVIEW FIELDS:", {
+        Symbol: companyOverview.Symbol,
+        PERatio: companyOverview.PERatio,
+        ROE: companyOverview.ReturnOnEquityTTM,
+        RevenueGrowth: companyOverview.QuarterlyRevenueGrowthYOY,
+        EarningsGrowth: companyOverview.QuarterlyEarningsGrowthYOY,
+        Sector: companyOverview.Sector
+    });
 
     return companyOverview;
 
@@ -110,10 +115,14 @@ export async function getLiveMarketData(symbol) {
       marketCap: result?.marketCap || 0,
       currency: result?.currency || "INR"
     };
-    console.log(
-      "FINAL LIVE MARKET DATA OBJECT:",
-      liveMarketData
-    );
+    console.log("FINAL LIVE DATA:", liveMarketData);
+    console.log("DEBUG LIVE FIELDS:", {
+        Symbol: liveMarketData.symbol,
+        currentPrice: liveMarketData.currentPrice,
+        regularMarketPrice: result?.regularMarketPrice,
+        regularMarketPreviousClose: result?.regularMarketPreviousClose
+    });
+
     return liveMarketData;
   } catch (error) {
     console.error(
