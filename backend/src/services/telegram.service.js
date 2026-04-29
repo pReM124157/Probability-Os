@@ -230,7 +230,7 @@ Not SEBI registered investment advice.
         "🔍 Running Institutional Scanner...\nPlease wait while FinSight analyzes top opportunities."
       );
       const opportunities = await scannerAgent();
-      if (!opportunities.length) {
+      if (!opportunities || !opportunities.length) {
         return await bot.telegram.sendMessage(
           chatId,
           "No strong opportunities found right now. Please try again later."

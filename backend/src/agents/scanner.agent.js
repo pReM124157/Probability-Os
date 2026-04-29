@@ -88,6 +88,8 @@ export async function scannerAgent() {
     const shortlisted = await getShortlistedStocks(10);
     console.log(`✅ Shortlisted: ${shortlisted.map(s => s.symbol).join(", ")} (Count: ${shortlisted.length})`);
 
+    console.log("SHORTLISTED STOCKS:", shortlisted.length);
+
     const results = [];
 
     // Step 2: Deep Analysis (Layer 2)
@@ -132,6 +134,7 @@ export async function scannerAgent() {
     const filteredResults = sortedResults.filter(r => r.confidenceScore >= 5);
     console.log(`🎯 Filtered Results (Confidence >= 5): ${filteredResults.length}`);
 
+    console.log("FINAL SCANNER RESULTS:", filteredResults);
     return filteredResults.slice(0, 5);
   } catch (error) {
     console.log("Scanner Agent Error:", error.message);
