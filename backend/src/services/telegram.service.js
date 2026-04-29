@@ -8,7 +8,8 @@ import { analyzePortfolioHealth } from "../agents/portfolioHealth.agent.js";
 import {
   addHolding,
   getPortfolio,
-  removeHolding
+  removeHolding,
+  updateHolding
 } from "./portfolioMemory.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -326,6 +327,39 @@ Not SEBI registered investment advice.
         );
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error adding holding: ${err.message}`);
+      }
+      return;
+    }
+
+    if (lowerText.startsWith("/update ")) {
+      const parts = text.split(/\s+/);
+      if (parts.length < 4) {
+        return bot.telegram.sendMessage(
+          chatId,
+          "Usage: /update TICKER QUANTITY PRICE\nExample: /update HDFCBANK 80 1425"
+        );
+      }
+
+      const symbol = parts[1].toUpperCase();
+      const quantity = Number(parts[2]);
+      const avgPrice = Number(parts[3]);
+
+      if (isNaN(quantity) || isNaN(avgPrice)) {
+        return bot.telegram.sendMessage(chatId, "❌ Invalid quantity or price. Please use numbers.");
+      }
+
+      try {
+        await updateHolding(chatId, symbol, { 
+          quantity, 
+          avg_price: avgPrice,
+          updated_at: new Date()
+        });
+        await bot.telegram.sendMessage(
+          chatId,
+          `✅ Holding Updated\nStock: ${symbol}\nNew Quantity: ${quantity}\nNew Avg Price: ₹${avgPrice}`
+        );
+      } catch (err) {
+        await bot.telegram.sendMessage(chatId, `❌ Error updating holding: ${err.message}`);
       }
       return;
     }
