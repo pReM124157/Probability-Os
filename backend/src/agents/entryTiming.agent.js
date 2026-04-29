@@ -12,9 +12,11 @@ export async function analyzeEntryTiming({
     marketData,
     companyData
 }) {
+    console.log(`[Entry Timing Agent] Received Price for ${stock}: ₹${currentPrice}`);
+    
     try {
         // Fix for missing .NS suffix and price fetch fallback
-        let activePrice = currentPrice || 0;
+        let activePrice = Number(currentPrice) || 0;
         let fetchSymbol = (stock || "UNKNOWN").toUpperCase();
 
         if (!fetchSymbol.includes(".NS") && fetchSymbol !== "UNKNOWN") {

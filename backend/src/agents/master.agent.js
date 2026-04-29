@@ -90,9 +90,12 @@ Guidelines:
     console.log(`[Phase 1] Completed. Live Price: ₹${liveMarketData.currentPrice}`);
 
     // PHASE 2: Execution Intelligence (Entry Timing)
+    const activePrice = Number(liveMarketData?.currentPrice || technical?.currentPrice || 0);
+    console.log(`[Phase 2] Pre-flight Price Check for ${ticker}: ₹${activePrice}`);
+
     const entryTiming = await analyzeEntryTiming({
       stock: ticker,
-      currentPrice: liveMarketData.currentPrice || technical.currentPrice || 0,
+      currentPrice: activePrice,
       confidenceScore: decision.finalConfidenceScore || 5,
       riskLevel: risk.riskLevel || "MEDIUM",
       valuationScore: valuation.score || 5,
