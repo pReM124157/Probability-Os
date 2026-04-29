@@ -31,9 +31,6 @@ export const runPortfolioMonitor = async () => {
       const exitSignal = result.exitSignal || {};
       const eventRisk = result.eventRisk || {};
       
-      // FORCED ALERT TEST: Temporarily true
-      const isUrgent = true; 
-      /*
       const isUrgent =
         exitSignal.signal === "STOP LOSS EXIT" ||
         exitSignal.signal === "FULL EXIT" ||
@@ -45,43 +42,37 @@ export const runPortfolioMonitor = async () => {
           eventRisk.riskLevel === "HIGH" &&
           eventRisk.eventType === "EARNINGS RESULT"
         );
-      */
 
       if (!isUrgent) continue;
-      const alertType = exitSignal.signal || eventRisk.eventType || "URGENT TEST";
-      const allowed = true; // FORCED TEST: Skip duplicate check
-      /*
+      
+      const alertType = exitSignal.signal || eventRisk.eventType;
       const allowed = await shouldSendAlert(
         holding.chat_id,
         holding.symbol,
         alertType
       );
-      */
       if (!allowed) continue;
+
       const message = `
 🚨 URGENT PORTFOLIO ALERT
 📈 Stock: ${holding.symbol}
 ⚠ Alert Type: ${alertType}
-🔥 Urgency: ${exitSignal.urgency || eventRisk.riskLevel || "HIGH"}
+🔥 Urgency: ${exitSignal.urgency || eventRisk.riskLevel}
 📌 Action Required:
-${exitSignal.action || eventRisk.action || "Immediate review recommended."}
+${exitSignal.action || eventRisk.action}
 🧠 Reason:
-${exitSignal.reason || eventRisk.reason || "Forced alert test for verification."}
+${exitSignal.reason || eventRisk.reason}
 ⚠ Immediate review recommended.
 `.trim();
-      console.log(`[DEBUG] Attempting Telegram sendMessage for ${holding.symbol}`);
+
       await bot.telegram.sendMessage(
         holding.chat_id,
         message
       );
-      console.log(`[DEBUG] Telegram sent. REACHED BEFORE EMAIL SEND for ${holding.symbol}`);
-      
       await sendEmail({
         subject: `URGENT PORTFOLIO ALERT — ${holding.symbol}`,
         text: message
       });
-      console.log(`[DEBUG] EMAIL FUNCTION COMPLETED for ${holding.symbol}`);
-
       await saveAlert(
         holding.chat_id,
         holding.symbol,
@@ -99,10 +90,6 @@ ${exitSignal.reason || eventRisk.reason || "Forced alert test for verification."
 
 export const startMonitoringJob = () => {
   console.log("🚀 Monitoring Job Started");
-  console.log("🛠 Debug: Initializing monitoring schedule...");
-
-  // TRIGGER IMMEDIATELY FOR TEST
-  runPortfolioMonitor();
 
   // Portfolio Risk Monitor (8:00 AM)
   cron.schedule(
