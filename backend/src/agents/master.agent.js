@@ -211,6 +211,12 @@ Guidelines:
       entryTiming.entryUrgency = "LOW";
       entryTiming.strategy = "AVOID ENTRY";
       
+      // Override Position Sizing (Risk Management > Capital Deployment)
+      positionSizing.capitalAction = "Avoid fresh deployment. Focus on risk reduction.";
+      positionSizing.conviction = "LOW";
+      positionSizing.allocation = "0%";
+      positionSizing.reason = `Risk priority (${exitSignal.signal}) overrides fresh allocation decisions until structure improves.`;
+
       // Downgrade conviction to reflect high-risk exit priority
       finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 4);
     }
