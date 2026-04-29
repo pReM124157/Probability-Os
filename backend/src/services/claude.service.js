@@ -11,6 +11,9 @@ const backupGroq = new Groq({
   apiKey: process.env.GROQ_API_KEY_BACKUP,
 });
 
+/**
+ * Low-level caller for Groq API with 4-layer fallback.
+ */
 export const generateInvestmentAnalysis = async (prompt) => {
   const PRIMARY_MODEL = "llama-3.3-70b-versatile";
   const FALLBACK_MODEL = "llama-3.1-8b-instant";
@@ -22,8 +25,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
     const response = await primaryGroq.chat.completions.create({
       model: PRIMARY_MODEL,
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      max_tokens: 1000
+      temperature: 0.1, // Lower temperature for more deterministic financial analysis
+      max_tokens: 800   // Reduced to save tokens
     });
     return response.choices[0].message.content;
 
@@ -38,8 +41,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
         const response = await primaryGroq.chat.completions.create({
           model: FALLBACK_MODEL,
           messages: [{ role: "user", content: prompt }],
-          temperature: 0.3,
-          max_tokens: 1000
+          temperature: 0.1,
+          max_tokens: 800
         });
         return response.choices[0].message.content;
 
@@ -55,8 +58,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
             const response = await backupGroq.chat.completions.create({
               model: PRIMARY_MODEL,
               messages: [{ role: "user", content: prompt }],
-              temperature: 0.3,
-              max_tokens: 1000
+              temperature: 0.1,
+              max_tokens: 800
             });
             return response.choices[0].message.content;
 
@@ -71,8 +74,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
                 const response = await backupGroq.chat.completions.create({
                   model: FALLBACK_MODEL,
                   messages: [{ role: "user", content: prompt }],
-                  temperature: 0.3,
-                  max_tokens: 1000
+                  temperature: 0.1,
+                  max_tokens: 800
                 });
                 return response.choices[0].message.content;
 
@@ -94,8 +97,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
         const response = await primaryGroq.chat.completions.create({
           model: FALLBACK_MODEL,
           messages: [{ role: "user", content: prompt }],
-          temperature: 0.3,
-          max_tokens: 1000
+          temperature: 0.1,
+          max_tokens: 800
         });
         return response.choices[0].message.content;
       } catch (e) {
@@ -103,6 +106,70 @@ export const generateInvestmentAnalysis = async (prompt) => {
       }
     }
   }
+};
+
+/**
+ * Institutional-grade analysis using a compressed, data-centric prompt.
+ */
+export const getInstitutionalAnalysis = async (data) => {
+  const prompt = `
+You are a hedge fund equity analyst. 
+Make strict, data-driven decisions using ONLY provided numbers. 
+No hallucinations. No generic fluff.
+
+STOCK: ${data.Name || data.Symbol} (${data.Symbol}) | SECTOR: ${data.Sector || "N/A"}
+
+CORE METRICS:
+- MCAP: ${data.MarketCapitalization ?? "N/A"} | PE: ${data.PERatio ?? "N/A"} | PB: ${data.PriceToBookRatio ?? "N/A"}
+- MARGIN: ${data.ProfitMargin ?? "N/A"} | ROE: ${data.ReturnOnEquityTTM ?? "N/A"} | D/E: ${data.DebtToEquityRatio ?? "N/A"}
+- REV GROWTH: ${data.QuarterlyRevenueGrowthYOY ?? "N/A"} | EARN GROWTH: ${data.QuarterlyEarningsGrowthYOY ?? "N/A"}
+
+LIVE DATA:
+- PRICE: ₹${data.currentPrice ?? "N/A"} | HIGH/LOW: ${data.dayHigh}/${data.dayLow}
+- 52W H/L: ${data.fiftyTwoWeekHigh}/${data.fiftyTwoWeekLow} | VOL: ${data.volume} (AVG: ${data.averageVolume})
+
+TECHNICALS:
+- RSI: ${data.rsi ?? "N/A"} | 50DMA: ${data.above50DMA} | 200DMA: ${data.above200DMA}
+- MOMENTUM: ${data.momentumScore}/10 | BREAKOUT: ${data.breakoutStrength}/10
+
+RULES:
+BUY: Strong fundamentals, healthy growth, attractive valuation.
+HOLD: Mixed setup, neutral valuation, wait for confirmation.
+SELL: Weak quality, poor growth, overvaluation.
+
+FORMAT:
+Final Decision: BUY/HOLD/SELL
+Confidence Score: X/10
+Risk Level: LOW/MEDIUM/HIGH
+Priority Level: LOW/MEDIUM/HIGH
+Rank Score: X/10
+Suggested Allocation: X%
+Reason: (2-line max, data-based)
+Recommended Action: (Short instruction)
+`.trim();
+
+  const response = await generateInvestmentAnalysis(prompt);
+
+  // Parse result
+  const decision = response.match(/Final Decision:\s*(.*)/i)?.[1] || "HOLD";
+  const confidence = parseInt(response.match(/Confidence Score:\s*(\d+)/i)?.[1]) || 5;
+  const risk = response.match(/Risk Level:\s*(.*)/i)?.[1] || "MEDIUM";
+  const priority = response.match(/Priority Level:\s*(.*)/i)?.[1] || "MEDIUM";
+  const rank = parseInt(response.match(/Rank Score:\s*(\d+)/i)?.[1]) || 5;
+  const allocation = response.match(/Suggested Allocation:\s*(.*)/i)?.[1] || "0%";
+  const reason = response.match(/Reason:\s*([\s\S]*?)(?=Recommended Action:|$)/i)?.[1]?.trim() || "No reason.";
+  const action = response.match(/Recommended Action:\s*([\s\S]*?)$/i)?.[1]?.trim() || "Monitor.";
+
+  return {
+    finalDecision: decision.toUpperCase(),
+    finalConfidenceScore: confidence,
+    riskLevel: risk.toUpperCase(),
+    priorityLevel: priority.toUpperCase(),
+    rankScore: rank,
+    suggestedAllocation: allocation,
+    reason: reason,
+    recommendation: action
+  };
 };
 
 /**
