@@ -553,7 +553,14 @@ Do your own research before investing.`
 /**
  * Start bot
  */
-bot.launch();
+export const startBot = () => {
+  bot.launch().catch((err) => {
+    if (err.response && err.response.error_code === 409) {
+      console.log("⚠️ Telegram Bot already running (409 Conflict). Skipping launch.");
+    }
+  });
+  console.log("✅ Telegram Bot Started");
+};
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
