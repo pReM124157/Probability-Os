@@ -49,11 +49,14 @@ export const runPortfolioMonitor = async () => {
 
       if (!isUrgent) continue;
       const alertType = exitSignal.signal || eventRisk.eventType || "URGENT TEST";
+      const allowed = true; // FORCED TEST: Skip duplicate check
+      /*
       const allowed = await shouldSendAlert(
         holding.chat_id,
         holding.symbol,
         alertType
       );
+      */
       if (!allowed) continue;
       const message = `
 🚨 URGENT PORTFOLIO ALERT
