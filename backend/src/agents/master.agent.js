@@ -9,6 +9,7 @@ import { getLiveMarketData } from "../services/marketData.service.js";
 import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
 import { analyzeExitSignal } from "./exitSignal.agent.js";
+import { calculatePositionSize } from "./positionSizing.agent.js";
 
 import { generateInvestmentAnalysis } from "../services/claude.service.js";
 
@@ -165,6 +166,18 @@ Guidelines:
       suggestedAllocation: capital.suggestedAllocation
     });
 
+    // PHASE 4.5: Position Sizing
+    const positionSizing = await calculatePositionSize({
+      stock: ticker,
+      confidenceScore: adjustedConfidence,
+      riskLevel: risk.riskLevel || "MEDIUM",
+      rewardRiskRatio: parseCurrency(entryTiming.rewardRiskRatio),
+      entryUrgency: entryTiming.entryUrgency || "MEDIUM",
+      volatility: technical.volatility || "MEDIUM",
+      sectorExposure: 0, // Placeholder for future portfolio integration
+      portfolioRisk: 5   // Placeholder for future portfolio integration
+    });
+
     // PHASE 5: Action Alignment
     // Override recommended action based on combined verdict + timing urgency
     function getRecommendedAction(verdict, entryUrgency) {
@@ -196,7 +209,8 @@ Guidelines:
       technical,
       valuation,
       entryTiming,
-      exitSignal
+      exitSignal,
+      positionSizing
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);

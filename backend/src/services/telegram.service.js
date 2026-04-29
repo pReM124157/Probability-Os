@@ -21,6 +21,7 @@ async function performAnalysis(chatId, symbol) {
 
     const entryTiming = result.entryTiming || {};
     const exitSignal = result.exitSignal || {};
+    const positionSizing = result.positionSizing || {};
     const ticker = symbol.toUpperCase();
 
     // Use the final execution advice directly from the agent
@@ -33,13 +34,17 @@ async function performAnalysis(chatId, symbol) {
 ⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}
 🏆 Priority Level: ${result.ranking?.priority || "MEDIUM"}
 📊 Rank Score: ${result.ranking?.rankScore || 0}/10
-💰 Suggested Allocation: ${result.capital?.suggestedAllocation || "0%"}
+
+💰 Recommended Allocation: ${positionSizing.allocation || "0%"}
+🧠 Conviction Level: ${positionSizing.conviction || "MODERATE"}
+📌 Capital Action: ${positionSizing.capitalAction || "No action"}
 
 🔄 Rebalancing Action:
 ${result.rebalancing?.rebalancingAction || "No action required"}
 
 🧠 Reason:
 ${result.decision?.reason || "No reasoning available"}
+${positionSizing.reason ? `\n📊 Sizing Logic: ${positionSizing.reason}` : ""}
 
 📌 Recommended Action:
 ${result.rebalancing?.action || "Monitor and wait for confirmation"}
