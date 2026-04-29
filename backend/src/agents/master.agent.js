@@ -10,6 +10,7 @@ import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
 import { analyzeExitSignal } from "./exitSignal.agent.js";
 import { calculatePositionSize } from "./positionSizing.agent.js";
+import { analyzeRebalancing } from "./rebalancer.agent.js";
 
 import { generateInvestmentAnalysis } from "../services/claude.service.js";
 
@@ -178,6 +179,17 @@ Guidelines:
       portfolioRisk: 5   // Placeholder for future portfolio integration
     });
 
+    // PHASE 4.6: Portfolio Rebalancing
+    const rebalancer = await analyzeRebalancing({
+      stock: ticker,
+      targetAllocation: parseCurrency(positionSizing.allocation),
+      actualAllocation: portfolio.currentAllocation || 0,
+      sectorExposure: portfolio.sectorExposure || 0,
+      exitSignal: exitSignal.signal,
+      convictionScore: adjustedConfidence,
+      riskConcentration: 5 // Placeholder
+    });
+
     // PHASE 5: Action Alignment
     // Override recommended action based on combined verdict + timing urgency
     function getRecommendedAction(verdict, entryUrgency) {
@@ -210,7 +222,8 @@ Guidelines:
       valuation,
       entryTiming,
       exitSignal,
-      positionSizing
+      positionSizing,
+      rebalancer
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);

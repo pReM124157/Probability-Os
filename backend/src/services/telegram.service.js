@@ -22,6 +22,7 @@ async function performAnalysis(chatId, symbol) {
     const entryTiming = result.entryTiming || {};
     const exitSignal = result.exitSignal || {};
     const positionSizing = result.positionSizing || {};
+    const rebalancer = result.rebalancer || {};
     const ticker = symbol.toUpperCase();
 
     // Use the final execution advice directly from the agent
@@ -38,6 +39,12 @@ async function performAnalysis(chatId, symbol) {
 💰 Recommended Allocation: ${positionSizing.allocation || "0%"}
 🧠 Conviction Level: ${positionSizing.conviction || "MODERATE"}
 📌 Capital Action: ${positionSizing.capitalAction || "No action"}
+
+⚖️ PORTFOLIO REBALANCING
+Action: ${rebalancer.action || "HOLD"}
+Adjustment: ${rebalancer.adjustment || "0%"}
+Urgency: ${rebalancer.urgency || "LOW"}
+Reason: ${rebalancer.reason || "Alignment confirmed"}
 
 🔄 Rebalancing Action:
 ${result.rebalancing?.rebalancingAction || "No action required"}
