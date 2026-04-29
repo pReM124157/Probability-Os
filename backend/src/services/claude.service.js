@@ -11,8 +11,10 @@ const backupGroq = new Groq({
   apiKey: process.env.GROQ_API_KEY_BACKUP,
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * Low-level caller for Groq API with 4-layer fallback.
+ * Low-level caller for Groq API with 4-layer fallback and retry delays.
  */
 export const generateInvestmentAnalysis = async (prompt) => {
   const PRIMARY_MODEL = "llama-3.3-70b-versatile";
@@ -34,7 +36,9 @@ export const generateInvestmentAnalysis = async (prompt) => {
     console.log(`[LEVEL 1] Primary model (${PRIMARY_MODEL}) on Primary Key failed:`, error.message);
 
     if (isRateLimit(error)) {
-      console.log("Rate limit/Quota hit on Primary Key. Moving to LEVEL 2 (Fallback Model + Primary Key)...");
+      console.log("Rate limit/Quota hit on Primary Key. Waiting 3s...");
+      await sleep(3000);
+      console.log("Moving to LEVEL 2 (Fallback Model + Primary Key)...");
       
       // LAYER 2: Fallback Model + Primary Key
       try {
@@ -67,6 +71,8 @@ export const generateInvestmentAnalysis = async (prompt) => {
             console.log(`[LEVEL 3] Primary model on Backup Key failed:`, error3.message);
             
             if (isRateLimit(error3)) {
+              console.log("Rate limit hit on Primary Model/Backup Key. Waiting 3s...");
+              await sleep(3000);
               console.log("Moving to LEVEL 4 (Fallback Model + Backup Key)...");
               
               // LAYER 4: Fallback Model + Backup Key
