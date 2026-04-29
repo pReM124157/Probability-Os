@@ -5,46 +5,29 @@ import supabase from "./supabase.service.js";
  */
 export async function addHolding(chatId, { symbol, quantity, avgPrice }) {
   try {
-    // Check if stock already exists in portfolio for this user
-    const { data: existing } = await supabase
+    console.log(`💾 Attempting to save holding: ${symbol} for chat ${chatId}`);
+    
+    const { data, error } = await supabase
       .from("holdings")
-      .select("*")
-      .eq("chat_id", chatId)
-      .eq("symbol", symbol.toUpperCase())
-      .single();
+      .upsert({
+        chat_id: String(chatId),
+        symbol: symbol.toUpperCase(),
+        quantity,
+        avg_price: avgPrice,
+        updated_at: new Date()
+      }, {
+        onConflict: "chat_id,symbol"
+      });
 
-    if (existing) {
-      // Update existing holding (Weighted average or simple replace - user requested /add usually means set)
-      // We will do a replacement/update here for simplicity
-      const { data, error } = await supabase
-        .from("holdings")
-        .update({
-          quantity,
-          avg_price: avgPrice,
-          updated_at: new Date()
-        })
-        .eq("id", existing.id);
-
-      if (error) throw error;
-      return data;
-    } else {
-      // Insert new holding
-      const { data, error } = await supabase
-        .from("holdings")
-        .insert([
-          {
-            chat_id: chatId,
-            symbol: symbol.toUpperCase(),
-            quantity,
-            avg_price: avgPrice
-          }
-        ]);
-
-      if (error) throw error;
-      return data;
+    if (error) {
+      console.error("ADD HOLDING ERROR:", error);
+      throw new Error(error.message);
     }
+
+    console.log("HOLDING SAVED:", data);
+    return data;
   } catch (error) {
-    console.error("Error adding holding:", error.message);
+    console.error("Detailed Add Holding Error:", error);
     throw error;
   }
 }
