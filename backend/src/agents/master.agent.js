@@ -197,6 +197,24 @@ Guidelines:
       riskConcentration: 5 // Placeholder
     });
 
+    // PHASE 4.7: Conflict Resolution Engine (Signal Hierarchy)
+    // EXIT SIGNAL overrides ENTRY SIGNAL (Risk Management > Opportunity)
+    if (
+      exitSignal.signal === "FULL EXIT" ||
+      exitSignal.signal === "STOP LOSS EXIT" ||
+      exitSignal.signal === "TRIM POSITION"
+    ) {
+      console.log(`[Conflict Resolution] ${ticker}: Exit signal (${exitSignal.signal}) overriding entry advice.`);
+      
+      entryTiming.finalExecutionAdvice = 
+        `Risk management (${exitSignal.signal}) takes priority. Avoid fresh entry or accumulation until structure improves.`;
+      entryTiming.entryUrgency = "LOW";
+      entryTiming.strategy = "AVOID ENTRY";
+      
+      // Downgrade conviction to reflect high-risk exit priority
+      finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 4);
+    }
+
     // PHASE 5: Action Alignment
     // Override recommended action based on combined verdict + timing urgency
     function getRecommendedAction(verdict, entryUrgency) {
