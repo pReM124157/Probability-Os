@@ -9,6 +9,10 @@ const transporter = nodemailer.createTransport({
 });
 
 export async function sendEmailAlert(subject, text) {
+  return sendEmail({ subject, text });
+}
+
+export async function sendEmail({ subject, text }) {
   try {
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
