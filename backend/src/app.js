@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import "./services/telegram.service.js";
 import supabase from "./services/supabase.service.js";
 import { getCompanyOverview } from "./services/marketData.service.js";
 import { generateInvestmentAnalysis } from "./services/claude.service.js";
@@ -10,7 +9,7 @@ import { masterAgent } from "./agents/master.agent.js";
 const app = express();
 
 app.get("/", (req, res) => {
-  res.status(200).send("FinSight Backend Running");
+  res.status(200).send("OK");
 });
 
 
