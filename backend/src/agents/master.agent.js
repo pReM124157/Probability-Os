@@ -12,6 +12,7 @@ import { getIndianIndices, getIndianMarketNews, getIndianSectors } from "../serv
 import { analyzeExitSignal } from "./exitSignal.agent.js";
 import { calculatePositionSize } from "./positionSizing.agent.js";
 import { analyzeRebalancing } from "./rebalancer.agent.js";
+import { getPortfolio } from "../services/portfolioMemory.service.js";
 import { logRecommendation, getLearningBoost } from "./performanceTracker.agent.js";
 import { analyzeEventRisk } from "./eventRisk.agent.js";
 
@@ -24,6 +25,18 @@ let marketCache = {
   state: null
 };
 let isFetchingMarketUpdate = false;
+
+// --- Global Cache for Top Opportunities ---
+let topOpsCache = {
+  data: null,
+  timestamp: 0
+};
+let isFetchingTopOps = false;
+
+const TOP_OPS_UNIVERSE = [
+  "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
+  "TATAMOTORS.NS", "LT.NS", "BHARTIARTL.NS", "SBIN.NS", "ITC.NS"
+];
 
 function getMarketStateKey() {
   return isMarketOpenIST() ? "OPEN" : "CLOSED";
@@ -59,56 +72,31 @@ async function generateMarketUpdate() {
     state = "Market closed. Last session data.";
   }
 
-  // Pipeline: News -> Drivers -> Enrichment -> Cleaning -> Compression
-  const extractDrivers = (headlines) => {
-    const drvs = [];
-    if (!headlines.length) return ["No clear market driver."];
-    headlines.forEach(h => {
-      if (/RBI|rate|policy/i.test(h)) drvs.push("RBI policy signals");
-      if (/earnings|margin|profit|loss/i.test(h)) drvs.push("earnings pressure");
-      if (/oil|crude/i.test(h)) drvs.push("oil price movement");
-      if (/Reliance|HDFC|ICICI|TCS/i.test(h)) drvs.push("heavyweight stock impact");
-    });
-    return [...new Set(drvs)];
-  };
+  function deriveDriver(newsData) {
+    if (!newsData || newsData.length === 0) return null;
+    const headline = newsData[0].toLowerCase();
+    if (headline.includes("rbi")) {
+      return "Banks reacting to RBI cues.";
+    }
+    if (headline.includes("earnings")) {
+      return "Earnings driving moves.";
+    }
+    if (headline.includes("oil")) {
+      return "Energy stocks tracking oil.";
+    }
+    return null;
+  }
 
-  const buildDriverLine = (headlines) => {
-    const drvs = extractDrivers(headlines);
-    if (drvs.includes("RBI policy signals")) return "Banks weak after RBI commentary.";
-    if (drvs.includes("earnings pressure")) return "Stocks reacting to earnings pressure.";
-    if (drvs.includes("heavyweight stock impact")) return "Index influenced by heavyweight stocks.";
-    if (drvs.includes("oil price movement")) return "Oil movement affecting market sentiment.";
-    return "No clear market driver.";
-  };
-
-  const enrichDriver = (dLine, scts) => {
-    if (!scts) return dLine;
-    let finalLine = dLine;
-    if (scts.bank < -0.5) finalLine = finalLine.replace(".", "; Banking under pressure.");
-    if (scts.it > 0.5) finalLine = finalLine.replace(".", "; IT holding steady.");
-    return finalLine;
-  };
-
-  const rawDriver = buildDriverLine(news);
-  const enriched = sectors ? enrichDriver(rawDriver, sectors) : rawDriver;
-  const fusedDriver = `${enriched.replace(".", ";").split(";")[0].trim()}; ${news.slice(0, 1).map(n => n.split('-')[0].trim()).join("")}.`;
-
-  const edgeLines = [
-    "Watch key levels—no clear trend yet.",
-    "Momentum is mixed—wait for confirmation.",
-    "No strong direction—focus on sector moves.",
-    "Market is range-bound—avoid aggressive entries.",
-    "Early signals unclear—let structure form first."
-  ];
-  const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
+  const driver = deriveDriver(news);
+  const driverLine = driver ? driver : "No strong setups right now.";
 
   return `
 India — Market Update
 ${state}
 Nifty 50: ${indices.nifty.price?.toLocaleString()} (${indices.nifty.change?.toFixed(2)}%)
 Sensex: ${indices.sensex.price?.toLocaleString()} (${indices.sensex.change?.toFixed(2)}%)
-${fusedDriver}
-What matters: ${edge}
+${driverLine}
+What matters: Market is range-bound—wait for clearer direction.
 `.trim();
 }
 
@@ -146,6 +134,182 @@ async function getCachedMarketUpdate() {
     return `India — Market Update\nMarket data currently unavailable.\nWhat matters: Wait for clarity before acting.`;
   } finally {
     isFetchingMarketUpdate = false;
+  }
+}
+
+/**
+ * Generates Top Opportunities based on technical scoring.
+ */
+async function generateTopOpportunities() {
+  const NAME_MAP = {
+    RELIANCE: "Reliance",
+    TCS: "TCS",
+    HDFCBANK: "HDFC Bank",
+    ICICIBANK: "ICICI Bank",
+    INFY: "Infosys",
+    TATAMOTORS: "Tata Motors",
+    LT: "Larsen",
+    BHARTIARTL: "Airtel",
+    SBIN: "SBI",
+    ITC: "ITC"
+  };
+
+  try {
+    const stocks = await Promise.all(TOP_OPS_UNIVERSE.map(async (sym) => {
+      const tech = await technicalAgent(sym);
+      let score = 0;
+      
+      // 1. Trend/Momentum
+      if (tech.trend === "BULLISH") score += 3;
+      if (tech.momentumStrength === "STRONG") score += 2;
+      
+      // 2. Structural Health
+      if (tech.currentPrice > tech.sma50) score += 2;
+      
+      // 3. RSI Window (High Probability Zone)
+      if (tech.rsi > 55 && tech.rsi < 70) score += 2;
+      if (tech.rsi < 40) score += 1; 
+
+      const ticker = sym.split('.')[0];
+      return {
+        ticker,
+        name: NAME_MAP[ticker] || ticker,
+        score,
+        rsi: tech.rsi,
+        trend: tech.trend,
+        currentPrice: tech.currentPrice
+      };
+    }));
+
+    const ranked = stocks
+      .filter(s => s.currentPrice > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    if (ranked[0]?.score < 4) {
+      return `Top Opportunities — India\nNo strong setups right now.\nWhat matters: Market is range-bound—wait for clearer direction.`;
+    }
+
+    const output = ranked.map((s, i) => {
+      let action = "AVOID";
+      let reason = "weak structure";
+      
+      if (s.score >= 7) {
+        action = "BUY";
+        reason = s.rsi > 60 ? "momentum + structure" : "breakout focus";
+      } else if (s.score >= 5) {
+        action = "WAIT";
+        reason = "structure forming";
+      }
+      
+      return `${i + 1}. ${s.name} — ${action} (${reason})`;
+    }).join("\n");
+
+    return `
+Top Opportunities — India
+${output}
+What matters: Stick to strength, avoid mixed setups.
+`.trim();
+  } catch (err) {
+    console.error("TOP_OPS_ERROR:", err.message);
+    return "Top Opportunities — India\nSystem recalibrating. Check back shortly.\nWhat matters: Technical data sync in progress.";
+  }
+}
+
+/**
+ * Handles caching and rate control for Top Opportunities.
+ */
+async function getTopOpportunities() {
+  const now = Date.now();
+  // 1-hour TTL (3,600,000 ms) for Top Ops
+  if (topOpsCache.data && (now - topOpsCache.timestamp < 3600000)) {
+    return topOpsCache.data;
+  }
+
+  if (isFetchingTopOps) {
+    return topOpsCache.data || "Top Opportunities — India\nScanning universe...\nWhat matters: Data analysis in progress.";
+  }
+
+  try {
+    isFetchingTopOps = true;
+    const fresh = await generateTopOpportunities();
+    topOpsCache = { data: fresh, timestamp: now };
+    return fresh;
+  } finally {
+    isFetchingTopOps = false;
+  }
+}
+
+/**
+ * Generates a clean Portfolio Snapshot for the user.
+ */
+async function getPortfolioSnapshot(chatId) {
+  const holdings = await getPortfolio(chatId);
+  if (!holdings || holdings.length === 0) {
+    return `Portfolio — Snapshot
+No holdings yet.
+Add a stock to start tracking.`.trim();
+  }
+
+  try {
+    let totalValue = 0;
+    let totalInvested = 0;
+    const sectorMap = {};
+
+    const enrichedHoldings = await Promise.all(holdings.map(async (h) => {
+      const data = await getLiveMarketData(h.symbol);
+      const currentPrice = data.currentPrice || h.avgPrice;
+      const invested = h.quantity * h.avgPrice;
+      const currentVal = h.quantity * currentPrice;
+      
+      // Fix 1 & 2: Correct PnL formula and Add Rupee amount
+      const pnlAmt = currentVal - invested;
+      const pnlPct = ((currentPrice - h.avgPrice) / h.avgPrice) * 100;
+      
+      totalValue += currentVal;
+      totalInvested += invested;
+
+      // Basic Sector Mapping
+      const sectorLookup = {
+        TCS: "IT", INFY: "IT", WIPRO: "IT", HCLTECH: "IT",
+        HDFCBANK: "Banking", ICICIBANK: "Banking", SBIN: "Banking",
+        RELIANCE: "Energy", ONGC: "Energy",
+        ITC: "FMCG", HUL: "FMCG",
+        TATAMOTORS: "Auto", "M&M": "Auto"
+      };
+      const sector = sectorLookup[h.symbol.toUpperCase()] || "Other";
+      
+      // Fix 4: Sector concentration weight-based
+      sectorMap[sector] = (sectorMap[sector] || 0) + currentVal;
+
+      return `${h.symbol}: ${pnlAmt >= 0 ? '+' : '-'}${Math.abs(pnlAmt).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)`;
+    }));
+
+    // Fix 3: Net PnL must be weighted
+    const netPnL = totalValue - totalInvested;
+    const netPct = (netPnL / totalInvested) * 100;
+    
+    // Determine Dominant Sector
+    let dominantSector = "Diversified";
+    let maxSectorVal = 0;
+    for (const [sector, val] of Object.entries(sectorMap)) {
+      if (val > maxSectorVal) {
+        maxSectorVal = val;
+        dominantSector = sector;
+      }
+    }
+    const sectorWeight = (maxSectorVal / totalValue);
+    const whatMatters = sectorWeight > 0.4 ? `Overexposed to ${dominantSector}.` : "Portfolio structure is balanced.";
+
+    return `
+Portfolio — Snapshot
+${enrichedHoldings.join("\n")}
+Net PnL: ${netPnL >= 0 ? '+' : '-'}${Math.abs(netPnL).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })} (${netPct >= 0 ? '+' : ''}${netPct.toFixed(1)}%)
+What matters: ${whatMatters}
+`.trim();
+  } catch (err) {
+    console.error("PORTFOLIO_SNAPSHOT_ERROR:", err.message);
+    return "Portfolio — Snapshot\nError calculating performance.\nWhat matters: Technical data sync in progress.";
   }
 }
 
@@ -190,14 +354,35 @@ export async function masterAgent(input) {
         }
       }
 
-      // 2. Intent Detection: Market Updates (PRIORITY 2 - India Override)
-      const isMarketUpdate = /market update|what.*market|news update|india market/i.test(userQuery);
+      // 2. Intent Detection: Vague / Open-ended (PRIORITY 2)
+      const isVague = /do one task|help me|can you help|do something/i.test(userQuery);
+      if (isVague) {
+        return { response: "What do you want me to check — market or a stock?" };
+      }
+
+      // 3. Intent Detection: Market Updates (PRIORITY 3 - India Override)
+      const isMarketUpdate = /market analysis|market update|what.*market|news update|india market|^market$/i.test(userQuery);
       if (isMarketUpdate) {
         const response = await getCachedMarketUpdate();
         return { response };
       }
 
-      // 3. Persona & Helpers (Analyst / Chat Hybrid)
+      // 4. Intent Detection: Top Opportunities (PRIORITY 4)
+      const isTopOps = /best stocks|top opportunities|what should i buy|top picks/i.test(userQuery);
+      if (isTopOps) {
+        const response = await getTopOpportunities();
+        return { response };
+      }
+
+      // 5. Intent Detection: Portfolio Snapshot (PRIORITY 5)
+      const isPortfolio = /portfolio|my holdings|check.*portfolio/i.test(userQuery);
+      if (isPortfolio) {
+        const chatId = input.chatId || "DEFAULT";
+        const response = await getPortfolioSnapshot(chatId);
+        return { response };
+      }
+
+      // 6. Persona & Helpers (Analyst / Chat Hybrid)
       const FINSIGHT_PERSONA = `
 - Speak like a sharp trader, not a bot
 - No AI filler (I understand, I believe, Certainly)
@@ -229,11 +414,6 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         ];
         bannedPhrases.forEach(p => { text = text.replace(new RegExp(p, "gi"), ""); });
         
-        // Hard Block US Macro Leakage
-        if (/dow|nasdaq|euro|nikkei/i.test(text) && !/nifty|sensex/i.test(text)) {
-            return "No clear India-specific signals yet. Focusing on Nifty levels.";
-        }
-
         text = text
           .replace(/Take action only if/gi, "Act only if")
           .replace(/Maintain discipline/gi, "Stay disciplined")
@@ -266,9 +446,11 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       // 4. Live Data Snippet (Ticker Extraction)
-      const tickerMatch = userQuery.match(/\b(?!(?:THE|AND|FOR|FOR|BUY|SELL|STOCK|THIS|THAT|WHAT|WITH|YOUR|WORK|FROM|INTO|ONTO)\b)[A-Z]{3,10}\b/);
+      const tickerMatch = userQuery.match(/\b[A-Z]{2,10}(\.NS)?\b/);
+      const isLikelyTicker = tickerMatch && !/^(HI|HEY|WHY|WHAT|HELP|DO|CAN|THE|AND|THIS|THAT|YOUR|WORK|WITH|FROM|INTO|ONTO)\b/i.test(tickerMatch[0]);
+      
       let liveDataSnippet = "";
-      if (tickerMatch) {
+      if (isLikelyTicker) {
           const ticker = tickerMatch[0];
           try {
               const data = await getLiveMarketData(ticker);
@@ -278,7 +460,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
           } catch (err) {}
       }
 
-      // 5. LLM Call
+      // 5. Final Intent Check (Safety Guard)
+      const hasExplicitIntent = /analyze|market|nifty|sensex|stock/i.test(userQuery);
+      if (!isLikelyTicker && !hasExplicitIntent) {
+        return { response: "What do you want me to check — market or a stock?" };
+      }
+
+      // 6. LLM Call
       const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: 4-5 lines max. Trader tone. If providing market data, end with a "What matters:" line.`.trim();
       let originalResponse = await generateInvestmentAnalysis(masterPrompt);
       let response = cleanOutput(originalResponse);

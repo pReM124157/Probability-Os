@@ -48,68 +48,45 @@ export async function analyzePortfolio(stocks) {
       sectorMap[sector] += allocation;
     }
 
-    // Normalize allocations if not 100
-    portfolio = portfolio.map((stock) => ({
-      ...stock,
-      normalizedAllocation: (
-        (stock.allocation / totalWeight) *
-        100
-      ).toFixed(2),
+    // Calculate position values
+    let totalPortfolioValue = 0;
+    const portfolio = stocks.map(item => {
+      const val = (Number(item.quantity) || 0) * (Number(item.currentPrice || item.avgPrice) || 0);
+      totalPortfolioValue += val;
+      return {
+        ...item,
+        positionValue: val
+      };
+    });
+
+    // Normalize weights
+    const enrichedPortfolio = portfolio.map(item => ({
+      ...item,
+      weight: totalPortfolioValue > 0 ? (item.positionValue / totalPortfolioValue) * 100 : 0
     }));
 
-    // Find highest concentration
-    const highestStock = (portfolio || []).length > 0 ? portfolio.reduce((prev, curr) =>
-      Number(curr.normalizedAllocation) >
-      Number(prev.normalizedAllocation)
-        ? curr
-        : prev
-    ) : { symbol: "None", normalizedAllocation: 0 };
-
     // Find dominant sector
-    let dominantSector = "";
-    let dominantSectorWeight = 0;
+    const sectorMap = {};
+    enrichedPortfolio.forEach(item => {
+      const sector = item.sector || "Other";
+      sectorMap[sector] = (sectorMap[sector] || 0) + item.weight;
+    });
 
-    for (const sector in sectorMap) {
-      const normalized =
-        (sectorMap[sector] / totalWeight) * 100;
-
-      if (normalized > dominantSectorWeight) {
-        dominantSectorWeight = normalized;
+    let dominantSector = "None";
+    let dominantWeight = 0;
+    for (const [sector, weight] of Object.entries(sectorMap)) {
+      if (weight > dominantWeight) {
+        dominantWeight = weight;
         dominantSector = sector;
       }
     }
 
-    // Health score logic
-    let healthScore = 10;
-
-    if (dominantSectorWeight > 50) healthScore -= 3;
-    if (Number(highestStock.normalizedAllocation) > 35) healthScore -= 3;
-    if (portfolio.length < 4) healthScore -= 2;
-
-    let suggestion = "";
-
-    if (dominantSectorWeight > 50) {
-      suggestion += `Reduce ${dominantSector} exposure. `;
-    }
-
-    if (Number(highestStock.normalizedAllocation) > 35) {
-      suggestion += `Trim ${highestStock.symbol.toUpperCase()} allocation. `;
-    }
-
-    if (portfolio.length < 4) {
-      suggestion += `Add more diversification across sectors.`;
-    }
-
     return {
-      portfolio,
-      healthScore: Math.max(healthScore, 1),
-      highestStock,
+      holdings: enrichedPortfolio,
+      totalValue: totalPortfolioValue,
       dominantSector,
-      dominantSectorWeight: dominantSectorWeight.toFixed(2),
-      topAllocation: Number(highestStock.normalizedAllocation),
-      totalWeight: totalWeight,
-      suggestion,
-      performanceScore: healthScore // Added to support decision agent
+      dominantSectorWeight: dominantWeight.toFixed(2),
+      totalWeight: enrichedPortfolio.reduce((sum, h) => sum + h.weight, 0)
     };
   } catch (error) {
     console.error(error);
