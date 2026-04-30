@@ -355,9 +355,16 @@ export async function masterAgent(input) {
       }
 
       // 1.5. Intent Detection: Acknowledgement / Closure (PRIORITY 1.5)
-      const isAcknowledgement = /^(thanks|thank you|ok|okay|got it|cool|nice|great|nothing|all good)$/i.test(userQuery.trim());
-      if (isAcknowledgement) {
-        return { response: "Got it." };
+      const isAckMatch = /^(thanks|thank you|ok|okay|cool|got it|fine|alright|nothing|all good)/i.test(userQuery.trim());
+      // Prevent false positives on "ok check tcs"
+      if (isAckMatch && userQuery.length < 25 && !/analyze|check|market/i.test(userQuery)) {
+        const ACK_RESPONSES = [
+          "Got it.",
+          "Alright.",
+          "Okay.",
+          "Done."
+        ];
+        return { response: ACK_RESPONSES[Math.floor(Math.random() * ACK_RESPONSES.length)] };
       }
 
       // 2. Intent Detection: Vague / Open-ended (PRIORITY 2)
