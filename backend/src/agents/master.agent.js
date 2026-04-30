@@ -8,7 +8,7 @@ import { analyzeEntryTiming } from "./entryTiming.agent.js";
 import { getLiveMarketData } from "../services/marketData.service.js";
 import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
-import { getIndianIndices, getIndianMarketNews } from "../services/marketData.service.js";
+import { getIndianIndices, getIndianMarketNews, getIndianSectors } from "../services/marketData.service.js";
 import { analyzeExitSignal } from "./exitSignal.agent.js";
 import { calculatePositionSize } from "./positionSizing.agent.js";
 import { analyzeRebalancing } from "./rebalancer.agent.js";
@@ -17,92 +17,257 @@ import { analyzeEventRisk } from "./eventRisk.agent.js";
 
 import { generateInvestmentAnalysis } from "../services/claude.service.js";
 
+// --- Global Cache for Market Updates ---
+let marketCache = {
+  data: null,
+  timestamp: 0,
+  state: null
+};
+let isFetchingMarketUpdate = false;
+
+function getMarketStateKey() {
+  return isMarketOpenIST() ? "OPEN" : "CLOSED";
+}
+
+/**
+ * Checks if Indian Market (NSE) is currently open.
+ */
+function isMarketOpenIST() {
+  const now = new Date();
+  const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const hours = istNow.getHours();
+  const minutes = istNow.getMinutes();
+  const day = istNow.getDay();
+  
+  if (day === 0 || day === 6) return false; // Weekend
+  const timeInMinutes = hours * 60 + minutes;
+  return timeInMinutes >= (9 * 60 + 15) && timeInMinutes <= (15 * 60 + 30); // 9:15 AM - 3:30 PM
+}
+
+/**
+ * Generates a fresh market update with full intelligence pipeline.
+ */
+async function generateMarketUpdate() {
+  const indices = await getIndianIndices();
+  const news = await getIndianMarketNews();
+  const sectors = await getIndianSectors();
+  
+  let state = indices.nifty.change < -0.5 ? "Market weak." : 
+                indices.nifty.change > 0.5 ? "Market strong." : "Market range-bound.";
+  
+  if (!isMarketOpenIST()) {
+    state = "Market closed. Last session data.";
+  }
+
+  // Pipeline: News -> Drivers -> Enrichment -> Cleaning -> Compression
+  const extractDrivers = (headlines) => {
+    const drvs = [];
+    if (!headlines.length) return ["No clear market driver."];
+    headlines.forEach(h => {
+      if (/RBI|rate|policy/i.test(h)) drvs.push("RBI policy signals");
+      if (/earnings|margin|profit|loss/i.test(h)) drvs.push("earnings pressure");
+      if (/oil|crude/i.test(h)) drvs.push("oil price movement");
+      if (/Reliance|HDFC|ICICI|TCS/i.test(h)) drvs.push("heavyweight stock impact");
+    });
+    return [...new Set(drvs)];
+  };
+
+  const buildDriverLine = (headlines) => {
+    const drvs = extractDrivers(headlines);
+    if (drvs.includes("RBI policy signals")) return "Banks weak after RBI commentary.";
+    if (drvs.includes("earnings pressure")) return "Stocks reacting to earnings pressure.";
+    if (drvs.includes("heavyweight stock impact")) return "Index influenced by heavyweight stocks.";
+    if (drvs.includes("oil price movement")) return "Oil movement affecting market sentiment.";
+    return "No clear market driver.";
+  };
+
+  const enrichDriver = (dLine, scts) => {
+    if (!scts) return dLine;
+    let finalLine = dLine;
+    if (scts.bank < -0.5) finalLine = finalLine.replace(".", "; Banking under pressure.");
+    if (scts.it > 0.5) finalLine = finalLine.replace(".", "; IT holding steady.");
+    return finalLine;
+  };
+
+  const rawDriver = buildDriverLine(news);
+  const enriched = sectors ? enrichDriver(rawDriver, sectors) : rawDriver;
+  const fusedDriver = `${enriched.replace(".", ";").split(";")[0].trim()}; ${news.slice(0, 1).map(n => n.split('-')[0].trim()).join("")}.`;
+
+  const edgeLines = [
+    "Watch key levels—no clear trend yet.",
+    "Momentum is mixed—wait for confirmation.",
+    "No strong direction—focus on sector moves.",
+    "Market is range-bound—avoid aggressive entries.",
+    "Early signals unclear—let structure form first."
+  ];
+  const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
+
+  return `
+India — Market Update
+${state}
+Nifty 50: ${indices.nifty.price?.toLocaleString()} (${indices.nifty.change?.toFixed(2)}%)
+Sensex: ${indices.sensex.price?.toLocaleString()} (${indices.sensex.change?.toFixed(2)}%)
+${fusedDriver}
+What matters: ${edge}
+`.trim();
+}
+
+/**
+ * Handles caching and rate control for market updates.
+ */
+async function getCachedMarketUpdate() {
+  const now = Date.now();
+  const currentState = getMarketStateKey();
+  
+  // Concurrency Lock: Prevent duplicate API hits under load
+  if (isFetchingMarketUpdate) {
+    if (marketCache.data) return marketCache.data;
+    return `India — Market Update\nNo clear market view yet.\nWhat matters: Wait for clarity before acting.`;
+  }
+
+  // 5-minute TTL (300,000 ms) + State Awareness (Reset on Open/Close)
+  const isFresh = marketCache.data && 
+                  (now - marketCache.timestamp < 300000) && 
+                  marketCache.state === currentState;
+
+  if (isFresh) {
+    console.log("MARKET_UPDATE: Serving from cache.");
+    return marketCache.data;
+  }
+  
+  try {
+    isFetchingMarketUpdate = true;
+    const fresh = await generateMarketUpdate();
+    marketCache = { data: fresh, timestamp: now, state: currentState };
+    return fresh;
+  } catch (err) {
+    console.error("MARKET_UPDATE_ERROR:", err.message);
+    if (marketCache.data) return marketCache.data; // Serve stale if failure
+    return `India — Market Update\nMarket data currently unavailable.\nWhat matters: Wait for clarity before acting.`;
+  } finally {
+    isFetchingMarketUpdate = false;
+  }
+}
+
 export async function masterAgent(input) {
   try {
     // Check if it's a conversation mode request
     if (input && input.mode === "conversation") {
       const { userQuery } = input;
-      
+
+      // 1. Intent Detection: Casual / Social (PRIORITY 1)
+      const isCasual = /^(hi|hello|hey|who are you|why|how|what can you do)\b/i.test(userQuery.trim());
+      if (isCasual) {
+        const lowerQuery = userQuery.toLowerCase();
+        
+        const greetings = [
+          "Hi — I’m FinSight. I track markets and give clear signals. What do you want to check?",
+          "Hey — FinSight here. I help with stocks and market moves. What do you want to look at?",
+          "Hi — I’m FinSight. I break down markets into clear actions. What do you want to check?"
+        ];
+        const who = [
+          "I’m FinSight. I analyze stocks and give buy/hold/exit signals. Try: /analyze TCS",
+          "FinSight. I track markets and turn them into decisions. Run: /analyze TCS",
+          "I’m FinSight. I spot setups and give clear actions. Try: /analyze TCS"
+        ];
+        const why = [
+          "Clarity over noise. But I can keep it conversational too—just tell me.",
+          "Direct answers save time. If you want a different style, say it.",
+          "I keep it sharp so decisions are easier. Can adjust tone if you want."
+        ];
+
+        if (/^hi|hello|hey/i.test(lowerQuery)) {
+          return { response: greetings[Math.floor(Math.random() * greetings.length)] };
+        }
+        if (/who are you/i.test(lowerQuery)) {
+          return { response: who[Math.floor(Math.random() * who.length)] };
+        }
+        if (/why/i.test(lowerQuery)) {
+          return { response: why[Math.floor(Math.random() * why.length)] };
+        }
+        if (/how|what can you do/i.test(lowerQuery)) {
+          return { response: "I’m an institutional intelligence system. I track price action, fundamentals, and news to give you clear entry and exit signals.\n\nTell me what you want to check." };
+        }
+      }
+
+      // 2. Intent Detection: Market Updates (PRIORITY 2 - India Override)
+      const isMarketUpdate = /market update|what.*market|news update|india market/i.test(userQuery);
+      if (isMarketUpdate) {
+        const response = await getCachedMarketUpdate();
+        return { response };
+      }
+
+      // 3. Persona & Helpers (Analyst / Chat Hybrid)
       const FINSIGHT_PERSONA = `
+- Speak like a sharp trader, not a bot
+- No AI filler (I understand, I believe, Certainly)
 - No long paragraphs; use short, natural sentences
 - Focus on signals and data, not explanations
-- Be slightly conversational, not robotic
+- Be conversational but precise
 - Max 4–5 lines
-- For market updates: Always end with a "What matters:" action line.
 Tone: A sharp trader texting insights. Professional, fast, non-AI.
 `.trim();
 
+      const ensureWhatMatters = (text) => {
+        if (!text.includes("What matters:")) {
+          return text + "\n\nWhat matters: Watch key levels—no clear trend yet.";
+        }
+        // if line exists but empty or broken
+        if (/What matters:\s*$/i.test(text)) {
+          return text.replace(/What matters:\s*$/i, "What matters: Watch key levels—no clear trend yet.");
+        }
+        return text;
+      };
+
       const cleanOutput = (original, isAnalysis = false) => {
-        if (isAnalysis) return original; // Skip cleaning for structured analysis
-        
+        if (isAnalysis) return original; 
         let text = original;
-        
-        // Banned patterns (AI fluff)
         const bannedPhrases = [
           "I understand that you", "I'm excited to", "I'm happy to", "delighted to", "pleased to",
           "esteemed", "cutting-edge", "excited", "collaborate", "vast amounts", "advanced", "sophisticated",
-          "I believe", "In my opinion", "I would suggest"
+          "I believe", "In my opinion", "I would suggest", "Data shows"
         ];
+        bannedPhrases.forEach(p => { text = text.replace(new RegExp(p, "gi"), ""); });
         
-        bannedPhrases.forEach(p => {
-          text = text.replace(new RegExp(p, "gi"), "");
-        });
+        // Hard Block US Macro Leakage
+        if (/dow|nasdaq|euro|nikkei/i.test(text) && !/nifty|sensex/i.test(text)) {
+            return "No clear India-specific signals yet. Focusing on Nifty levels.";
+        }
 
-        // Humanizer Layer (Controlled Softening)
         text = text
           .replace(/Take action only if/gi, "Act only if")
           .replace(/Maintain discipline/gi, "Stay disciplined")
           .replace(/Execute only after/gi, "Only act after")
           .replace(/This analysis is based on/gi, "This is based on");
-
+        
         const hasCriticalData = (t) => /₹|\d+%|\b\d{3,}\b/.test(t);
-        
-        // Safeguard: Revert if critical data is lost during cleaning
-        if (!hasCriticalData(text) && hasCriticalData(original)) {
-          return original;
-        }
-        
+        if (!hasCriticalData(text) && hasCriticalData(original)) return original;
         return text.trim();
       };
 
       const validateResponse = (text, original) => {
-        if (text.length < 30 || text.split(" ").length < 5) {
-          return original; // Prevent broken/short outputs
-        }
-        if (/I am|I’m an AI|AI assistant|sophisticated AI/i.test(text)) {
-          return original; // Block AI identity leakage
-        }
+        if (text.length < 20 || text.split(" ").length < 3) return original;
+        if (/I am|I’m an AI|AI assistant|sophisticated AI/i.test(text)) return original;
         return text;
       };
 
       const isPitchQuery = (query) => {
         const lower = query.toLowerCase();
-        return lower.includes("what are you") || 
-               lower.includes("who are you") || 
-               lower.includes("pitch") || 
-               lower.includes("trust") || 
-               lower.includes("about finsight");
+        return lower.includes("what are you") || lower.includes("who are you") || lower.includes("pitch");
       };
 
       const generateProofResponse = () => {
-        return `
-FinSight — Equity Intelligence
-TCS — HOLD (structure weak)  
-ICICI — BUY (momentum intact)  
-Reliance — WAIT (earnings pressure)
-Run it live:
- /analyze TCS
-`.trim();
+        return `FinSight — Equity Intelligence\nTCS — HOLD (structure weak)\nICICI — BUY (momentum intact)\nReliance — WAIT (earnings pressure)\nRun it live:\n /analyze TCS`.trim();
       };
 
+      // 3. Identity & Proof
       if (isPitchQuery(userQuery)) {
         return { response: generateProofResponse() };
       }
 
-      // Attempt to extract ticker
+      // 4. Live Data Snippet (Ticker Extraction)
       const tickerMatch = userQuery.match(/\b(?!(?:THE|AND|FOR|FOR|BUY|SELL|STOCK|THIS|THAT|WHAT|WITH|YOUR|WORK|FROM|INTO|ONTO)\b)[A-Z]{3,10}\b/);
       let liveDataSnippet = "";
-      
       if (tickerMatch) {
           const ticker = tickerMatch[0];
           try {
@@ -113,109 +278,25 @@ Run it live:
           } catch (err) {}
       }
 
-      const masterPrompt = `
-${FINSIGHT_PERSONA}
-
-${liveDataSnippet}
-
-User Question: ${userQuery}
-
-INSTRUCTION: 4-5 lines max. Trader tone. If providing market data, end with a "What matters:" line.
-`.trim();
-
+      // 5. LLM Call
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: 4-5 lines max. Trader tone. If providing market data, end with a "What matters:" line.`.trim();
       let originalResponse = await generateInvestmentAnalysis(masterPrompt);
       let response = cleanOutput(originalResponse);
       response = validateResponse(response, originalResponse);
       
-      // Smart length control: Cut at last sentence boundary
+      // Smart length control
       if (response.length > 600) {
         const cutoff = response.lastIndexOf(".", 600);
-        if (cutoff > 200) {
-          response = response.slice(0, cutoff + 1);
-        }
+        if (cutoff > 200) response = response.slice(0, cutoff + 1);
       }
 
-      // Context-aware Bridge Logic
-      const isMarketUpdate = userQuery.toLowerCase().includes("market update") || userQuery.toLowerCase().includes("market summary");
-      
-      if (isMarketUpdate) {
-        try {
-          const indices = await getIndianIndices();
-          const news = await getIndianMarketNews();
-          
-          const getMarketState = (idx) => {
-            if (idx.nifty.change < -0.5) return "Market weak.";
-            if (idx.nifty.change > 0.5) return "Market strong.";
-            return "Market range-bound.";
-          };
-
-          const state = getMarketState(indices);
-          
-          // Specific Driver Logic
-          const deriveDriver = (newsArray, idx) => {
-            const combinedNews = newsArray.join(" ");
-            if (/RBI/i.test(combinedNews)) return "Banks weak after RBI commentary. IT steady.";
-            if (/earnings/i.test(combinedNews)) return "Stocks reacting to earnings updates.";
-            if (idx.nifty.change < -0.3) return "Banking and heavyweights dragging index.";
-            return "No clear sector leadership yet.";
-          };
-
-          const driver = deriveDriver(news, indices);
-          const compressedNews = news.slice(0, 2).map(n => n.split('-')[0].trim()).join("; ");
-          
-          // Intelligence Fusion: Combine driver + news shorthand
-          const intelligenceLine = `${driver.replace(".", ";")} ${compressedNews}.`;
-
-          const edgeLines = [
-            "Watch key levels—no clear trend yet.",
-            "Momentum is mixed—wait for confirmation.",
-            "No strong direction—focus on sector moves.",
-            "Market is range-bound—avoid aggressive entries.",
-            "Early signals unclear—let structure form first."
-          ];
-          const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
-
-          const response = `
-India — Market Update
-${state}
-Nifty 50: ${indices.nifty.price?.toLocaleString()} (${indices.nifty.change?.toFixed(2)}%)
-Sensex: ${indices.sensex.price?.toLocaleString()} (${indices.sensex.change?.toFixed(2)}%)
-${intelligenceLine}
-What matters: ${edge}
-`.trim();
-
-          return { response };
-        } catch (err) {
-          console.warn("Market update failed:", err.message);
-        }
-      }
-
-      function shouldUseBridge(type) {
-        if (type === "market_update") return true;
-        if (isPitchQuery(userQuery)) return false; // Lock identity (no bridge)
-        return Math.random() < 0.6; // Casual chat randomness
-      }
-
+      // Optional bridge (60% chance)
       const bridges = ["Here’s the view:", "Quick take:", "Right now:"];
-      const rType = isMarketUpdate ? "market_update" : "chat";
-      
-      if (shouldUseBridge(rType)) {
+      if (Math.random() < 0.6) {
         response = bridges[Math.floor(Math.random() * bridges.length)] + "\n\n" + response;
       }
 
-      // Ensure Market Updates always have an edge
-      if (isMarketUpdate && !response.includes("What matters:")) {
-        const edgeLines = [
-          "Watch key levels—no clear trend yet.",
-          "Momentum is mixed—wait for confirmation.",
-          "No strong direction—focus on sector moves.",
-          "Market is range-bound—avoid aggressive entries.",
-          "Early signals unclear—let structure form first."
-        ];
-        const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
-        response += "\n\nWhat matters:\n" + edge;
-      }
-
+      response = ensureWhatMatters(response);
       return { response };
     }
 

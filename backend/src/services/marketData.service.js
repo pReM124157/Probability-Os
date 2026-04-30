@@ -46,6 +46,26 @@ export async function getIndianMarketNews() {
     return ["No recent news available."];
   }
 }
+/**
+ * Fetches performance for key Indian sectors.
+ */
+export async function getIndianSectors() {
+  try {
+    const symbols = ["^NSEBANK", "^CNXIT"]; // Nifty Bank and Nifty IT
+    const results = await yahooFinance.quote(symbols);
+    
+    const bank = results.find(r => r.symbol === "^NSEBANK") || {};
+    const it = results.find(r => r.symbol === "^CNXIT") || {};
+
+    return {
+      bank: bank.regularMarketChangePercent || 0,
+      it: it.regularMarketChangePercent || 0
+    };
+  } catch (error) {
+    console.warn("Failed to fetch sectors:", error.message);
+    return { bank: 0, it: 0 };
+  }
+}
 
 
 const indianStocks = [
