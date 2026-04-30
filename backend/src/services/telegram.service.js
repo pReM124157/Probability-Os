@@ -51,78 +51,48 @@ No analysis generated. Try again later.
     // Use the final execution advice directly from the agent
     const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
 
-    let message = `🕒 Analysis Time (IST): ${result.analysisTimestamp}
-📊 Based on: ${result.priceSource === "LIVE" ? "Live market feed" : "Last available market data"}
-
-${result.isDegraded ? "⚠ DEGRADED MODE — Using stale/cached market data\n" : ""}📡 Source: ${result.priceSource || "UNKNOWN"} | Age: ${result.dataAge || 0}s
+    let message = `${ticker} — Snapshot
+${result.isMarketOpen ? `Live update (${result.analysisTimestamp})` : `As of market close (${result.analysisTimestamp})`}
 ━━━━━━━━━━━━━━━━━━
-🚨 ${result.decision?.finalDecision || "HOLD"} Signal Detected
-📈 Stock: ${ticker}
-🎯 Confidence Score: ${result.decision?.finalConfidenceScore || 0}/10
-⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}
-🏆 Priority Level: ${result.ranking?.priority || "MEDIUM"}
-📊 Rank Score: ${result.ranking?.rankScore || 0}/10
+🚨 ${result.decision?.finalDecision || "HOLD"} Signal
+🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10  
+⚠ Risk: ${result.risk?.riskLevel || "N/A"}  
+📊 Strength: ${result.ranking?.rankScore || 0}/10  
+💰 Suggested Allocation: ${positionSizing.allocation || "0%"}  
+📌 Action: ${positionSizing.capitalAction || "No immediate action"}
 
-💰 Recommended Allocation: ${positionSizing.allocation || "0%"}
-🧠 Conviction Level: ${positionSizing.conviction || "MODERATE"}
-📌 Capital Action: ${positionSizing.capitalAction || "No action"}
+🧠 Analysis:`;
 
-⚖️ PORTFOLIO REBALANCING
-Action: ${rebalancer.action || "HOLD"}
-Adjustment: ${rebalancer.adjustment || "0%"}
-Urgency: ${rebalancer.urgency || "LOW"}
-Reason: ${rebalancer.reason || "Alignment confirmed"}
-
-🔄 Rebalancing Action:
-${result.rebalancing?.rebalancingAction || "No action required"}
-
-🧠 Reason:
-${result.decision?.reason || "No reasoning available"}
-${positionSizing.reason ? `\n📊 Sizing Logic: ${positionSizing.reason}` : ""}
-
-📌 Recommended Action:
-${result.rebalancing?.action || "Monitor and wait for confirmation"}
-
-🚨 EVENT RISK ANALYSIS
-Risk Level: ${eventRisk.eventRisk || "LOW"}
-Event Type: ${eventRisk.eventType || "NONE"}
-Action: ${eventRisk.action || "Monitor as usual"}
-Reason: ${eventRisk.reason || "No iminent high-impact events."}
-
-🚨 ENTRY SIGNAL DETECTED
-🎯 Strategy: ${entryTiming?.strategy || "AVOID ENTRY"}
-📍 Current Market Price: ₹${entryTiming?.currentPrice || 0} ${result.isDegraded ? "(STALE)" : ""}
-💰 Ideal Entry Zone: ${entryTiming?.idealEntryZone || "Avoid"}
-🛑 Stop Loss: ${entryTiming?.stopLoss || "-"}
-🎯 Initial Target: ${entryTiming?.initialTarget || "-"}
-📊 Reward/Risk Ratio: ${entryTiming?.rewardRiskRatio || "-"}
-⚡ Entry Urgency: ${entryTiming?.entryUrgency || "VERY LOW"}
-
-🧠 Reason:
-${entryTiming?.reasoning || "Insufficient market conviction"}
-
-📌 Final Execution Advice:
-${executionAdvice}
-
-🚨 EXIT SIGNAL
-Signal: ${exitSignal?.signal || "HOLD"}
-Urgency: ${exitSignal?.urgency || "LOW"}
-Action: ${exitSignal?.action || "Continue holding"}
-Reason: ${exitSignal?.reason || "No significant exit triggers detected"}
-`.trim();
-
-    if (result.nextSessionPlan) {
-      message += `\n\n🚀 NEXT MARKET PLAN\n`;
-      message += `Plan: ${result.nextSessionPlan.plan}\n`;
-      message += `Trigger: ${result.nextSessionPlan.entryTrigger}\n`;
-      message += `Stop Loss: ${result.nextSessionPlan.stopLoss}\n`;
-      message += `Target: ${result.nextSessionPlan.target}\n`;
-      message += `Execution Rule: ${result.nextSessionPlan.action}\n`;
+    if (result.priceSource !== "LIVE") {
+      message += `\nThis analysis is based on the last available market data since the market is currently closed. Any action should be taken only after confirmation when the market opens.\n`;
     }
 
-    message += `\n\n⚠️ For educational purposes only.
-Not SEBI registered investment advice.
-Do your own research before investing.`;
+    message += `\n${result.decision?.reason || "No reasoning available"}`;
+
+    if (rebalancer.action && rebalancer.action !== "HOLD") {
+      message += `\n\n⚖️ Portfolio Action:\n${rebalancer.action}: ${rebalancer.reason || "Alignment confirmed"}`;
+    }
+
+    message += `\n\n📍 Trade Setup:
+Price: ₹${entryTiming?.currentPrice || 0} ${result.priceSource !== "LIVE" ? "(last close)" : ""}  
+Watch Zone: ${entryTiming?.idealEntryZone || "Avoid"}  
+Stop Loss: ${entryTiming?.stopLoss || "-"}  
+Target: ${entryTiming?.initialTarget || "-"}  
+Action: ${executionAdvice}
+
+🚨 Exit View:
+${exitSignal?.action || "Continue holding"}
+Reason: ${exitSignal?.reason || "No significant exit triggers detected"}`;
+
+    if (result.nextSessionPlan) {
+      message += `\n\n🚀 Next Market Plan:
+Watch the ${result.nextSessionPlan.entryTrigger} zone after market opens.  
+Take action only if price confirms strength.  
+Maintain discipline with stop loss at ${result.nextSessionPlan.stopLoss}.  
+Avoid impulsive entries without confirmation.`;
+    }
+
+    message += `\n\n⚠️ This is an AI-generated analysis for educational purposes only. Not financial advice.`;
 
     await bot.telegram.sendMessage(chatId, message);
   } catch (err) {

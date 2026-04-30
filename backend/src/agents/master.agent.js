@@ -428,8 +428,23 @@ Guidelines:
       };
     }
 
-    // PHASE 7: Metadata & Timestamps
-    const istTime = new Date().toLocaleString("en-IN", {
+    // PHASE 7: Metadata & Timestamps (Smart Data Timing)
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    
+    // NSE closes at 3:30 PM IST
+    const marketCloseTime = new Date(istNow);
+    marketCloseTime.setHours(15, 30, 0, 0);
+    
+    // Determine display time based on market status
+    let displayTime;
+    if (!liveMarketData.isMarketOpen) {
+      displayTime = marketCloseTime;
+    } else {
+      displayTime = istNow;
+    }
+
+    const formattedTime = displayTime.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       day: "2-digit",
       month: "short",
@@ -457,7 +472,8 @@ Guidelines:
       priceSource: liveMarketData.priceSource,
       dataAge: liveMarketData.dataAge,
       nextSessionPlan,
-      analysisTimestamp: istTime
+      analysisTimestamp: formattedTime,
+      isMarketOpen: liveMarketData.isMarketOpen
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);
