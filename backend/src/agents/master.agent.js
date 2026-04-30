@@ -93,10 +93,33 @@ Guidelines:
       valuationAgent(stockData)
     ]);
     console.log(`[Phase 1] Completed. Live Price: ₹${liveMarketData.currentPrice}`);
+    
+    // CRITICAL GUARD: Hard block if price data is missing or invalid
+    if (!liveMarketData.currentPrice || liveMarketData.currentPrice === 0) {
+      console.warn(`[BLOCK] Market data unavailable for ${ticker}. Skipping full analysis.`);
+      return {
+        error: true,
+        message: "Market data unavailable. Technical execution skipped.",
+        ticker: ticker,
+        decision: {
+          finalDecision: "DATA UNAVAILABLE",
+          reason: `Unable to fetch live market price for ${ticker}. Fallback sources exhausted.`
+        },
+        entryTiming: {
+          strategy: "NO TRADE",
+          reasoning: "⚠ Data Unavailable — Skipping technical execution",
+          stopLoss: null,
+          target: null,
+          entryZone: null
+        }
+      };
+    }
 
     // PHASE 2: Execution Intelligence (Entry Timing)
     const activePrice = Number(liveMarketData?.currentPrice || technical?.currentPrice || 0);
-    console.log(`[Phase 2] Pre-flight Price Check for ${ticker}: ₹${activePrice}`);
+    const isDegraded = liveMarketData.isStale || false;
+
+    console.log(`[Phase 2] Pre-flight Price Check for ${ticker}: ₹${activePrice} ${isDegraded ? "(STALE/DEGRADED)" : ""}`);
 
     const entryTiming = await analyzeEntryTiming({
       stock: ticker,
@@ -109,6 +132,7 @@ Guidelines:
       marketData: liveMarketData,
       companyData: stockData
     });
+
     // PHASE 2.5: Exit Strategy Analysis
     const parseCurrency = (str) => Number(str?.replace(/[^0-9.]/g, "")) || 0;
     
@@ -135,6 +159,13 @@ Guidelines:
     // Adjusting confidence based on execution readiness and historical feedback
     let adjustedConfidence = (decision.finalConfidenceScore || 5) + learningBoost;
     
+    // PARTIAL DATA GUARD: Downgrade confidence if key metrics are missing
+    const hasMissingFundamentals = !stockData.ReturnOnEquityTTM || !stockData.DebtToEquityRatio || !stockData.QuarterlyRevenueGrowthYOY;
+    if (hasMissingFundamentals) {
+      console.log(`[PARTIAL DATA] Missing key fundamental metrics for ${ticker}. Capping confidence.`);
+      adjustedConfidence = Math.min(adjustedConfidence, 4);
+    }
+
     if (entryTiming.strategy === "CAUTIOUS ENTRY") {
       adjustedConfidence = Math.min(adjustedConfidence, 6);
     } else if (entryTiming.strategy === "AVOID ENTRY") {
@@ -143,12 +174,27 @@ Guidelines:
       adjustedConfidence = Math.min(adjustedConfidence, 10);
     }
     
+    // CRITICAL: Downgrade confidence and restrict strategy in Degraded/Blocked Mode
+    if (isDegraded || liveMarketData.priceSource !== "LIVE" || liveMarketData.latencyBlocked) {
+      console.log(`[EXECUTION BLOCK] Critical state for ${ticker}. Source: ${liveMarketData.priceSource}, Latency Blocked: ${liveMarketData.latencyBlocked}`);
+      
+      // Normalize degraded confidence [2, 3]
+      adjustedConfidence = Math.min(Math.max(adjustedConfidence, 2), 3);
+      
+      entryStrategy = "WAIT"; // Ensure variable is updated if used below
+      entryTiming.strategy = "WAIT";
+      entryTiming.entryUrgency = "LOW";
+      entryTiming.reasoning = `⚠ Critical Data Status: Analysis restricted for safety. Data source is ${liveMarketData.priceSource} and latency is ${liveMarketData.latencyBlocked ? 'BLOCKED' : 'STALE'}.`;
+      entryTiming.finalExecutionAdvice = "Wait for live data restoration.";
+    }
+
     // Ensure score stays within 1-10 range
     adjustedConfidence = Math.min(Math.max(adjustedConfidence, 1), 10);
 
     const finalDecision = {
       ...decision,
-      finalConfidenceScore: adjustedConfidence
+      finalConfidenceScore: adjustedConfidence,
+      reason: isDegraded ? `[STALE DATA] ${decision.reason}` : (hasMissingFundamentals ? `[PARTIAL DATA] ${decision.reason}` : decision.reason)
     };
 
     // PHASE 4: Strategic Allocation (Portfolio, Ranking, Capital, Rebalancing)
@@ -181,6 +227,12 @@ Guidelines:
       suggestedAllocation: capital.suggestedAllocation
     });
 
+    // Logical Consistency Check: Entry vs Rebalancing
+    if (entryTiming.strategy === "AVOID ENTRY" && rebalancing.action.includes("Accumulate")) {
+        console.log(`[Logical Alignment] ${ticker}: Overriding aggressive accumulation because Entry Timing is AVOID.`);
+        rebalancing.action = "No action. Monitor closely";
+    }
+
     // PHASE 4.5: Position Sizing
     const positionSizing = await calculatePositionSize({
       stock: ticker,
@@ -192,6 +244,24 @@ Guidelines:
       sectorExposure: 0, // Placeholder for future portfolio integration
       portfolioRisk: 5   // Placeholder for future portfolio integration
     });
+
+    // Fix 1: Correct Portfolio Scaling Formula
+    const suggestedPct = parseCurrency(positionSizing.allocation);
+    const existingTotal = portfolio.totalWeight || 0;
+    const remainingRoom = Math.max(0, 100 - existingTotal);
+
+    if (suggestedPct > remainingRoom && suggestedPct > 0) {
+        console.log(`[RISK] Insufficient portfolio room (${remainingRoom}%). Scaling down ${ticker}.`);
+        const finalAllocation = Math.min(suggestedPct, remainingRoom);
+        
+        positionSizing.allocation = `${finalAllocation.toFixed(2)}%`;
+        positionSizing.reason = `Capped at ${finalAllocation.toFixed(2)}% based on remaining portfolio capacity.`;
+        
+        if (finalAllocation < 1) {
+            positionSizing.allocation = "0%";
+            positionSizing.capitalAction = "No room in portfolio";
+        }
+    }
 
     // PHASE 4.6: Portfolio Rebalancing
     const rebalancer = await analyzeRebalancing({
@@ -281,6 +351,19 @@ Guidelines:
       reasoning: finalDecision.reason
     });
 
+    // FINAL EXECUTION SAFETY CHECK
+    // Fix 1: Block non-live or critical latency for execution
+    if (liveMarketData.priceSource !== "LIVE" || liveMarketData.latencyBlocked) {
+      const blockReason = liveMarketData.latencyBlocked ? "critical execution latency (>4s)" : `non-live data source (${liveMarketData.priceSource})`;
+      console.log(`[EXECUTION BLOCK] Nullifying capital deployment for ${ticker} due to ${blockReason}.`);
+      positionSizing.allocation = "0%";
+      positionSizing.capitalAction = "Blocked by execution layer";
+      positionSizing.reason = `Institutional Guard: Capital deployment blocked due to ${blockReason}.`;
+      entryTiming.strategy = "WAIT";
+      entryTiming.entryUrgency = "LOW";
+      entryTiming.finalExecutionAdvice = "Wait for data pipeline stabilization before taking action.";
+    }
+
     return {
       risk,
       portfolio,
@@ -294,7 +377,10 @@ Guidelines:
       exitSignal,
       positionSizing,
       rebalancer,
-      eventRisk
+      eventRisk,
+      isDegraded,
+      priceSource: liveMarketData.priceSource,
+      dataAge: liveMarketData.dataAge
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);

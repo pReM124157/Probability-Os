@@ -53,10 +53,14 @@ export async function technicalAgent(symbol) {
       };
     }
 
-    const currentPrice = history[history.length - 1]?.close || 0;
-
     const prices = history.map(h => h.close).filter(p => p != null);
     const latestPrice = prices[prices.length - 1];
+    
+    if (!latestPrice || latestPrice === 0) {
+      throw new Error(`Invalid latest price (₹${latestPrice}) derived from history for ${fetchSymbol}`);
+    }
+
+    const currentPrice = latestPrice;
     
     // Simple Moving Averages
     const sma20 = prices.slice(-20).reduce((a, b) => a + b, 0) / 20;

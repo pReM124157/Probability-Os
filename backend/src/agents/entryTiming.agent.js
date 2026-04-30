@@ -37,6 +37,22 @@ export async function analyzeEntryTiming({
             }
         }
 
+        // CRITICAL GUARD: Hard block if price is 0
+        if (!activePrice || activePrice <= 0) {
+          return {
+            stock: stock || "UNKNOWN",
+            currentPrice: 0,
+            strategy: "NO TRADE",
+            idealEntryZone: "N/A",
+            stopLoss: "-",
+            initialTarget: "-",
+            rewardRiskRatio: "-",
+            entryUrgency: "LOW",
+            reasoning: "⚠ Data Unavailable — Skipping technical execution",
+            finalExecutionAdvice: "Market data unavailable. Skipping trade setup."
+          };
+        }
+
         // Initialize variables
         let strategy = "AVOID ENTRY";
         let idealEntryZone = "Avoid";

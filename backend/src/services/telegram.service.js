@@ -37,6 +37,8 @@ async function performAnalysis(chatId, symbol) {
     const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
 
     const message = `
+${result.isDegraded ? "⚠ DEGRADED MODE — Using stale/cached market data\n" : ""}📡 Source: ${result.priceSource || "UNKNOWN"} | Age: ${result.dataAge || 0}s
+━━━━━━━━━━━━━━━━━━
 🚨 ${result.decision?.finalDecision || "HOLD"} Signal Detected
 📈 Stock: ${ticker}
 🎯 Confidence Score: ${result.decision?.finalConfidenceScore || 0}/10
@@ -68,11 +70,11 @@ ${result.rebalancing?.action || "Monitor and wait for confirmation"}
 Risk Level: ${eventRisk.eventRisk || "LOW"}
 Event Type: ${eventRisk.eventType || "NONE"}
 Action: ${eventRisk.action || "Monitor as usual"}
-Reason: ${eventRisk.reason || "No imminent high-impact events."}
+Reason: ${eventRisk.reason || "No iminent high-impact events."}
 
 🚨 ENTRY SIGNAL DETECTED
 🎯 Strategy: ${entryTiming?.strategy || "AVOID ENTRY"}
-📍 Current Market Price: ₹${entryTiming?.currentPrice || 0}
+📍 Current Market Price: ₹${entryTiming?.currentPrice || 0} ${result.isDegraded ? "(STALE)" : ""}
 💰 Ideal Entry Zone: ${entryTiming?.idealEntryZone || "Avoid"}
 🛑 Stop Loss: ${entryTiming?.stopLoss || "-"}
 🎯 Initial Target: ${entryTiming?.initialTarget || "-"}

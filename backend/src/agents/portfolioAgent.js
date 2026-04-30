@@ -107,6 +107,7 @@ export async function analyzePortfolio(stocks) {
       dominantSector,
       dominantSectorWeight: dominantSectorWeight.toFixed(2),
       topAllocation: Number(highestStock.normalizedAllocation),
+      totalWeight: totalWeight,
       suggestion,
       performanceScore: healthScore // Added to support decision agent
     };

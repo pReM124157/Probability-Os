@@ -114,10 +114,40 @@ export const generateInvestmentAnalysis = async (prompt) => {
   }
 };
 
-/**
- * Institutional-grade analysis using a compressed, data-centric prompt.
- */
+const llmCache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 export const getInstitutionalAnalysis = async (data) => {
+  const ticker = data.Symbol || "UNKNOWN";
+  
+  // Strong Cache Key including fundamentals and technicals to prevent collisions
+  const cacheKey = JSON.stringify({
+    symbol: ticker,
+    price: data.currentPrice,
+    rsi: data.rsi,
+    trend: data.trend,
+    roe: data.ReturnOnEquityTTM,
+    debt: data.DebtToEquityRatio,
+    revenueGrowth: data.QuarterlyRevenueGrowthYOY,
+    earningsGrowth: data.QuarterlyEarningsGrowthYOY
+  });
+  
+  if (llmCache.has(cacheKey)) {
+    const cached = llmCache.get(cacheKey);
+    const age = Date.now() - cached.timestamp;
+    
+    // Regime Change Invalidation: Bypass cache if technical structure shifted significantly
+    const rsiShift = Math.abs((data.rsi || 50) - (cached.data.rsi || 50));
+    const trendChanged = data.trend !== cached.data.trend;
+
+    if (age < CACHE_DURATION && rsiShift <= 10 && !trendChanged) {
+      console.log(`[CACHE HIT] Returning cached LLM analysis for ${ticker}`);
+      return cached.data;
+    } else if (age < CACHE_DURATION) {
+      console.log(`[CACHE BYPASS] Regime change detected (RSI shift: ${rsiShift}, Trend flip: ${trendChanged}). Forcing fresh analysis.`);
+    }
+  }
+
   const prompt = `
 You are a hedge fund equity analyst. 
 Make strict, data-driven decisions using ONLY provided numbers. 
@@ -166,7 +196,7 @@ Recommended Action: (Short instruction)
   const reason = response.match(/Reason:\s*([\s\S]*?)(?=Recommended Action:|$)/i)?.[1]?.trim() || "No reason.";
   const action = response.match(/Recommended Action:\s*([\s\S]*?)$/i)?.[1]?.trim() || "Monitor.";
 
-  return {
+  const result = {
     finalDecision: decision.toUpperCase(),
     finalConfidenceScore: confidence,
     riskLevel: risk.toUpperCase(),
@@ -176,6 +206,13 @@ Recommended Action: (Short instruction)
     reason: reason,
     recommendation: action
   };
+
+  llmCache.set(cacheKey, {
+    data: result,
+    timestamp: Date.now()
+  });
+
+  return result;
 };
 
 /**
