@@ -2,6 +2,52 @@ import YahooFinance from "yahoo-finance2";
 
 const yahooFinance = new YahooFinance();
 
+/**
+ * Fetches Nifty 50 and Sensex current quotes.
+ */
+export async function getIndianIndices() {
+  try {
+    const symbols = ["^NSEI", "^BSESN"]; // Nifty 50 and Sensex
+    const results = await yahooFinance.quote(symbols);
+    
+    const nifty = results.find(r => r.symbol === "^NSEI") || {};
+    const sensex = results.find(r => r.symbol === "^BSESN") || {};
+
+    return {
+      nifty: {
+        price: nifty.regularMarketPrice,
+        change: nifty.regularMarketChangePercent,
+        changeRaw: nifty.regularMarketChange
+      },
+      sensex: {
+        price: sensex.regularMarketPrice,
+        change: sensex.regularMarketChangePercent,
+        changeRaw: sensex.regularMarketChange
+      }
+    };
+  } catch (error) {
+    console.warn("Failed to fetch indices:", error.message);
+    return {
+      nifty: { price: 0, change: 0 },
+      sensex: { price: 0, change: 0 }
+    };
+  }
+}
+
+/**
+ * Fetches recent news for Indian market.
+ */
+export async function getIndianMarketNews() {
+  try {
+    const result = await yahooFinance.search("India stock market", { newsCount: 5 });
+    return result.news.map(n => n.title);
+  } catch (error) {
+    console.warn("Failed to fetch news:", error.message);
+    return ["No recent news available."];
+  }
+}
+
+
 const indianStocks = [
   "TCS",
   "INFY",

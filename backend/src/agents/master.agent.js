@@ -8,6 +8,7 @@ import { analyzeEntryTiming } from "./entryTiming.agent.js";
 import { getLiveMarketData } from "../services/marketData.service.js";
 import { technicalAgent } from "./technical.agent.js";
 import { valuationAgent } from "./valuation.agent.js";
+import { getIndianIndices, getIndianMarketNews } from "../services/marketData.service.js";
 import { analyzeExitSignal } from "./exitSignal.agent.js";
 import { calculatePositionSize } from "./positionSizing.agent.js";
 import { analyzeRebalancing } from "./rebalancer.agent.js";
@@ -23,42 +24,36 @@ export async function masterAgent(input) {
       const { userQuery } = input;
       
       const FINSIGHT_PERSONA = `
-You are FinSight — an institutional equity intelligence system.
-Rules:
-- No greetings, no politeness filler (Hi, Hello, I understand, etc.)
-- No buzzwords (cutting-edge, advanced, excited, collaborate, etc.)
-- No repeating user input
-- No long paragraphs
-- Lead with data or proof
-- Be concise by default; expand only when analysis is requested
-- Never add filler to increase length
-- When asked "what are you" or "pitch yourself": show recent calls, not features
-- End with a clear next action
-Tone: Bloomberg Terminal + sharp sell-side analyst. Cold, precise, confident.
+- No long paragraphs; use short, natural sentences
+- Focus on signals and data, not explanations
+- Be slightly conversational, not robotic
+- Max 4–5 lines
+- For market updates: Always end with a "What matters:" action line.
+Tone: A sharp trader texting insights. Professional, fast, non-AI.
 `.trim();
 
       const cleanOutput = (original, isAnalysis = false) => {
         if (isAnalysis) return original; // Skip cleaning for structured analysis
         
         let text = original;
+        
+        // Banned patterns (AI fluff)
         const bannedPhrases = [
-          "I understand that you",
-          "I'm excited to",
-          "I'm happy to",
-          "delighted to",
-          "pleased to",
-          "esteemed",
-          "cutting-edge",
-          "excited",
-          "collaborate",
-          "vast amounts",
-          "advanced",
-          "sophisticated"
+          "I understand that you", "I'm excited to", "I'm happy to", "delighted to", "pleased to",
+          "esteemed", "cutting-edge", "excited", "collaborate", "vast amounts", "advanced", "sophisticated",
+          "I believe", "In my opinion", "I would suggest"
         ];
         
         bannedPhrases.forEach(p => {
           text = text.replace(new RegExp(p, "gi"), "");
         });
+
+        // Humanizer Layer (Controlled Softening)
+        text = text
+          .replace(/Take action only if/gi, "Act only if")
+          .replace(/Maintain discipline/gi, "Stay disciplined")
+          .replace(/Execute only after/gi, "Only act after")
+          .replace(/This analysis is based on/gi, "This is based on");
 
         const hasCriticalData = (t) => /₹|\d+%|\b\d{3,}\b/.test(t);
         
@@ -92,11 +87,10 @@ Tone: Bloomberg Terminal + sharp sell-side analyst. Cold, precise, confident.
       const generateProofResponse = () => {
         return `
 FinSight — Equity Intelligence
-Recent signals:
-TCS — HOLD (weak structure)
-ICICI Bank — BUY (momentum + alignment)
+TCS — HOLD (structure weak)  
+ICICI — BUY (momentum intact)  
 Reliance — WAIT (earnings pressure)
-Run live:
+Run it live:
  /analyze TCS
 `.trim();
       };
@@ -126,7 +120,7 @@ ${liveDataSnippet}
 
 User Question: ${userQuery}
 
-INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
+INSTRUCTION: 4-5 lines max. Trader tone. If providing market data, end with a "What matters:" line.
 `.trim();
 
       let originalResponse = await generateInvestmentAnalysis(masterPrompt);
@@ -139,6 +133,87 @@ INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
         if (cutoff > 200) {
           response = response.slice(0, cutoff + 1);
         }
+      }
+
+      // Context-aware Bridge Logic
+      const isMarketUpdate = userQuery.toLowerCase().includes("market update") || userQuery.toLowerCase().includes("market summary");
+      
+      if (isMarketUpdate) {
+        try {
+          const indices = await getIndianIndices();
+          const news = await getIndianMarketNews();
+          
+          const getMarketState = (idx) => {
+            if (idx.nifty.change < -0.5) return "Market weak.";
+            if (idx.nifty.change > 0.5) return "Market strong.";
+            return "Market range-bound.";
+          };
+
+          const state = getMarketState(indices);
+          
+          // Specific Driver Logic
+          const deriveDriver = (newsArray, idx) => {
+            const combinedNews = newsArray.join(" ");
+            if (/RBI/i.test(combinedNews)) return "Banks weak after RBI commentary. IT steady.";
+            if (/earnings/i.test(combinedNews)) return "Stocks reacting to earnings updates.";
+            if (idx.nifty.change < -0.3) return "Banking and heavyweights dragging index.";
+            return "No clear sector leadership yet.";
+          };
+
+          const driver = deriveDriver(news, indices);
+          const compressedNews = news.slice(0, 2).map(n => n.split('-')[0].trim()).join("; ");
+          
+          // Intelligence Fusion: Combine driver + news shorthand
+          const intelligenceLine = `${driver.replace(".", ";")} ${compressedNews}.`;
+
+          const edgeLines = [
+            "Watch key levels—no clear trend yet.",
+            "Momentum is mixed—wait for confirmation.",
+            "No strong direction—focus on sector moves.",
+            "Market is range-bound—avoid aggressive entries.",
+            "Early signals unclear—let structure form first."
+          ];
+          const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
+
+          const response = `
+India — Market Update
+${state}
+Nifty 50: ${indices.nifty.price?.toLocaleString()} (${indices.nifty.change?.toFixed(2)}%)
+Sensex: ${indices.sensex.price?.toLocaleString()} (${indices.sensex.change?.toFixed(2)}%)
+${intelligenceLine}
+What matters: ${edge}
+`.trim();
+
+          return { response };
+        } catch (err) {
+          console.warn("Market update failed:", err.message);
+        }
+      }
+
+      function shouldUseBridge(type) {
+        if (type === "market_update") return true;
+        if (isPitchQuery(userQuery)) return false; // Lock identity (no bridge)
+        return Math.random() < 0.6; // Casual chat randomness
+      }
+
+      const bridges = ["Here’s the view:", "Quick take:", "Right now:"];
+      const rType = isMarketUpdate ? "market_update" : "chat";
+      
+      if (shouldUseBridge(rType)) {
+        response = bridges[Math.floor(Math.random() * bridges.length)] + "\n\n" + response;
+      }
+
+      // Ensure Market Updates always have an edge
+      if (isMarketUpdate && !response.includes("What matters:")) {
+        const edgeLines = [
+          "Watch key levels—no clear trend yet.",
+          "Momentum is mixed—wait for confirmation.",
+          "No strong direction—focus on sector moves.",
+          "Market is range-bound—avoid aggressive entries.",
+          "Early signals unclear—let structure form first."
+        ];
+        const edge = edgeLines[Math.floor(Math.random() * edgeLines.length)];
+        response += "\n\nWhat matters:\n" + edge;
       }
 
       return { response };
@@ -297,9 +372,8 @@ INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
 
     // PHASE 3.5: Professional Reasoning Construction
     let professionalReasoning = "";
-    if (liveMarketData.priceSource !== "LIVE") {
-      professionalReasoning += `⚠ This analysis is based on the last available market data (${liveMarketData.priceSource}).\n`;
-      professionalReasoning += `Market is currently closed; decisions should only be executed after live confirmation during the next session.\n\n`;
+    if (!liveMarketData.isMarketOpen) {
+      professionalReasoning += `Market is closed, so this is based on the last available data. Act only after confirmation on open.\n\n`;
     }
 
     const roeVal = Number(stockData.ReturnOnEquityTTM || 0) * 100;
@@ -431,6 +505,13 @@ INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
       finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 4);
     }
 
+    // Ensure consistency: If decision is SELL, exit signal must reflect it
+    if (finalDecision.finalDecision === "SELL") {
+      exitSignal.signal = "FULL EXIT";
+      exitSignal.action = "Reduce or exit position";
+      exitSignal.urgency = "HIGH";
+    }
+
     // EVENT RISK OVERRIDE (Event Risk > All Entry/Sizing Decisions)
     if (eventRisk.eventRisk === "HIGH" || eventRisk.eventRisk === "CRITICAL") {
       console.log(`[Conflict Resolution] ${ticker}: High Event Risk (${eventRisk.eventType}) detected. Overriding analysis.`);
@@ -488,7 +569,7 @@ INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
       positionSizing.reason = `Institutional Guard: Capital deployment blocked due to ${blockReason}.`;
       entryTiming.strategy = "WAIT";
       entryTiming.entryUrgency = "LOW";
-      entryTiming.finalExecutionAdvice = "Wait for data pipeline stabilization before taking action.";
+      entryTiming.finalExecutionAdvice = "Wait for confirmation after market opens.";
     }
 
     // PHASE 6: Forward Guidance (Next Session Plan)
@@ -496,39 +577,37 @@ INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
     if (liveMarketData.priceSource !== "LIVE") {
       nextSessionPlan = {
         plan: entryStrategy === "WAIT" ? "Prepare breakout watch" : "Prepare entry",
-        action: "Execute only if levels are respected after market open",
+        action: "Wait for confirmation before acting.",
         entryTrigger: entryTiming.idealEntryZone || "Watch opening range",
         stopLoss: entryTiming.stopLoss || "To be confirmed on open",
         target: entryTiming.initialTarget || "Based on momentum",
-        note: "Use first 15-min candle confirmation before execution"
+        note: `Keep the stop loss tight at ${entryTiming.stopLoss || 'the opening range'}.`
       };
     }
 
     // PHASE 7: Metadata & Timestamps (Smart Data Timing)
     const now = new Date();
-    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const istNow = new Date(
+      now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    );
     
-    // NSE closes at 3:30 PM IST
-    const marketCloseTime = new Date(istNow);
-    marketCloseTime.setHours(15, 30, 0, 0);
-    
-    // Determine display time based on market status
     let displayTime;
     if (!liveMarketData.isMarketOpen) {
-      displayTime = marketCloseTime;
+      // FORCE NSE CLOSE TIME
+      const close = new Date(istNow);
+      close.setHours(15, 30, 0, 0);
+      displayTime = close;
     } else {
       displayTime = istNow;
     }
 
     const formattedTime = displayTime.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
       day: "2-digit",
       month: "short",
-      year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
       hour12: true
-    });
+    }) + " IST";
 
     return {
       risk,

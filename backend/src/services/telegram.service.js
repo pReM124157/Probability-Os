@@ -52,7 +52,7 @@ No analysis generated. Try again later.
     const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
 
     let message = `${ticker} — Snapshot
-${result.isMarketOpen ? `Live update (${result.analysisTimestamp})` : `As of market close (${result.analysisTimestamp})`}
+${result.isMarketOpen ? `Live update — ${result.analysisTimestamp}` : `As of close — ${result.analysisTimestamp}`}
 ━━━━━━━━━━━━━━━━━━
 🚨 ${result.decision?.finalDecision || "HOLD"} Signal
 🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10  
@@ -61,13 +61,8 @@ ${result.isMarketOpen ? `Live update (${result.analysisTimestamp})` : `As of mar
 💰 Suggested Allocation: ${positionSizing.allocation || "0%"}  
 📌 Action: ${positionSizing.capitalAction || "No immediate action"}
 
-🧠 Analysis:`;
-
-    if (result.priceSource !== "LIVE") {
-      message += `\nThis analysis is based on the last available market data since the market is currently closed. Any action should be taken only after confirmation when the market opens.\n`;
-    }
-
-    message += `\n${result.decision?.reason || "No reasoning available"}`;
+🧠 Analysis:
+${result.decision?.reason || "No reasoning available"}`;
 
     if (rebalancer.action && rebalancer.action !== "HOLD") {
       message += `\n\n⚖️ Portfolio Action:\n${rebalancer.action}: ${rebalancer.reason || "Alignment confirmed"}`;
