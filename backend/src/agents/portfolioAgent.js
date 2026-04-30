@@ -50,7 +50,7 @@ export async function analyzePortfolio(stocks) {
 
     // Calculate position values
     let totalPortfolioValue = 0;
-    const portfolio = stocks.map(item => {
+    const evaluatedPortfolio = stocks.map(item => {
       const val = (Number(item.quantity) || 0) * (Number(item.currentPrice || item.avgPrice) || 0);
       totalPortfolioValue += val;
       return {
@@ -60,21 +60,21 @@ export async function analyzePortfolio(stocks) {
     });
 
     // Normalize weights
-    const enrichedPortfolio = portfolio.map(item => ({
+    const enrichedPortfolio = evaluatedPortfolio.map(item => ({
       ...item,
       weight: totalPortfolioValue > 0 ? (item.positionValue / totalPortfolioValue) * 100 : 0
     }));
 
     // Find dominant sector
-    const sectorMap = {};
+    const finalSectorMap = {};
     enrichedPortfolio.forEach(item => {
       const sector = item.sector || "Other";
-      sectorMap[sector] = (sectorMap[sector] || 0) + item.weight;
+      finalSectorMap[sector] = (finalSectorMap[sector] || 0) + item.weight;
     });
 
     let dominantSector = "None";
     let dominantWeight = 0;
-    for (const [sector, weight] of Object.entries(sectorMap)) {
+    for (const [sector, weight] of Object.entries(finalSectorMap)) {
       if (weight > dominantWeight) {
         dominantWeight = weight;
         dominantSector = sector;
