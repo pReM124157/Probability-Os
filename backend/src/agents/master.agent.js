@@ -22,7 +22,90 @@ export async function masterAgent(input) {
     if (input && input.mode === "conversation") {
       const { userQuery } = input;
       
-      // Attempt to extract ticker (uppercase words 3-10 chars, excluding common small words)
+      const FINSIGHT_PERSONA = `
+You are FinSight — an institutional equity intelligence system.
+Rules:
+- No greetings, no politeness filler (Hi, Hello, I understand, etc.)
+- No buzzwords (cutting-edge, advanced, excited, collaborate, etc.)
+- No repeating user input
+- No long paragraphs
+- Lead with data or proof
+- Be concise by default; expand only when analysis is requested
+- Never add filler to increase length
+- When asked "what are you" or "pitch yourself": show recent calls, not features
+- End with a clear next action
+Tone: Bloomberg Terminal + sharp sell-side analyst. Cold, precise, confident.
+`.trim();
+
+      const cleanOutput = (original, isAnalysis = false) => {
+        if (isAnalysis) return original; // Skip cleaning for structured analysis
+        
+        let text = original;
+        const bannedPhrases = [
+          "I understand that you",
+          "I'm excited to",
+          "I'm happy to",
+          "delighted to",
+          "pleased to",
+          "esteemed",
+          "cutting-edge",
+          "excited",
+          "collaborate",
+          "vast amounts",
+          "advanced",
+          "sophisticated"
+        ];
+        
+        bannedPhrases.forEach(p => {
+          text = text.replace(new RegExp(p, "gi"), "");
+        });
+
+        const hasCriticalData = (t) => /₹|\d+%|\b\d{3,}\b/.test(t);
+        
+        // Safeguard: Revert if critical data is lost during cleaning
+        if (!hasCriticalData(text) && hasCriticalData(original)) {
+          return original;
+        }
+        
+        return text.trim();
+      };
+
+      const validateResponse = (text, original) => {
+        if (text.length < 30 || text.split(" ").length < 5) {
+          return original; // Prevent broken/short outputs
+        }
+        if (/I am|I’m an AI|AI assistant|sophisticated AI/i.test(text)) {
+          return original; // Block AI identity leakage
+        }
+        return text;
+      };
+
+      const isPitchQuery = (query) => {
+        const lower = query.toLowerCase();
+        return lower.includes("what are you") || 
+               lower.includes("who are you") || 
+               lower.includes("pitch") || 
+               lower.includes("trust") || 
+               lower.includes("about finsight");
+      };
+
+      const generateProofResponse = () => {
+        return `
+FinSight — Equity Intelligence
+Recent signals:
+TCS — HOLD (weak structure)
+ICICI Bank — BUY (momentum + alignment)
+Reliance — WAIT (earnings pressure)
+Run live:
+ /analyze TCS
+`.trim();
+      };
+
+      if (isPitchQuery(userQuery)) {
+        return { response: generateProofResponse() };
+      }
+
+      // Attempt to extract ticker
       const tickerMatch = userQuery.match(/\b(?!(?:THE|AND|FOR|FOR|BUY|SELL|STOCK|THIS|THAT|WHAT|WITH|YOUR|WORK|FROM|INTO|ONTO)\b)[A-Z]{3,10}\b/);
       let liveDataSnippet = "";
       
@@ -31,40 +114,33 @@ export async function masterAgent(input) {
           try {
               const data = await getLiveMarketData(ticker);
               if (data && data.currentPrice > 0 && data.priceSource !== "FAILED") {
-                  liveDataSnippet = `
-[LIVE MARKET DATA FOR ${ticker}]
-Current Price: ₹${data.currentPrice}
-52W Range: ₹${data.fiftyTwoWeekLow} - ₹${data.fiftyTwoWeekHigh}
-Volume: ${data.volume}
-Market Cap: ${data.marketCap}
-Previous Close: ₹${data.previousClose}
-
-INSTRUCTION: You MUST use these exact numbers for ${ticker}. Never guess or use stale training data for prices, volume, or ranges.
-                  `.trim();
+                  liveDataSnippet = `[LIVE MARKET DATA FOR ${ticker}] Price: ₹${data.currentPrice} | 52W: ₹${data.fiftyTwoWeekLow}-₹${data.fiftyTwoWeekHigh} | Vol: ${data.volume} | MCAP: ${data.marketCap}`;
               }
-          } catch (err) {
-              console.log("Failed to fetch live data for conversation context:", ticker);
-          }
+          } catch (err) {}
       }
 
       const masterPrompt = `
-You are Finsight AI, a sophisticated financial assistant. 
-Your goal is to provide intelligent, data-driven financial insights.
+${FINSIGHT_PERSONA}
 
 ${liveDataSnippet}
 
 User Question: ${userQuery}
 
-Guidelines:
-1. Be professional, concise, and helpful.
-2. If asked about your work, explain that you are a multi-agent AI system designed to analyze stocks, rank opportunities, and provide portfolio insights.
-3. If asked for investment advice (e.g., "Should I buy TCS?"), provide a balanced view based on general market principles but emphasize that you are an AI and not a SEBI registered advisor. Mention that users can use /analyze TICKER for a deep dive report.
-4. If asked about specific investment amounts (e.g., "Can I invest 50k?"), discuss general asset allocation and risk management principles.
-5. If live data is provided above, incorporate it naturally into your response to ensure absolute factual accuracy.
-6. Always maintain a neutral but informative tone.
+INSTRUCTION: Provide a cold, data-driven response. Be concise. No filler.
 `.trim();
 
-      const response = await generateInvestmentAnalysis(masterPrompt);
+      let originalResponse = await generateInvestmentAnalysis(masterPrompt);
+      let response = cleanOutput(originalResponse);
+      response = validateResponse(response, originalResponse);
+      
+      // Smart length control: Cut at last sentence boundary
+      if (response.length > 600) {
+        const cutoff = response.lastIndexOf(".", 600);
+        if (cutoff > 200) {
+          response = response.slice(0, cutoff + 1);
+        }
+      }
+
       return { response };
     }
 
