@@ -7,7 +7,12 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  startBot();
-  startPortfolioScheduler();
-  startMonitoringJob();
+  
+  // DEFERRED STARTUP: Ensure health check passes before heavy jobs start
+  setTimeout(() => {
+    console.log("Initializing background services...");
+    startBot();
+    startPortfolioScheduler();
+    startMonitoringJob();
+  }, 2000);
 });
