@@ -23,15 +23,20 @@ export async function createPaymentLink(chatId, firstName) {
 }
 
 export async function createSubscriptionLink(chatId) {
-  const subscription = await razorpay.subscriptions.create({
-    plan_id: process.env.RAZORPAY_PLAN_ID,
-    total_count: 120, // 10 years
-    customer_notify: 1,
-    notes: {
-      telegram_chat_id: chatId
-    }
-  });
-  return subscription.short_url || `https://rzp.io/i/${subscription.id}`;
+  try {
+    const subscription = await razorpay.subscriptions.create({
+      plan_id: process.env.RAZORPAY_PLAN_ID,
+      total_count: 120, // 10 years
+      customer_notify: 1,
+      notes: {
+        telegram_chat_id: chatId
+      }
+    });
+    return subscription.short_url || `https://rzp.io/i/${subscription.id}`;
+  } catch (err) {
+    console.error("RAZORPAY SUBSCRIPTION CREATE ERROR:", JSON.stringify(err, null, 2));
+    throw err;
+  }
 }
 
 export async function cancelSubscriptionNow(subscriptionId) {
