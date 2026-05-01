@@ -39,12 +39,18 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
         return res.json({ status: 'duplicate' });
       }
 
+      // Extract chatId from all possible Razorpay payload paths
       let chatId = null;
-      if (data.payload?.payment?.entity?.notes?.telegram_chat_id) {
-        chatId = data.payload.payment.entity.notes.telegram_chat_id;
-      } else if (data.payload?.payment_link?.entity?.notes?.telegram_chat_id) {
-        chatId = data.payload.payment_link.entity.notes.telegram_chat_id;
-      }
+      const paymentNotes = data.payload?.payment?.entity?.notes;
+      const linkNotes = data.payload?.payment_link?.entity?.notes;
+
+      chatId = paymentNotes?.telegram_chat_id
+            || linkNotes?.telegram_chat_id
+            || null;
+
+      console.log('📦 Payment notes:', JSON.stringify(paymentNotes));
+      console.log('🔗 Link notes:', JSON.stringify(linkNotes));
+      console.log('👤 Resolved chatId:', chatId);
 
       if (chatId) {
         try {
