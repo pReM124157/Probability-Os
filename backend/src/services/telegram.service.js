@@ -1,4 +1,4 @@
-import { Telegraf } from "telegraf";
+import { Telegraf, Markup } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { getCompanyOverview } from "./marketData.service.js";
 import { analyzePortfolio } from "../agents/portfolioAgent.js";
@@ -11,7 +11,7 @@ import {
   removeHolding,
   updateHolding
 } from "./portfolioMemory.service.js";
-import { createPaymentLink } from "../routes/payment.js";
+import { createPaymentLink, createSubscriptionLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
 import { isFreeLimitReached, incrementUsage, getRemainingUsage, FREE_LIMIT } from "./usage.service.js";
 
@@ -44,17 +44,22 @@ async function isPro(chatId) {
   try {
     const { data } = await supabase
       .from('subscribers')
-      .select('status, expires_at, cancel_at_period_end')
+      .select('status, expires_at, cancel_at_period_end, trial_ends_at')
       .eq('telegram_chat_id', chatId.toString())
       .maybeSingle();
 
-    if (!data || data.status !== 'active') return false;
+    if (!data || (data.status !== 'active' && data.status !== 'grace')) return false;
 
-    // If there's an expiry date, enforce it
     const now = new Date();
-    if (data.expires_at && new Date(data.expires_at) <= now) return false;
-
-    return true;
+    // Paid subscription valid
+    if (data.expires_at && new Date(data.expires_at) > now) {
+      return true;
+    }
+    // Trial valid
+    if (data.trial_ends_at && new Date(data.trial_ends_at) > now) {
+      return true;
+    }
+    return false;
   } catch (err) {
     console.error('Subscription check failed:', err.message);
     return false;
@@ -227,6 +232,24 @@ bot.command('pay', async (ctx) => {
   }
 });
 
+bot.command('subscribe', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  await ctx.reply('⏳ Generating your subscription link...');
+  try {
+    const link = await createSubscriptionLink(chatId);
+    return ctx.reply(
+      `💎 *Subscribe to FinSight Pro*\n\n` +
+      `₹299/month (auto-renew)\n\n` +
+      `👉 ${link}\n\n` +
+      `✅ Access activates automatically after payment.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    console.error('Subscription link error:', err.message);
+    await ctx.reply(`⚠️ Could not generate subscription link.\nTry again in a moment.`);
+  }
+});
+
 // ─────────────────────────────────────────────
 // /cancel COMMAND  (must be before bot.on('text'))
 // ─────────────────────────────────────────────
@@ -235,30 +258,72 @@ bot.command('cancel', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const { data } = await supabase
     .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end')
+    .select('expires_at')
     .eq('telegram_chat_id', chatId)
     .maybeSingle();
 
-  if (!data || data.status !== 'active') {
-    return ctx.reply("❌ You don't have an active subscription.");
+  if (!data) {
+    return ctx.reply('❌ No active subscription found.');
   }
 
   const expiryDate = data.expires_at
     ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-    : 'end of billing period';
+    : 'Not set';
 
-  await ctx.reply(
+  return ctx.reply(
     `⚙️ *Cancel Subscription*\n\n` +
-    `Your Pro access is currently active.\n` +
-    `Expiry: ${expiryDate}\n\n` +
-    `Choose how you'd like to cancel:\n\n` +
-    `1️⃣ *Cancel at end of billing period* (recommended)\n` +
-    `   → Keep Pro until ${expiryDate}, then stop.\n\n` +
-    `2️⃣ *Cancel immediately*\n` +
-    `   → Lose Pro access right now.\n\n` +
-    `Reply with one of:\n` +
-    `➡️ \`cancel later\`\n` +
-    `➡️ \`cancel now\``,
+    `Your plan is active until: *${expiryDate}*\n\n` +
+    `Choose an option:`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel Now', 'cancel_now')],
+        [Markup.button.callback('⏳ Cancel Later', 'cancel_later')]
+      ])
+    }
+  );
+});
+
+// ─────────────────────────────────────────────
+// /trial COMMAND  (must be before bot.on('text'))
+// ─────────────────────────────────────────────
+
+bot.command('trial', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const { data } = await supabase
+    .from('subscribers')
+    .select('trial_used, expires_at, trial_ends_at')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (data?.trial_used) {
+    return ctx.reply('❌ Free trial already used.');
+  }
+  
+  if (data?.expires_at && new Date(data.expires_at) > new Date()) {
+    return ctx.reply('✅ You already have an active Pro subscription.');
+  }
+
+  const now = new Date();
+  const trialEnd = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+  await supabase
+    .from('subscribers')
+    .upsert({
+      telegram_chat_id: chatId,
+      trial_used: true,
+      trial_ends_at: trialEnd.toISOString(),
+      status: 'active',
+      plan: 'trial'
+    });
+
+  return ctx.reply(
+    `🎉 *3-Day Pro Trial Activated*\n\n` +
+    `You now have full access until:\n` +
+    `*${trialEnd.toDateString()}*\n\n` +
+    `Try:\n` +
+    `/analyze TCS\n\n` +
+    `Upgrade anytime with /pay`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -271,20 +336,37 @@ bot.command('status', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const { data } = await supabase
     .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end, plan')
+    .select('status, expires_at, cancel_at_period_end, plan, trial_ends_at, razorpay_subscription_id')
     .eq('telegram_chat_id', chatId)
     .maybeSingle();
 
   const now = new Date();
   const isActive =
-    data?.status === 'active' &&
-    (!data.expires_at || new Date(data.expires_at) > now);
+    (data?.status === 'active' || data?.status === 'grace') &&
+    ((data.expires_at && new Date(data.expires_at) > now) || (data.trial_ends_at && new Date(data.trial_ends_at) > now));
 
   if (!data || !isActive) {
     return ctx.reply(
       `🆓 *Free Plan*\n\n` +
       `You don't have an active Pro subscription.\n\n` +
-      `👉 Type /pay to unlock FinSight Pro for ₹299/month.`,
+      `👉 Type /subscribe to unlock FinSight Pro for ₹299/month.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  if (data.status === 'grace') {
+    return ctx.reply(
+      `⚠️ *Payment Failed*\n\n` +
+      `Your subscription is in a 48-hour grace period.\n` +
+      `We'll retry the payment automatically.\n` +
+      `Update your payment method to avoid interruption.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  if (data.trial_ends_at && new Date(data.trial_ends_at) > new Date()) {
+    return ctx.reply(
+      `🧪 *Trial Active*\n\nExpires: ${new Date(data.trial_ends_at).toDateString()}`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -293,14 +375,88 @@ bot.command('status', async (ctx) => {
     ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : 'Not set';
 
+  let expiryText = `Expires: ${expiryDate}`;
+  let autoRenewText = `Auto-renew: ${data.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}`;
+  
+  if (data.razorpay_subscription_id && !data.cancel_at_period_end) {
+    expiryText = `Renews on: ${expiryDate}`;
+    autoRenewText = `Auto-renew: ✅ On`;
+  } else if (data.razorpay_subscription_id) {
+    expiryText = `Expires on: ${expiryDate}`;
+    autoRenewText = `Auto-renew: ❌ Off`;
+  }
+
+  const subIdText = data.razorpay_subscription_id ? `Sub ID: \`${data.razorpay_subscription_id}\`\n` : '';
+
   return ctx.reply(
-    `💎 *FinSight Pro — Active*\n\n` +
+    `💎 *Pro Active*\n\n` +
     `Plan: ${data.plan || 'Pro'}\n` +
-    `Expires: ${expiryDate}\n` +
-    `Auto-renew: ${data.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}\n\n` +
+    `${expiryText}\n` +
+    `${autoRenewText}\n` +
+    `${subIdText}\n` +
     `Type /cancel to manage your subscription.`,
     { parse_mode: 'Markdown' }
   );
+});
+
+// ─────────────────────────────────────────────
+// BUTTON HANDLERS
+// ─────────────────────────────────────────────
+
+bot.action('cancel_now', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const { data } = await supabase
+    .from('subscribers')
+    .select('razorpay_subscription_id')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (data?.razorpay_subscription_id) {
+    try {
+      await cancelSubscriptionNow(data.razorpay_subscription_id);
+    } catch (err) {
+      console.error('Razorpay cancel error:', err.message);
+    }
+  }
+
+  await supabase
+    .from('subscribers')
+    .update({
+      status: 'cancelled',
+      plan: 'free',
+      cancelled_at: new Date().toISOString()
+    })
+    .eq('telegram_chat_id', chatId);
+  
+  await ctx.answerCbQuery('Subscription cancelled immediately.');
+  return ctx.reply('❌ *Subscription Cancelled*\n\nYou are now on the free plan.', { parse_mode: 'Markdown' });
+});
+
+bot.action('cancel_later', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const { data } = await supabase
+    .from('subscribers')
+    .select('razorpay_subscription_id')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (data?.razorpay_subscription_id) {
+    try {
+      await cancelSubscriptionLater(data.razorpay_subscription_id);
+    } catch (err) {
+      console.error('Razorpay update error:', err.message);
+    }
+  }
+
+  await supabase
+    .from('subscribers')
+    .update({
+      cancel_at_period_end: true
+    })
+    .eq('telegram_chat_id', chatId);
+  
+  await ctx.answerCbQuery('Cancellation scheduled for end of billing period.');
+  return ctx.reply('✅ Your subscription will continue until expiry and then stop automatically.');
 });
 
 // ─────────────────────────────────────────────
@@ -315,6 +471,7 @@ bot.on("text", async (ctx) => {
     if (!text) return;
 
     const lowerText = text.toLowerCase();
+
     const subscribed = await isPro(chatId);
 
     // Free usage limit gate — skip for Pro users
@@ -474,61 +631,6 @@ bot.on("text", async (ctx) => {
       });
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
       return await bot.telegram.sendMessage(chatId, message);
-    }
-
-    // ── Cancel at period end ───────────────────
-    if (lowerText === 'cancel later') {
-      const { data: subData } = await supabase
-        .from('subscribers')
-        .select('status')
-        .eq('telegram_chat_id', chatId.toString())
-        .maybeSingle();
-
-      if (!subData || subData.status !== 'active') {
-        return ctx.reply("❌ You don't have an active subscription to cancel.");
-      }
-
-      await supabase
-        .from('subscribers')
-        .update({ cancel_at_period_end: true })
-        .eq('telegram_chat_id', chatId.toString());
-
-      return ctx.reply(
-        `✅ *Cancellation Scheduled*\n\n` +
-        `Your Pro access will remain active until your billing period ends.\n\n` +
-        `After that, it will not renew and you'll be moved to the free plan.`,
-        { parse_mode: 'Markdown' }
-      );
-    }
-
-    // ── Cancel immediately ─────────────────────
-    if (lowerText === 'cancel now') {
-      const { data: subData } = await supabase
-        .from('subscribers')
-        .select('status')
-        .eq('telegram_chat_id', chatId.toString())
-        .maybeSingle();
-
-      if (!subData || subData.status !== 'active') {
-        return ctx.reply("❌ You don't have an active subscription to cancel.");
-      }
-
-      await supabase
-        .from('subscribers')
-        .update({
-          status: 'cancelled',
-          plan: 'free',
-          cancelled_at: new Date().toISOString()
-        })
-        .eq('telegram_chat_id', chatId.toString());
-
-      return ctx.reply(
-        `❌ *Subscription Cancelled*\n\n` +
-        `Your Pro access has been revoked immediately.\n\n` +
-        `You are now on the free plan.\n` +
-        `If this was a mistake, type /pay to resubscribe.`,
-        { parse_mode: 'Markdown' }
-      );
     }
 
     // ── Awaiting stock input ───────────────────
@@ -712,34 +814,59 @@ bot.on("text", async (ctx) => {
       ? `${aiResponse.response}\n\n⚠️ For educational purposes only.\nNot SEBI registered investment advice.`
       : aiResponse.response;
 
+    // Fetch trial status for messaging
+    const { data: subData } = await supabase
+      .from('subscribers')
+      .select('trial_ends_at, trial_used')
+      .eq('telegram_chat_id', chatId.toString())
+      .maybeSingle();
+
+    const now = new Date();
+    const trialActive = subData?.trial_ends_at && new Date(subData.trial_ends_at) > now;
+    const trialExpired = subData?.trial_used && (!subData.trial_ends_at || new Date(subData.trial_ends_at) <= now);
+
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
-      const left = await getRemainingUsage(chatId);
-      const afterLeft = Math.max(0, left - 1);
-      finalMessage += `\n\n💎 *Want deeper analysis?* → /pay`;
-      finalMessage += `\n🆓 Free requests left: ${afterLeft}/${FREE_LIMIT}`;
-      await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-      await incrementUsage(chatId);
+      if (trialExpired) {
+        finalMessage += `\n\n🚫 *Trial expired.*\nUpgrade to continue using full analysis:\nType /pay — ₹299/month`;
+        await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+      } else {
+        const left = await getRemainingUsage(chatId);
+        const afterLeft = Math.max(0, left - 1);
+        finalMessage += `\n\n💎 *Want deeper analysis?* → /pay (or try /trial)`;
+        finalMessage += `\n🆓 Free requests left: ${afterLeft}/${FREE_LIMIT}`;
+        await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+        await incrementUsage(chatId);
 
-      // Warning triggers
-      if (afterLeft === 3) {
-        await ctx.reply(
-          `⚠️ *Only 3 free messages left*\n\n` +
-          `Upgrade to Pro for unlimited access.\n` +
-          `👉 /pay`,
-          { parse_mode: 'Markdown' }
-        );
-      } else if (afterLeft === 0) {
-        await ctx.reply(
-          `⚠️ *That was your last free message.*\n\n` +
-          `Upgrade now to keep going.\n` +
-          `👉 /pay`,
-          { parse_mode: 'Markdown' }
-        );
+        // Warning triggers
+        if (afterLeft === 3) {
+          await ctx.reply(
+            `⚠️ *Only 3 free messages left*\n\n` +
+            `Try our free trial for unlimited access.\n` +
+            `👉 /trial`,
+            { parse_mode: 'Markdown' }
+          );
+        } else if (afterLeft === 0) {
+          await ctx.reply(
+            `⚠️ *That was your last free message.*\n\n` +
+            `Use /trial to get 3 days free or /pay to upgrade.\n` +
+            `👉 /trial`,
+            { parse_mode: 'Markdown' }
+          );
+        }
       }
       return;
     }
 
+    if (trialActive) {
+      const hoursLeft = Math.floor((new Date(subData.trial_ends_at) - now) / (1000 * 60 * 60));
+      if (hoursLeft <= 24) {
+        finalMessage += `\n\n⏳ *Trial ending soon (${hoursLeft}h left)*\nUpgrade now: /pay — ₹299/month`;
+      } else {
+        finalMessage += `\n\n🔥 *Trial active* — explore full analysis now.\nUpgrade before expiry to keep access:\nType /pay — ₹299/month`;
+      }
+    }
+    
     await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
     return;
 
