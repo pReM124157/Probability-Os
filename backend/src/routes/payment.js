@@ -32,7 +32,10 @@ export async function createSubscriptionLink(chatId) {
         telegram_chat_id: chatId
       }
     });
-    return subscription.short_url || `https://rzp.io/i/${subscription.id}`;
+    return { 
+      url: subscription.short_url || `https://rzp.io/i/${subscription.id}`, 
+      id: subscription.id 
+    };
   } catch (err) {
     console.error("RAZORPAY SUBSCRIPTION CREATE ERROR:", JSON.stringify(err, null, 2));
     throw err;

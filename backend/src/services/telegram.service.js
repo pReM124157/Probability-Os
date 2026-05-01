@@ -236,17 +236,25 @@ bot.command('subscribe', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   await ctx.reply('⏳ Generating your subscription link...');
   try {
-    const link = await createSubscriptionLink(chatId);
+    const { url, id } = await createSubscriptionLink(chatId);
+    
+    // Explicitly save the ID now so webhooks can safely fall back to it
+    await supabase.from('subscribers').upsert({
+      telegram_chat_id: chatId,
+      razorpay_subscription_id: id,
+      updated_at: new Date().toISOString()
+    });
+
     return ctx.reply(
       `💎 *Subscribe to FinSight Pro*\n\n` +
       `₹299/month (auto-renew)\n\n` +
-      `👉 ${link}\n\n` +
+      `👉 ${url}\n\n` +
       `✅ Access activates automatically after payment.`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
-    console.error('Subscription link error:', err.message);
-    await ctx.reply(`⚠️ Could not generate subscription link.\nTry again in a moment.`);
+    console.error('Subscription link error:', err.message, err);
+    await ctx.reply(`⚠️ Could not generate subscription link.\nCheck server logs for details.`);
   }
 });
 
