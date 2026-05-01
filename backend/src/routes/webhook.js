@@ -7,7 +7,7 @@ const router = express.Router();
 
 router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, res) => {
   console.log('🔥 Webhook endpoint HIT');
-  
+
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
   const signature = req.headers['x-razorpay-signature'];
 
@@ -20,14 +20,40 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
   shasum.update(req.body);
   const digest = shasum.digest('hex');
 
-  if (digest === signature) {
-    const data = JSON.parse(req.body);
-    console.log('Webhook received:', data.event);
-    
-    if (data.event === 'payment.captured' || data.event === 'payment_link.paid') {
-      const paymentId = data.payload?.payment?.entity?.id;
-      
-      // 1. Idempotency check: Don't process the same payment twice
+  if (digest !== signature) {
+    console.error('Invalid signature');
+    return res.status(400).send('Invalid signature');
+  }
+
+  const data = JSON.parse(req.body);
+  const event = data.event;
+  console.log('Webhook received:', event);
+
+  if (event === 'payment.captured' || event === 'payment_link.paid') {
+    console.log('📦 FULL PAYLOAD:', JSON.stringify(data.payload, null, 2));
+
+    // Extract payment entity — present in both events
+    const paymentEntity = data.payload?.payment?.entity;
+    const paymentId = paymentEntity?.id;
+    const notes = paymentEntity?.notes || {};
+
+    // For payment_link.paid, notes may also be on the payment_link entity
+    const linkNotes = data.payload?.payment_link?.entity?.notes || {};
+
+    const chatId = notes?.telegram_chat_id || linkNotes?.telegram_chat_id || null;
+
+    console.log('📦 Payment notes:', JSON.stringify(notes));
+    console.log('🔗 Link notes:', JSON.stringify(linkNotes));
+    console.log('🧠 Extracted chatId:', chatId);
+    console.log('💳 Payment ID:', paymentId);
+
+    if (!chatId) {
+      console.log('❌ No chatId found — skipping DB insert');
+      return res.status(200).json({ status: 'ok' });
+    }
+
+    // Idempotency check — only if we have a paymentId to check against
+    if (paymentId) {
       const { data: existing } = await supabase
         .from('subscribers')
         .select('razorpay_payment_id')
@@ -38,50 +64,40 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
         console.log('⚠️ Duplicate payment ignored:', paymentId);
         return res.json({ status: 'duplicate' });
       }
-
-      // Extract chatId from all possible Razorpay payload paths
-      let chatId = null;
-      const paymentNotes = data.payload?.payment?.entity?.notes;
-      const linkNotes = data.payload?.payment_link?.entity?.notes;
-
-      chatId = paymentNotes?.telegram_chat_id
-            || linkNotes?.telegram_chat_id
-            || null;
-
-      console.log('📦 Payment notes:', JSON.stringify(paymentNotes));
-      console.log('🔗 Link notes:', JSON.stringify(linkNotes));
-      console.log('👤 Resolved chatId:', chatId);
-
-      if (chatId) {
-        try {
-          // 2. Save/Activate subscriber in database
-          await supabase.from('subscribers').upsert({
-            telegram_chat_id: chatId.toString(),
-            razorpay_payment_id: paymentId,
-            status: 'active',
-            plan: 'pro',
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            updated_at: new Date()
-          });
-
-          // 3. Send Telegram confirmation
-          await bot.telegram.sendMessage(
-            chatId, 
-            `🎉 Payment Successful! Welcome to FinSight Pro. Your premium access is now active.`
-          );
-          console.log(`✅ Confirmation sent to ${chatId} for payment ${paymentId}`);
-        } catch (err) {
-          console.error('Failed to process payment/confirmation:', err);
-        }
-      } else {
-        console.log('No telegram_chat_id found in notes');
-      }
     }
-    res.json({ status: 'ok' });
-  } else {
-    console.error('Invalid signature');
-    res.status(400).send('Invalid signature');
+
+    // Save subscriber to database
+    try {
+      const { data: dbResult, error: dbError } = await supabase
+        .from('subscribers')
+        .upsert({
+          telegram_chat_id: chatId.toString(),
+          razorpay_payment_id: paymentId || null,
+          status: 'active',
+          plan: 'pro',
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          updated_at: new Date()
+        });
+
+      console.log('✅ DB Insert result:', JSON.stringify(dbResult));
+      console.log('❌ DB Error:', JSON.stringify(dbError));
+    } catch (err) {
+      console.error('🚨 Supabase crash:', err);
+    }
+
+    // Send Telegram confirmation
+    try {
+      await bot.telegram.sendMessage(
+        chatId,
+        `🎉 Payment Successful! Welcome to FinSight Pro. Your premium access is now active.`
+      );
+      console.log(`✅ Confirmation sent to ${chatId} for payment ${paymentId}`);
+    } catch (err) {
+      console.error('Telegram send failed:', err.message);
+    }
   }
+
+  res.json({ status: 'ok' });
 });
 
 export default router;
