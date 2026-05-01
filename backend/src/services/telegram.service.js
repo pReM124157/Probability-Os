@@ -228,6 +228,82 @@ bot.command('pay', async (ctx) => {
 });
 
 // ─────────────────────────────────────────────
+// /cancel COMMAND  (must be before bot.on('text'))
+// ─────────────────────────────────────────────
+
+bot.command('cancel', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const { data } = await supabase
+    .from('subscribers')
+    .select('status, expires_at, cancel_at_period_end')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (!data || data.status !== 'active') {
+    return ctx.reply("❌ You don't have an active subscription.");
+  }
+
+  const expiryDate = data.expires_at
+    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : 'end of billing period';
+
+  await ctx.reply(
+    `⚙️ *Cancel Subscription*\n\n` +
+    `Your Pro access is currently active.\n` +
+    `Expiry: ${expiryDate}\n\n` +
+    `Choose how you'd like to cancel:\n\n` +
+    `1️⃣ *Cancel at end of billing period* (recommended)\n` +
+    `   → Keep Pro until ${expiryDate}, then stop.\n\n` +
+    `2️⃣ *Cancel immediately*\n` +
+    `   → Lose Pro access right now.\n\n` +
+    `Reply with one of:\n` +
+    `➡️ \`cancel later\`\n` +
+    `➡️ \`cancel now\``,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ─────────────────────────────────────────────
+// /status COMMAND  (must be before bot.on('text'))
+// ─────────────────────────────────────────────
+
+bot.command('status', async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const { data } = await supabase
+    .from('subscribers')
+    .select('status, expires_at, cancel_at_period_end, plan')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  const now = new Date();
+  const isActive =
+    data?.status === 'active' &&
+    (!data.expires_at || new Date(data.expires_at) > now);
+
+  if (!data || !isActive) {
+    return ctx.reply(
+      `🆓 *Free Plan*\n\n` +
+      `You don't have an active Pro subscription.\n\n` +
+      `👉 Type /pay to unlock FinSight Pro for ₹299/month.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const expiryDate = data.expires_at
+    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : 'Not set';
+
+  return ctx.reply(
+    `💎 *FinSight Pro — Active*\n\n` +
+    `Plan: ${data.plan || 'Pro'}\n` +
+    `Expires: ${expiryDate}\n` +
+    `Auto-renew: ${data.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}\n\n` +
+    `Type /cancel to manage your subscription.`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ─────────────────────────────────────────────
 // MAIN MESSAGE HANDLER
 // ─────────────────────────────────────────────
 
@@ -671,83 +747,6 @@ bot.on("text", async (ctx) => {
     console.error("Telegram Bot Error:", error);
     await ctx.reply("❌ Error while processing your request.");
   }
-});
-
-// ─────────────────────────────────────────────
-// /cancel COMMAND
-// ─────────────────────────────────────────────
-
-bot.command('cancel', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const { data } = await supabase
-    .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end')
-    .eq('telegram_chat_id', chatId)
-    .maybeSingle();
-
-  if (!data || data.status !== 'active') {
-    return ctx.reply("❌ You don't have an active subscription.");
-  }
-
-  const expiryDate = data.expires_at
-    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-    : 'end of billing period';
-
-  await ctx.reply(
-    `⚙️ *Cancel Subscription*\n\n` +
-    `Your Pro access is currently active.\n` +
-    `Expiry: ${expiryDate}\n\n` +
-    `Choose how you'd like to cancel:\n\n` +
-    `1️⃣ *Cancel at end of billing period* (recommended)\n` +
-    `   → Keep Pro until ${expiryDate}, then stop.\n\n` +
-    `2️⃣ *Cancel immediately*\n` +
-    `   → Lose Pro access right now.\n\n` +
-    `Reply with one of:\n` +
-    `➡️ \`cancel later\`\n` +
-    `➡️ \`cancel now\``,
-    { parse_mode: 'Markdown' }
-  );
-});
-
-// ─────────────────────────────────────────────
-// /status COMMAND
-// ─────────────────────────────────────────────
-
-bot.command('status', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const { data } = await supabase
-    .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end, plan')
-    .eq('telegram_chat_id', chatId)
-    .maybeSingle();
-
-  // Determine if truly active (respects expiry)
-  const now = new Date();
-  const isActive =
-    data?.status === 'active' &&
-    (!data.expires_at || new Date(data.expires_at) > now);
-
-  if (!data || !isActive) {
-    return ctx.reply(
-      `🆓 *Free Plan*\n\n` +
-      `You don't have an active Pro subscription.\n\n` +
-      `👉 Type /pay to unlock FinSight Pro for ₹299/month.`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  const expiryDate = data.expires_at
-    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-    : 'Not set';
-
-  return ctx.reply(
-    `💎 *FinSight Pro — Active*\n\n` +
-    `Plan: ${data.plan || 'Pro'}\n` +
-    `Expires: ${expiryDate}\n` +
-    `Auto-renew: ${data.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}\n\n` +
-    `Type /cancel to manage your subscription.`,
-    { parse_mode: 'Markdown' }
-  );
 });
 
 // ─────────────────────────────────────────────
