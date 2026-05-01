@@ -881,9 +881,17 @@ bot.on("text", async (ctx) => {
 // ─────────────────────────────────────────────
 
 export const startBot = () => {
+  if (global.botStarted) {
+    console.log("⚠️ Bot already initialized. Skipping...");
+    return;
+  }
+  global.botStarted = true;
+
   bot.launch().catch((err) => {
     if (err.response && err.response.error_code === 409) {
       console.log("⚠️ Telegram Bot already running (409 Conflict). Skipping launch.");
+    } else {
+      console.error("❌ Telegram Bot Launch Error:", err);
     }
   });
   console.log("✅ Telegram Bot Started");
