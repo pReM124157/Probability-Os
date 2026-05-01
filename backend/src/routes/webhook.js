@@ -82,6 +82,9 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
         subscription_started_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       });
+      try {
+        await bot.telegram.sendMessage(chatId, "🎉 Subscription Activated! You are now on FinSight Pro.");
+      } catch(err) {}
     }
 
     if (event === 'invoice.paid') {
@@ -109,6 +112,11 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
           last_payment_at: new Date().toISOString()
         })
         .eq('telegram_chat_id', chatId.toString());
+      try {
+        if (invoice.billing_reason === 'subscription_cycle') {
+           await bot.telegram.sendMessage(chatId, "✅ FinSight Pro Subscription Renewed successfully!");
+        }
+      } catch(err) {}
     }
 
     if (event === 'subscription.cancelled') {
@@ -134,6 +142,9 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
           plan: 'free'
         })
         .eq('telegram_chat_id', chatId.toString());
+      try {
+        await bot.telegram.sendMessage(chatId, "❌ Your FinSight Pro subscription has been cancelled.");
+      } catch(err) {}
     }
 
     if (event === 'invoice.payment_failed') {
@@ -158,6 +169,16 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
           expires_at: graceExpiry
         })
         .eq('telegram_chat_id', chatId.toString());
+      try {
+        await bot.telegram.sendMessage(
+          chatId,
+          `⚠️ *Payment failed*\n\n` +
+          `We'll retry automatically.\n` +
+          `You still have access for 48 hours.\n` +
+          `Update payment method to avoid interruption.`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch(err) {}
     }
 
     res.json({ status: 'ok' });
