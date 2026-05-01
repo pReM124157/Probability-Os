@@ -16,7 +16,7 @@ import { getPortfolio } from "../services/portfolioMemory.service.js";
 import { logRecommendation, getLearningBoost } from "./performanceTracker.agent.js";
 import { analyzeEventRisk } from "./eventRisk.agent.js";
 
-import { generateInvestmentAnalysis } from "../services/claude.service.js";
+import { generateInvestmentAnalysis, generateTieredAnalysis } from "../services/claude.service.js";
 
 // --- Global Cache for Market Updates ---
 let marketCache = {
@@ -317,7 +317,7 @@ export async function masterAgent(input) {
   try {
     // Check if it's a conversation mode request
     if (input && input.mode === "conversation") {
-      const { userQuery } = input;
+      const { userQuery, isPro = false } = input;
 
       // 1. Intent Detection: Casual / Social (PRIORITY 1)
       const isCasual = /^(hi|hello|hey|who are you|why|how|what can you do)\b/i.test(userQuery.trim());
@@ -479,10 +479,10 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         return { response: "What do you want me to check — market or a stock?" };
       }
 
-      // 6. LLM Call
-      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: 4-5 lines max. Trader tone. If providing market data, end with a "What matters:" line.`.trim();
-      let originalResponse = await generateInvestmentAnalysis(masterPrompt);
-      let response = cleanOutput(originalResponse);
+      // 6. LLM Call (tiered by subscription)
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line.`.trim();
+      let originalResponse = await generateTieredAnalysis(masterPrompt, isPro);
+      let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
       
       // Smart length control

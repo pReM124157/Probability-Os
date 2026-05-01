@@ -16,6 +16,76 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * Low-level caller for Groq API with 4-layer fallback and retry delays.
  */
+// ─────────────────────────────────────────────
+// TIER SYSTEM PROMPTS
+// ─────────────────────────────────────────────
+
+const PRO_SYSTEM_PROMPT = `
+You are FinSight — an institutional-grade stock analysis AI.
+Provide:
+- Entry zones with specific price levels
+- Stop loss levels
+- Profit targets
+- Risk level (LOW/MEDIUM/HIGH)
+- Clear BUY / HOLD / AVOID signal
+- Structured, data-driven output
+Be precise, concise, and professional.
+Always end with: ⚠️ Educational only. Not financial advice.
+`.trim();
+
+const FREE_SYSTEM_PROMPT = `
+You are FinSight FREE version.
+STRICT RULES — follow without exception:
+- No entry price
+- No stop loss
+- No targets
+- No buy/sell/hold recommendations
+- No actionable advice of any kind
+- Maximum 2-3 sentences only
+Only give high-level market context or general sentiment.
+End EXACTLY with this line (no variation):
+"💎 Upgrade to Pro for full analysis → /pay"
+`.trim();
+
+/**
+ * Tiered LLM call — Pro gets full response, Free gets restricted overview with upsell.
+ */
+export const generateTieredAnalysis = async (userPrompt, isPro) => {
+  const systemPrompt = isPro ? PRO_SYSTEM_PROMPT : FREE_SYSTEM_PROMPT;
+  const maxTokens = isPro ? 1200 : 250;
+
+  try {
+    const response = await primaryGroq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      max_tokens: maxTokens,
+      temperature: isPro ? 0.1 : 0.3
+    });
+    return response.choices[0].message.content;
+  } catch (err) {
+    console.error('[TIERED LLM] Primary failed, falling back:', err.message);
+    try {
+      const response = await backupGroq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        max_tokens: maxTokens,
+        temperature: isPro ? 0.1 : 0.3
+      });
+      return response.choices[0].message.content;
+    } catch (err2) {
+      return isPro
+        ? handleFinalFallback(userPrompt)
+        : "Market data is currently being processed.\n\n💎 For full analysis with entry zones, targets & stop loss → /pay (₹299/month)";
+    }
+  }
+};
+
 export const generateInvestmentAnalysis = async (prompt) => {
   const PRIMARY_MODEL = "llama-3.3-70b-versatile";
   const FALLBACK_MODEL = "llama-3.1-8b-instant";

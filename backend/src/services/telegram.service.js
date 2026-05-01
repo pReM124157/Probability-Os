@@ -241,9 +241,16 @@ bot.on("text", async (ctx) => {
       if (limitReached) {
         await ctx.reply(
           `🚫 *Free Limit Reached*\n\n` +
-          `You've used all ${FREE_LIMIT} free requests.\n\n` +
-          `Unlock unlimited access with FinSight Pro:\n` +
-          `👉 /pay`,
+          `You've used all ${FREE_LIMIT} free messages.\n\n` +
+          `━━━━━━━━━━━━━━━\n` +
+          `💎 *FinSight Pro — ₹299/month*\n` +
+          `━━━━━━━━━━━━━━━\n\n` +
+          `✓ Full stock analysis\n` +
+          `✓ Entry zones + stop loss\n` +
+          `✓ Profit targets\n` +
+          `✓ Market scanner\n` +
+          `✓ Portfolio tracking\n\n` +
+          `👉 Type /pay to unlock`,
           { parse_mode: 'Markdown' }
         );
         return;
@@ -532,10 +539,23 @@ bot.on("text", async (ctx) => {
     }
 
     // ── Conversational AI Fallback (tiered) ───
-    // Check for pro keywords BEFORE running AI
-    const wantsPro = PRO_KEYWORDS.some(k => lowerText.includes(k));
-    if (!subscribed && wantsPro) {
-      await sendKeywordUpsell(ctx);
+    // Block advanced intent BEFORE any AI call fires
+    const advancedKeywords = [
+      'entry', 'target', 'stop loss', 'stoploss', 'stop-loss',
+      'buy', 'sell', 'should i buy', 'should i sell',
+      'price level', 'long term', 'short term',
+      'portfolio', 'allocation', 'best entry',
+      'deep', 'analyse', 'full analysis', 'exit',
+      'rebalance', 'when to buy', 'when to sell'
+    ];
+    const wantsAdvanced = advancedKeywords.some(k => lowerText.includes(k));
+    if (!subscribed && wantsAdvanced) {
+      await ctx.reply(
+        `🔒 *Pro Feature*\n\n` +
+        `Detailed analysis requires FinSight Pro.\n\n` +
+        `👉 Unlock here: /pay`,
+        { parse_mode: 'Markdown' }
+      );
       return;
     }
 
@@ -544,7 +564,7 @@ bot.on("text", async (ctx) => {
       contextualQuery = `Previous Context:\n${ctx.message.reply_to_message.text}\n\nUser Follow-up:\n${text}`.trim();
     }
 
-    const aiResponse = await masterAgent({ userQuery: contextualQuery, mode: "conversation" });
+    const aiResponse = await masterAgent({ userQuery: contextualQuery, mode: "conversation", isPro: subscribed });
 
     const needsDisclaimer =
       lowerText.includes("buy") || lowerText.includes("invest") ||
@@ -558,10 +578,28 @@ bot.on("text", async (ctx) => {
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
       const left = await getRemainingUsage(chatId);
+      const afterLeft = Math.max(0, left - 1);
       finalMessage += `\n\n💎 *Want deeper analysis?* → /pay`;
-      finalMessage += `\n🆓 Free requests left: ${Math.max(0, left - 1)}/${FREE_LIMIT}`;
+      finalMessage += `\n🆓 Free requests left: ${afterLeft}/${FREE_LIMIT}`;
       await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
       await incrementUsage(chatId);
+
+      // Warning triggers
+      if (afterLeft === 3) {
+        await ctx.reply(
+          `⚠️ *Only 3 free messages left*\n\n` +
+          `Upgrade to Pro for unlimited access.\n` +
+          `👉 /pay`,
+          { parse_mode: 'Markdown' }
+        );
+      } else if (afterLeft === 0) {
+        await ctx.reply(
+          `⚠️ *That was your last free message.*\n\n` +
+          `Upgrade now to keep going.\n` +
+          `👉 /pay`,
+          { parse_mode: 'Markdown' }
+        );
+      }
       return;
     }
 
