@@ -9,6 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-console.log("USING SUPABASE KEY TYPE: SERVICE_ROLE");
+console.log("SUPABASE KEY START:", process.env.SUPABASE_SERVICE_ROLE_KEY?.slice(0, 15) ?? "❌ UNDEFINED — not loaded");
+console.log("SUPABASE URL:", process.env.SUPABASE_URL?.slice(0, 30) ?? "❌ UNDEFINED");
 
 export default supabase;
