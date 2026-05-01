@@ -4,6 +4,7 @@ import supabase from "./services/supabase.service.js";
 import { getCompanyOverview } from "./services/marketData.service.js";
 import { generateInvestmentAnalysis } from "./services/claude.service.js";
 import { masterAgent } from "./agents/master.agent.js";
+import webhookRouter from "./routes/webhook.js";
 
 
 const app = express();
@@ -16,6 +17,8 @@ app.get("/", (req, res) => {
 app.use(cors({
   origin: "*"
 }));
+
+app.use('/webhook', webhookRouter);
 app.use(express.json());
 
 
