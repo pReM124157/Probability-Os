@@ -53,6 +53,8 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
             telegram_chat_id: chatId.toString(),
             razorpay_payment_id: paymentId,
             status: 'active',
+            plan: 'pro',
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
             updated_at: new Date()
           });
 
