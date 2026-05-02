@@ -48,21 +48,39 @@ async function isProUser(chatId) {
   }
 }
 
-function getFreeUserFooter(usageCount, isHighIntent = false) {
-  const remaining = Math.max(0, 10 - usageCount);
-  let footer = `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 remaining`;
+function getFreeUserFooter(usage, isUpgrade = false) {
+  const projected = usage + 1;
+  const stars = "⭐".repeat(Math.min(projected, 10));
   
-  if (remaining === 2) {
-    footer += `\n\n⚠️ 2 requests left.\nYou're close to your limit.\n👉 /subscribe`;
-  } else if (remaining === 1) {
-    footer += `\n\n⚠️ 1 request left.\nLast free request before lock.\n👉 /subscribe`;
-  } else if (isHighIntent) {
-    footer += `\n\n💎 Most users tracking multiple stocks switch to Pro.\nIt removes interruptions.\n👉 /subscribe`;
-  } else {
-    footer += `\n💎 Upgrade for unlimited:\n👉 /subscribe`;
+  if (isUpgrade) {
+    return `\n\n💎 *Unlock FinSight Pro*\nUnlimited analysis and sharp signals.\n/subscribe — ₹299/month`;
   }
   
-  return footer;
+  return `\n\n📈 *Requests:* ${projected}/10\n${stars}\nGet unlimited access with /subscribe`;
+}
+
+function getNextSessionNote(status) {
+  if (status.isWeekend) return "Next session: Monday 9:15 AM";
+  if (status.isHoliday) return "Next session: Next trading day 9:15 AM";
+  if (status.isAfterClose) return "Next session: Tomorrow 9:15 AM";
+  return "";
+}
+
+function formatAnalysis(res, symbol) {
+  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
+  const nextLine = nextSession ? `👉 ${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
+
+  return `
+📊 *${symbol.toUpperCase()} Analysis*
+${res.marketNote ? `_${res.marketNote}_\n` : ""}
+🎯 *Confidence:* ${res.confidence}/10
+⚠ *Risk:* ${res.riskLevel}
+📌 *Action:* ${res.action}
+${nextLine}
+
+🧠 *Analysis:*
+${res.decision?.reason || "No reasoning available"}
+`.trim();
 }
 
 // ─────────────────────────────────────────────
@@ -87,21 +105,7 @@ async function performAnalysis(chatId, symbol, footer = "") {
       return;
     }
 
-    let message = `${ticker} — Snapshot\n`;
-    message += result.isMarketOpen ? `🟢 Live — ${result.analysisTimestamp}\n` : `⚪ Close — ${result.analysisTimestamp}\n`;
-    
-    if (result.marketNote) {
-      message += `⚠️ _${result.marketNote}_\n`;
-    }
-    
-    message += `━━━━━━━━━━━━━━━━━━\n`;
-    message += `🚨 ${result.decision?.finalDecision || "HOLD"} Signal\n`;
-    message += `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n`;
-    message += `⚠ Risk: ${result.risk?.riskLevel || "N/A"}\n`;
-    message += `📊 Strength: ${result.ranking?.rankScore || 0}/10\n`;
-    message += `💰 Allocation: ${result.allocation || "0%"}\n`;
-    message += `📌 Action: ${result.capitalAction || "No immediate action"}\n\n`;
-    message += `🧠 Analysis:\n${result.decision?.reason || "No reasoning available"}`;
+    const message = formatAnalysis(result, ticker);
 
     const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
 
@@ -627,110 +631,51 @@ bot.on("text", async (ctx) => {
       return;
     }
 
+    // ── Intent Detection ───
+    const tickerMatch = text.match(/^[a-z]{2,10}(\.ns)?$/i);
+    const analyzeMatch = text.toLowerCase().includes("analyze");
+
+    if (tickerMatch || analyzeMatch) {
+      const symbol = tickerMatch ? text : text.toLowerCase().replace(/analyze|check|scan/g, "").trim();
+      if (symbol && symbol.length <= 15) {
+        await performAnalysis(chatId, symbol, !subscribed ? getFreeUserFooter(displayedUsage) : "");
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
+        return;
+      }
+    }
+
     const simpleReplies = {
-      'hi': "What are you looking at today — a stock or the market?",
-      'hello': "What do you want to analyze?",
-      'ok': "Alright.",
-      'okay': "Alright.",
+      'hi': "What do you want to check — a stock or the market?",
+      'hello': "What do you want to analyze today?",
+      'how are you': "Focused on markets. What do you want to check?",
+      'ok': "Got it.",
+      'okay': "Got it.",
       'thanks': "Anytime.",
       'thank you': "Anytime.",
       'bye': "Alright. Reach out when you need clarity."
     };
 
     if (simpleReplies[lowerText]) {
-      if (!ctx.session) ctx.session = {};
-      if (ctx.session.lastMessage === lowerText) return;
-      ctx.session.lastMessage = lowerText;
-      let reply = simpleReplies[lowerText];
-      return await bot.telegram.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
-    }
-    if (ctx.session) ctx.session.lastMessage = null;
-
-    if (lowerText.includes("free request") || lowerText.includes("usage") || lowerText === "/usage") {
-      const usage = await getRemainingUsage(chatId);
-      if (!usage) {
-        return await bot.telegram.sendMessage(chatId, "Could not fetch usage. Try again.");
-      }
-      const resetTime = new Date(usage.resetAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" });
-      return await bot.telegram.sendMessage(chatId, `📊 *Usage Status*\n\nYou have ${usage.remaining}/10 requests left.\nResets at ${resetTime} (IST)`, { parse_mode: 'Markdown' });
+      return await bot.telegram.sendMessage(chatId, simpleReplies[lowerText]);
     }
 
-    const explicitAnalyzeMatch = lowerText.match(/^\/?(?:analyze|analyse|anyze|check|scan)\s+([a-z0-9_.-]+)$/i);
-    const implicitAnalyzeMatch = lowerText.match(/^[A-Z]{2,10}(\.NS)?$/i);
-
-    let tickerToAnalyze = null;
-    if (explicitAnalyzeMatch && explicitAnalyzeMatch[1].length <= 15) {
-      tickerToAnalyze = explicitAnalyzeMatch[1].toUpperCase();
-    } else if (implicitAnalyzeMatch && implicitAnalyzeMatch[0].length <= 15) {
-      const isSystemCommand = ['start', 'status', 'portfolio', 'top', 'scanner', 'sector', 'sectors', 'rotation', 'pay', 'subscribe', 'help'].includes(lowerText);
-      if (!isSystemCommand) {
-        tickerToAnalyze = implicitAnalyzeMatch[0].toUpperCase();
-      }
-    }
-
-    if (tickerToAnalyze) {
-      await performAnalysis(chatId, tickerToAnalyze, !subscribed ? getFreeUserFooter(displayedUsage, true) : "");
-      if (!subscribed && !skipUsage) await incrementUsage(chatId);
-      return;
-    }
-
-    // ── Intent Detection & Fallback ───
-    function detectIntent(text) {
-      const t = text.toLowerCase().trim();
-      const financeKeywords = [
-        "analyze", "stock", "price", "market",
-        "portfolio", "compare", "buy", "sell", "top", "best"
-      ];
-      if (financeKeywords.some(k => t.includes(k))) return "finance";
-      if (t.length < 4) return "chat";
-      
-      const stockPattern = /^[a-z]{2,10}(\.ns)?$/i;
-      if (stockPattern.test(t)) {
-        return "finance";
-      }
-      return "chat";
-    }
-
-    const intent = detectIntent(text);
+    // ── AI Conversation (Finance or Casual) ───
     let finalMessage = "";
-
-    if (intent === "finance") {
-      let contextualQuery = text;
-      if (ctx.message.reply_to_message?.text) {
-        contextualQuery = `Previous Context:\n${ctx.message.reply_to_message.text}\n\nUser Follow-up:\n${text}`.trim();
-      }
-
-      const aiResponse = await masterAgent({ userQuery: contextualQuery, mode: "conversation", isPro: subscribed });
-
-      const needsDisclaimer =
-        lowerText.includes("buy") || lowerText.includes("invest") ||
-        lowerText.includes("stock") || lowerText.includes("portfolio") ||
-        lowerText.includes("money") || lowerText.includes("market");
-
-      finalMessage = needsDisclaimer
-        ? `${aiResponse.response}\n\n⚠️ For educational purposes only.\nNot SEBI registered investment advice.`
-        : aiResponse.response;
-    } else {
-      try {
-        finalMessage = await generateChatReply(chatId, text);
-      } catch (err) {
-        console.error("CHAT FAIL:", err);
-        finalMessage = "Ask me about any stock or market — I’ll break it down.";
-      }
+    try {
+      const aiResponse = await masterAgent({ userQuery: text, mode: "conversation", isPro: subscribed });
+      finalMessage = aiResponse.response;
+    } catch (err) {
+      console.error("AI FAIL:", err);
+      finalMessage = "Ask me about any stock or market — I’ll break it down.";
     }
 
-    // Fetch trial status for messaging
-    // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
       finalMessage += getFreeUserFooter(displayedUsage);
     }
     
     await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-    if (!subscribed && !skipUsage) {
-      await incrementUsage(chatId);
-      const { count: afterCount } = await checkUsage(chatId);
-      console.log(`[DEBUG] ChatID: ${chatId} | USAGE AFTER DB: ${afterCount}`);
-    }
+    if (!subscribed && !skipUsage) await incrementUsage(chatId);
+    return;
     return;
 
   } catch (error) {

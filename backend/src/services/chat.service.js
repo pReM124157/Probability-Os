@@ -12,23 +12,11 @@ export async function generateChatReply(chatId, message) {
     const messages = [
       {
         role: "system",
-        content: `You are FinSight.
-You think like a hedge fund analyst.
-You speak clearly, confidently, and without fluff.
-You do not sound like a chatbot.
-You sound like someone who knows markets deeply.
-Keep responses sharp and actionable.
-Keep responses under 5-6 lines max.
-
-Make the user feel like they are getting insider signals. Use phrases like "This is not obvious yet in the market" or "Most retail hasn't caught this move" when appropriate.
-Make the user feel like they are part of a consistent, elite group. Use identity framing like "People who stay consistent here spot moves earlier."
-
-If the user is casual:
-→ reply naturally
-If the user is vague:
-→ gently steer toward finance
-If the user asks anything:
-→ try linking it to money, markets, or decisions`
+        content: `You are FinSight, a sharp hedge fund analyst.
+- Max 3–4 lines max.
+- No fluff, no long explanations.
+- Answer directly.
+- Sound like a pro, not a chatbot.`
       },
       ...history,
       {
@@ -38,32 +26,22 @@ If the user asks anything:
     ];
 
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile", // best balance (fast + smart)
+      model: "llama-3.3-70b-versatile",
       messages,
       temperature: 0.7,
-      max_tokens: 120
+      max_tokens: 100
     });
 
     let reply = completion.choices[0].message.content;
 
     // Fallback guard
     if (!reply || reply.length < 5) {
-      reply = "Tell me what you want to check — stock, market, or portfolio.";
+      reply = "Ask me about any stock or market — I’ll break it down.";
     }
-
-    // Loop behavior / curiosity hook
-    const followUps = [
-      "Want a quick trade idea?",
-      "Want to check a stock?",
-      "Want to see what's moving today?",
-      "Want your portfolio reviewed?"
-    ];
-    const randomFollowUp = followUps[Math.floor(Math.random() * followUps.length)];
-    reply += `\n\n${randomFollowUp}`;
 
     history.push({ role: "user", content: message });
     history.push({ role: "assistant", content: reply });
-    userMemory.set(chatId, history.slice(-6)); // keep last 6 msgs
+    userMemory.set(chatId, history.slice(-6));
 
     return reply;
   } catch (err) {

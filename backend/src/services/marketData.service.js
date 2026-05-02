@@ -1,4 +1,6 @@
+import axios from 'axios';
 import YahooFinance from "yahoo-finance2";
+import { fetchIndianHolidays } from "./holiday.service.js";
 
 const yahooFinance = new YahooFinance();
 
@@ -176,55 +178,33 @@ export async function getCompanyOverview(symbol) {
 
 const priceCache = new Map();
 
-function getHolidays(year) {
-    // NSE/BSE Holiday List Placeholder
-    // In production, this can be fetched from an API or a JSON config
-    const holidayMap = {
-        2026: [
-            "01-26", // Republic Day
-            "03-13", // Holi
-            "04-01", // Annual Bank Closing
-            "04-02", // Good Friday
-            "05-01", // Maharashtra Day
-            "08-15", // Independence Day
-            "10-02", // Gandhi Jayanti
-            "10-23", // Dussehra
-            "11-12", // Diwali
-            "12-25"  // Christmas
-        ],
-        2027: [
-            "01-26", "08-15", "10-02", "12-25" // Minimal 2027 placeholders
-        ]
-    };
-    return holidayMap[year] || [];
-}
-
-function checkIsMarketOpen() {
+async function getMarketStatusIST() {
     const now = new Date();
-    // IST is UTC+5.5
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(now.getTime() + istOffset);
+    const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const year = ist.getFullYear();
+    const dateStr = ist.toISOString().split("T")[0];
+    const holidays = await fetchIndianHolidays(year);
     
-    const day = istDate.getUTCDay(); // 0 is Sunday, 6 is Saturday
-    const hours = istDate.getUTCHours();
-    const minutes = istDate.getUTCMinutes();
+    const day = ist.getDay(); 
+    const hours = ist.getHours();
+    const minutes = ist.getMinutes();
     
-    const year = istDate.getUTCFullYear();
-    const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0');
-    const date = istDate.getUTCDate().toString().padStart(2, '0');
-    const dayMonth = `${month}-${date}`;
+    const time = hours * 60 + minutes;
+    const open = 9 * 60 + 15;   // 9:15 AM
+    const close = 15 * 60 + 30; // 3:30 PM
     
-    const holidays = getHolidays(year);
-
-    if (day === 0 || day === 6 || holidays.includes(dayMonth)) {
-        return false;
-    }
+    const isWeekend = day === 0 || day === 6;
+    const isHoliday = holidays.has(dateStr);
+    const isOpenHours = time >= open && time <= close;
     
-    // Market open: Mon-Fri, 9:15 AM to 3:30 PM IST
-    const timeInMinutes = hours * 60 + minutes;
-    const isOpenTime = timeInMinutes >= (9 * 60 + 15) && timeInMinutes <= (15 * 60 + 30);
-    
-    return isOpenTime;
+    return {
+        isMarketOpen: !isWeekend && !isHoliday && isOpenHours,
+        isWeekend,
+        isHoliday,
+        isBeforeOpen: !isWeekend && !isHoliday && time < open,
+        isAfterClose: !isWeekend && !isHoliday && time > close,
+        istTime: ist
+    };
 }
 
 async function retry(fn, retries = 3, initialDelay = 500) {
@@ -250,7 +230,8 @@ export async function getLiveMarketData(symbol) {
     let result = null;
     let fetchSymbol = "";
     let priceSource = "FAILED";
-    const isMarketOpen = checkIsMarketOpen();
+    const marketStatus = await getMarketStatusIST();
+    const isMarketOpen = marketStatus.isMarketOpen;
 
     // 1. ATTEMPT LIVE FETCH
     for (const sym of symbolsToTry) {
@@ -328,6 +309,7 @@ export async function getLiveMarketData(symbol) {
       latencyBlocked: latencyBlocked,
       fetchDuration: fetchDuration,
       isMarketOpen: isMarketOpen,
+      marketStatus: marketStatus,
       previousClose: previousClose || (priceCache.get(upperSymbol)?.price) || 0,
       volume: result?.regularMarketVolume || 0,
       averageVolume: result?.averageDailyVolume3Month || 0,

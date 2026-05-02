@@ -631,12 +631,25 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     
     // --- MARKET STATE CONTEXT ---
     const isLive = liveMarketData.priceSource === "LIVE" && !liveMarketData.latencyBlocked;
-    const marketNote = isLive ? null : (liveMarketData.isMarketOpen ? "Data delayed — verify before entry" : "Market closed — using last available close");
+    const marketStatus = liveMarketData.marketStatus || {};
+    
+    let marketNote = isLive ? null : "⚠️ Market Closed";
+    if (marketStatus.isWeekend) {
+      marketNote = "📅 Market closed (Weekend)";
+    } else if (marketStatus.isHoliday) {
+      marketNote = "📅 Market closed (Holiday)";
+    } else if (marketStatus.isAfterClose) {
+      marketNote = "⏱ Market closed for today";
+    } else if (marketStatus.isBeforeOpen) {
+      marketNote = "⏳ Market not opened yet";
+    } else if (liveMarketData.isMarketOpen && !isLive) {
+      marketNote = "⏱ Data delayed — verify before entry";
+    }
 
     // CRITICAL: Adjust confidence if data is degraded but ALLOW analysis
     if (!isLive) {
       console.log(`[DEGRADED MODE] ${ticker}. Source: ${liveMarketData.priceSource}. Proceeding with caution.`);
-      adjustedConfidence = Math.min(adjustedConfidence, 5); // Cap confidence at 5 for stale data
+      adjustedConfidence = Math.min(adjustedConfidence, 7); // Cap confidence at 7 for stale data
     }
 
     // Ensure score stays within 1-10 range
@@ -874,6 +887,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       marketNote,
       isMarketOpen: liveMarketData.isMarketOpen,
       currentPrice: activePrice,
+      confidence: adjustedConfidence,
+      riskLevel: risk.riskLevel || "MEDIUM",
+      action: finalDecision.finalDecision || "HOLD",
+      nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
+                (marketStatus.isAfterClose ? "Monitor tomorrow's open" : 
+                (marketStatus.isBeforeOpen ? "Wait for market open" : 
+                (entryTiming.strategy === "AVOID ENTRY" ? "Monitor for setup" : "Wait for price confirmation"))),
       analysisTimestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
     };
   } catch (error) {
