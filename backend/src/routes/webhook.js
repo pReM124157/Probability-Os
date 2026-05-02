@@ -6,32 +6,40 @@ import supabase from '../services/supabase.service.js';
 const router = express.Router();
 
 router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, res) => {
-  console.log('🔥 Webhook endpoint HIT');
-
-  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  console.log('🔥 RAW WEBHOOK RECEIVED');
   const signature = req.headers['x-razorpay-signature'];
+  console.log('SIGNATURE HEADER:', signature);
 
-  if (!signature) {
-    console.log('No signature found');
-    return res.status(400).send('No signature');
-  }
+  // 1. Respond 200 OK immediately to Razorpay
+  res.json({ status: 'ok' });
 
-  const shasum = crypto.createHmac('sha256', secret);
-  shasum.update(req.body);
-  const digest = shasum.digest('hex');
+  // 2. Process logic asynchronously
+  setImmediate(async () => {
+    try {
+      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-  if (digest !== signature) {
-    console.error('Invalid signature');
-    return res.status(400).send('Invalid signature');
-  }
+      if (!signature) {
+        console.log('❌ No signature found');
+        return;
+      }
 
-  try {
-    const data = JSON.parse(req.body);
-    console.log("🔥 WEBHOOK HIT", data.event);
-    console.log("BODY:", JSON.stringify(data, null, 2));
+      const shasum = crypto.createHmac('sha256', secret);
+      shasum.update(req.body.toString());
+      const digest = shasum.digest('hex');
 
-    const event = data.event;
-    const payload = data.payload;
+      if (digest !== signature) {
+        console.error('❌ Invalid signature');
+        console.log("EXPECTED:", digest);
+        console.log("RECEIVED:", signature);
+        return;
+      }
+
+      const data = JSON.parse(req.body);
+      console.log("🔥 WEBHOOK HIT", data.event);
+      console.log("BODY:", JSON.stringify(data, null, 2));
+
+      const event = data.event;
+      const payload = data.payload;
 
 
     if (event === 'subscription.activated') {
@@ -67,37 +75,43 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
 
     if (event === 'invoice.paid' || event === 'subscription.charged') {
       const invoice = payload.invoice?.entity || payload.subscription?.entity;
-      console.log("INVOICE/SUB ID:", invoice.id);
-      let chatId = invoice.notes?.telegram_chat_id;
-      if (!chatId && (invoice.subscription_id || invoice.id)) {
-        const subId = invoice.subscription_id || invoice.id;
-        const { data: user } = await supabase
-          .from('subscribers')
-          .select('telegram_chat_id')
-          .eq('razorpay_subscription_id', subId)
-          .maybeSingle();
-        chatId = user?.telegram_chat_id;
-      }
+      const subId = invoice.subscription_id || invoice.id;
+      console.log("INVOICE/SUB ID:", subId);
+      
+      const { data: user } = await supabase
+        .from('subscribers')
+        .select('telegram_chat_id')
+        .eq('razorpay_subscription_id', subId)
+        .maybeSingle();
+        
+      const chatId = user?.telegram_chat_id;
       console.log("CHAT ID:", chatId);
+      
       if (!chatId) {
-        console.log(`❌ No chatId for ${event}:`, invoice.id);
+        console.log(`❌ No chatId for ${event}:`, subId);
         return res.json({ status: 'ok' });
       }
-      console.log("RENEWAL FOR:", chatId);
+
+      console.log("ACTIVATING/RENEWING FOR:", chatId);
       await supabase
         .from('subscribers')
         .update({
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           status: 'active',
           plan: 'pro',
-          last_payment_at: new Date().toISOString()
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          last_payment_at: new Date().toISOString(),
+          subscription_started_at: new Date().toISOString() // Ensure started_at is set
         })
         .eq('telegram_chat_id', chatId.toString());
+
       try {
-        if (invoice.billing_reason === 'subscription_cycle') {
-           await bot.telegram.sendMessage(chatId, "✅ FinSight Pro Subscription Renewed successfully!");
-        }
-      } catch(err) {}
+        await bot.telegram.sendMessage(
+          chatId, 
+          "🎉 Subscription Activated! You now have unlimited access to FinSight Pro."
+        );
+      } catch(err) {
+        console.error("Failed to send activation message:", err.message);
+      }
     }
 
     if (event === 'subscription.cancelled') {
@@ -166,11 +180,10 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       } catch(err) {}
     }
 
-    res.json({ status: 'ok' });
-  } catch (err) {
-    console.error("WEBHOOK ERROR:", JSON.stringify(err, null, 2));
-    res.status(500).json({ error: 'Webhook processing error' });
-  }
+    } catch (err) {
+      console.error("❌ WEBHOOK ERROR FULL:", err);
+    }
+  });
 });
 
 export default router;
