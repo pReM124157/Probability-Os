@@ -44,7 +44,7 @@ async function isPro(chatId) {
   try {
     const { data } = await supabase
       .from('subscribers')
-      .select('status, expires_at, cancel_at_period_end, trial_ends_at')
+      .select('status, plan, expires_at, cancel_at_period_end, trial_ends_at')
       .eq('telegram_chat_id', chatId.toString())
       .maybeSingle();
 
@@ -56,7 +56,7 @@ async function isPro(chatId) {
       return true;
     }
     // Trial valid
-    if (data.trial_ends_at && new Date(data.trial_ends_at) > now) {
+    if (data.plan === 'trial' && data.trial_ends_at && new Date(data.trial_ends_at) > now) {
       return true;
     }
     return false;
@@ -81,7 +81,7 @@ async function sendProUpsell(ctx) {
     `• Market scanner\n` +
     `• Sector rotation reports\n\n` +
     `₹299/month — Cancel anytime.\n\n` +
-    `👉 Type /pay to unlock instantly`,
+    `👉 Type /subscribe to unlock instantly`,
     { parse_mode: 'Markdown' }
   );
 }
@@ -95,7 +95,7 @@ async function sendKeywordUpsell(ctx) {
     `• Stop-loss levels\n` +
     `• AI-powered deep dive\n` +
     `• Portfolio rebalancing\n\n` +
-    `👉 Unlock here: /pay`,
+    `👉 Unlock here: /subscribe`,
     { parse_mode: 'Markdown' }
   );
 }
@@ -182,7 +182,7 @@ async function performBasicOverview(chatId, symbol) {
       `Risk Level: ${result.risk?.riskLevel || 'N/A'}\n` +
       `Market Trend: ${result.decision?.finalDecision === 'BUY' ? 'Bullish' : result.decision?.finalDecision === 'SELL' ? 'Bearish' : 'Range-bound'}\n\n` +
       `⚠️ *Want entry points, targets & deep analysis?*\n` +
-      `👉 Upgrade to Pro: /pay`;
+      `👉 Upgrade to Pro: /subscribe`;
 
     await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
   } catch (err) {
@@ -208,42 +208,17 @@ bot.command('start', async (ctx) => {
     `• Portfolio tracking\n` +
     `• Market scanner\n\n` +
     `Type /help to see all commands.\n` +
-    `Type /pay to unlock Pro.`,
+    `Type /subscribe to unlock Pro.`,
     { parse_mode: 'Markdown' }
   );
 });
 
-bot.command('pay', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const name = ctx.from.first_name || 'User';
-  await ctx.reply('⏳ Generating your payment link...');
-  try {
-    const paymentUrl = await createPaymentLink(chatId, name);
-    await ctx.reply(
-      `💳 *FinSight Pro*\n\n` +
-      `₹299/month\n\n` +
-      `👉 ${paymentUrl}\n\n` +
-      `✅ Access activates automatically after payment.`,
-      { parse_mode: 'Markdown' }
-    );
-  } catch (err) {
-    console.error('Payment link error:', err.message);
-    await ctx.reply(`⚠️ Could not generate payment link.\nTry again in a moment.`);
-  }
-});
 
 bot.command('subscribe', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   await ctx.reply('⏳ Generating your subscription link...');
   try {
-    const { url, id } = await createSubscriptionLink(chatId);
-    
-    // Explicitly save the ID now so webhooks can safely fall back to it
-    await supabase.from('subscribers').upsert({
-      telegram_chat_id: chatId,
-      razorpay_subscription_id: id,
-      updated_at: new Date().toISOString()
-    });
+    const { url } = await createSubscriptionLink(chatId);
 
     return ctx.reply(
       `💎 *Subscribe to FinSight Pro*\n\n` +
@@ -300,40 +275,24 @@ bot.command('trial', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const { data } = await supabase
     .from('subscribers')
-    .select('trial_used, expires_at, trial_ends_at')
+    .select('*')
     .eq('telegram_chat_id', chatId)
-    .maybeSingle();
+    .single();
 
   if (data?.trial_used) {
-    return ctx.reply('❌ Free trial already used.');
-  }
-  
-  if (data?.expires_at && new Date(data.expires_at) > new Date()) {
-    return ctx.reply('✅ You already have an active Pro subscription.');
+    return ctx.reply("❌ Trial already used.");
   }
 
-  const now = new Date();
-  const trialEnd = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const expiry = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  await supabase.from('subscribers').upsert({
+    telegram_chat_id: chatId,
+    status: 'active',
+    plan: 'trial',
+    trial_used: true,
+    trial_ends_at: expiry
+  });
 
-  await supabase
-    .from('subscribers')
-    .upsert({
-      telegram_chat_id: chatId,
-      trial_used: true,
-      trial_ends_at: trialEnd.toISOString(),
-      status: 'active',
-      plan: 'trial'
-    });
-
-  return ctx.reply(
-    `🎉 *3-Day Pro Trial Activated*\n\n` +
-    `You now have full access until:\n` +
-    `*${trialEnd.toDateString()}*\n\n` +
-    `Try:\n` +
-    `/analyze TCS\n\n` +
-    `Upgrade anytime with /pay`,
-    { parse_mode: 'Markdown' }
-  );
+  ctx.reply("🧪 Trial activated for 3 days.");
 });
 
 // ─────────────────────────────────────────────
@@ -497,7 +456,7 @@ bot.on("text", async (ctx) => {
           `✓ Profit targets\n` +
           `✓ Market scanner\n` +
           `✓ Portfolio tracking\n\n` +
-          `👉 Type /pay to unlock`,
+          `👉 Type /subscribe to unlock`,
           { parse_mode: 'Markdown' }
         );
         return;
@@ -553,7 +512,7 @@ bot.on("text", async (ctx) => {
           `📝 Summary:\n${result.decision?.reason || "No summary available"}\n\n` +
           (subscribed
             ? `📌 For full report: /analyze ${ticker}`
-            : `🔒 Full report (entry zones, targets, stop loss) → /pay`) +
+            : `🔒 Full report (entry zones, targets, stop loss) → /subscribe`) +
           counterLine;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
         if (!subscribed) await incrementUsage(chatId);
@@ -800,7 +759,7 @@ bot.on("text", async (ctx) => {
       await ctx.reply(
         `🔒 *Pro Feature*\n\n` +
         `Detailed analysis requires FinSight Pro.\n\n` +
-        `👉 Unlock here: /pay`,
+        `👉 Unlock here: /subscribe`,
         { parse_mode: 'Markdown' }
       );
       return;
@@ -836,7 +795,7 @@ bot.on("text", async (ctx) => {
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
       if (trialExpired) {
-        finalMessage += `\n\n🚫 *Trial expired.*\nUpgrade to continue using full analysis:\nType /pay — ₹299/month`;
+        finalMessage += `\n\n🚫 *Trial expired.*\nUpgrade to continue using full analysis:\nType /subscribe — ₹299/month`;
         await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
       } else {
         const left = await getRemainingUsage(chatId);

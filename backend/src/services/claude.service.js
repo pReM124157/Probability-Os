@@ -44,7 +44,7 @@ STRICT RULES — follow without exception:
 - Maximum 2-3 sentences only
 Only give high-level market context or general sentiment.
 End EXACTLY with this line (no variation):
-"💎 Upgrade to Pro for full analysis → /pay"
+"💎 Upgrade to Pro for full analysis → /subscribe"
 `.trim();
 
 /**
@@ -81,7 +81,7 @@ export const generateTieredAnalysis = async (userPrompt, isPro) => {
     } catch (err2) {
       return isPro
         ? handleFinalFallback(userPrompt)
-        : "Market data is currently being processed.\n\n💎 For full analysis with entry zones, targets & stop loss → /pay (₹299/month)";
+        : "Market data is currently being processed.\n\n💎 For full analysis with entry zones, targets & stop loss → /subscribe (₹299/month)";
     }
   }
 };

@@ -31,59 +31,30 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
     const payload = data.payload;
     console.log("Webhook received:", event);
 
-    if (event === 'payment.captured' || event === 'payment_link.paid') {
-      const paymentEntity = payload?.payment?.entity;
-      const paymentId = paymentEntity?.id;
-      const notes = paymentEntity?.notes || {};
-      const linkNotes = payload?.payment_link?.entity?.notes || {};
-      const chatId = notes?.telegram_chat_id || linkNotes?.telegram_chat_id || null;
-
-      if (!chatId) return res.status(200).json({ status: 'ok' });
-
-      if (paymentId) {
-        const { data: existing } = await supabase.from('subscribers').select('payment_id').eq('payment_id', paymentId).maybeSingle();
-        if (existing) return res.json({ status: 'duplicate' });
-      }
-
-      await supabase.from('subscribers').upsert({
-        telegram_chat_id: chatId.toString(),
-        payment_id: paymentId || null,
-        status: 'active',
-        plan: 'pro',
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-      });
-
-      try {
-        await bot.telegram.sendMessage(chatId, `🎉 Payment Successful! Welcome to FinSight Pro. Your premium access is now active.`);
-      } catch (err) {}
-    }
 
     if (event === 'subscription.activated') {
       const sub = payload.subscription.entity;
       let chatId = sub.notes?.telegram_chat_id;
       if (!chatId) {
-        const { data: user } = await supabase
+        const { data } = await supabase
           .from('subscribers')
           .select('telegram_chat_id')
           .eq('razorpay_subscription_id', sub.id)
           .single();
-        chatId = user?.telegram_chat_id;
-      }
-      if (!chatId) {
-        console.log("❌ No chatId for subscription:", sub.id);
-        return res.json({ status: 'no chat id' });
+        chatId = data?.telegram_chat_id;
       }
       console.log("ACTIVATING USER:", chatId);
-      await supabase.from('subscribers').upsert({
-        telegram_chat_id: chatId.toString(),
+      if (!chatId) return res.json({ status: 'no_user' });
+      await supabase.from('subscribers').update({
         status: 'active',
         plan: 'pro',
-        razorpay_subscription_id: sub.id,
-        subscription_started_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-      });
+        subscription_started_at: new Date(),
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      }).eq('telegram_chat_id', chatId);
       try {
-        await bot.telegram.sendMessage(chatId, "🎉 Subscription Activated! You are now on FinSight Pro.");
+        await bot.telegram.sendMessage(chatId,
+          "🎉 Subscription Activated! You are now on FinSight Pro."
+        );
       } catch(err) {}
     }
 
