@@ -73,7 +73,7 @@ async function performAnalysis(chatId, symbol, footer = "") {
     const ticker = symbol.toUpperCase();
 
     if (result.status === "DATA_UNAVAILABLE") {
-      await bot.telegram.sendMessage(chatId, `⚠ DATA UNAVAILABLE\nStock: ${ticker}\n\nMarket data could not be fetched reliably. Try again later.`);
+      await bot.telegram.sendMessage(chatId, `⚠️ Couldn't fetch live data for ${ticker}\nThis can happen due to:\n• Market closed\n• Data delay\n• Temporary provider issue\nTry again in a moment.`);
       return;
     }
 
@@ -603,19 +603,16 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    if (lowerText.startsWith("analyze ") || lowerText.startsWith("/analyze ")) {
-      const ticker = lowerText.startsWith("/analyze ")
-        ? text.substring(9).trim()
-        : text.substring(8).trim();
-
-      if (!ticker || ticker.includes(" ") || ticker.length > 15) {
-        await bot.telegram.sendMessage(chatId, "Please enter a valid stock ticker like TCS, RELIANCE, INFY, HDFCBANK");
+    const analyzeMatch = lowerText.match(/^(?:\/?(?:analyze|analyse|anyze|check|scan))?\s*([a-z0-9_.-]+)$/i);
+    if (analyzeMatch && analyzeMatch[1] && analyzeMatch[1].length <= 15) {
+      const ticker = analyzeMatch[1].toUpperCase();
+      // Ignore common conversational words that might match a 1-word string
+      const ignoreWords = ['hi', 'hello', 'hey', 'help', 'start', 'status', 'portfolio', 'top', 'scanner', 'sector', 'sectors', 'rotation', 'pay', 'subscribe'];
+      if (!ignoreWords.includes(lowerText)) {
+        await performAnalysis(chatId, ticker, !subscribed ? getFreeUserFooter(usageCount) : "");
+        if (!subscribed) await incrementUsage(chatId, usageCount);
         return;
       }
-
-      await performAnalysis(chatId, ticker, !subscribed ? getFreeUserFooter(usageCount) : "");
-      if (!subscribed) await incrementUsage(chatId, usageCount);
-      return;
     }
 
     // ── Conversational AI Fallback (tiered) ───
