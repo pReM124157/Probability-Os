@@ -7,10 +7,10 @@ const WINDOW = 24 * 60 * 60 * 1000;
 export async function getUsageUser(chatId) {
   const { data } = await supabase
     .from("subscribers")
-    .select("plan, free_usage_count, usage_started_at")
+    .select("plan, is_pro, free_usage_count, usage_started_at")
     .eq("telegram_chat_id", chatId.toString())
     .maybeSingle();
-  return data || { plan: "free", free_usage_count: 0, usage_started_at: null };
+  return data || { plan: "FREE", is_pro: false, free_usage_count: 0, usage_started_at: null };
 }
 
 export function processUsage(user) {

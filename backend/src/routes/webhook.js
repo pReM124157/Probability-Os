@@ -55,9 +55,11 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
         }
         console.log("💰 PAYMENT SUCCESS:", chatId);
         await supabase.from('subscribers').update({
+          is_pro: true,
           status: 'active',
-          plan: 'pro',
+          plan: 'PRO',
           subscription_started_at: new Date(),
+          subscription_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
         }).eq('telegram_chat_id', chatId);
 
@@ -92,9 +94,11 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       }
       console.log("ACTIVATING USER:", chatId);
       await supabase.from('subscribers').update({
+        is_pro: true,
         status: 'active',
-        plan: 'pro',
+        plan: 'PRO',
         subscription_started_at: new Date(),
+        subscription_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       }).eq('telegram_chat_id', chatId);
       try {
@@ -127,8 +131,10 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       await supabase
         .from('subscribers')
         .update({
+          is_pro: true,
           status: 'active',
-          plan: 'pro',
+          plan: 'PRO',
+          subscription_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           last_payment_at: new Date().toISOString(),
           subscription_started_at: new Date().toISOString() // Ensure started_at is set
@@ -166,8 +172,9 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       await supabase
         .from('subscribers')
         .update({
+          is_pro: false,
           status: 'cancelled',
-          plan: 'free'
+          plan: 'FREE'
         })
         .eq('telegram_chat_id', chatId.toString());
       try {

@@ -523,28 +523,33 @@ bot.on("text", async (ctx) => {
     console.log("CHAT ID:", chatId);
     const text = ctx.message.text?.trim() || "";
     if (!text) return;
+    const user = await getUsageUser(chatId);
+    console.log("USER PLAN:", user?.plan, "IS_PRO:", user?.is_pro);
     const lowerText = text.toLowerCase();
+    const isProUser = user?.plan === "PRO" || user?.is_pro === true;
+
     if (lowerText === "/subscribe") {
       await sendSubscriptionLink(chatId);
       return;
     }
-    const user = await getUsageUser(chatId);
-    const usageResult = processUsage(user);
-    console.log("[USAGE CHECK]", {
-      chatId: chatId.toString(),
-      allowed: usageResult.allowed,
-      nextCount: usageResult.usage ?? user?.free_usage_count ?? 0
-    });
 
-    if (!usageResult.allowed) {
-      await bot.telegram.sendMessage(chatId, usageResult.footer);
-      return;
+    const usageResult = isProUser ? { allowed: true, footer: "" } : processUsage(user);
+    if (!isProUser) {
+      console.log("[USAGE CHECK]", {
+        chatId: chatId.toString(),
+        allowed: usageResult.allowed,
+        nextCount: usageResult.usage ?? user?.free_usage_count ?? 0
+      });
+      if (!usageResult.allowed) {
+        await bot.telegram.sendMessage(chatId, usageResult.footer);
+        return;
+      }
     }
 
-    const subscribed = user.plan === "pro";
+    const subscribed = isProUser;
     const usageFooter = subscribed ? "" : usageResult.footer;
     const withUsageFooter = (message) => (usageFooter ? `${message}\n\n${usageFooter}` : message);
-    if (!subscribed) {
+    if (!isProUser) {
       await updateUsage(chatId, usageResult.usage, usageResult.start);
       console.log("[USAGE UPDATED]", {
         chatId: chatId.toString(),
