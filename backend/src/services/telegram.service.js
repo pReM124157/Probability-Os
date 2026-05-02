@@ -155,16 +155,23 @@ bot.command('start', async (ctx) => {
 
 bot.command('subscribe', async (ctx) => {
   const chatId = ctx.chat.id.toString();
+  const name = ctx.from?.first_name || "there";
+
   await ctx.reply('⏳ Generating your subscription link...');
   try {
     const { url } = await createSubscriptionLink(chatId);
 
     return ctx.reply(
       `💎 *Subscribe to FinSight Pro*\n\n` +
+      `Hey ${name},\n` +
       `₹299/month (auto-renew)\n\n` +
       `👉 ${url}\n\n` +
-      `✅ Access activates automatically after payment.`,
-      { parse_mode: 'Markdown' }
+      `⚡ Unlock unlimited analysis instantly.\n` +
+      `Access activates automatically after payment.`,
+      { 
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      }
     );
   } catch (err) {
     console.error('Subscription link error:', err.message, err);
