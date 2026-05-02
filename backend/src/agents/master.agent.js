@@ -636,12 +636,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     let marketNote = isLive ? null : "⚠️ Market Closed";
     if (marketStatus.isWeekend) {
       marketNote = "📅 Market closed (Weekend)";
+      marketNote += "\n⚠ Weekend gap risk possible";
     } else if (marketStatus.isHoliday) {
       marketNote = "📅 Market closed (Holiday)";
-    } else if (marketStatus.isAfterClose) {
-      marketNote = "⏱ Market closed for today";
-    } else if (marketStatus.isBeforeOpen) {
-      marketNote = "⏳ Market not opened yet";
+    } else if (marketStatus.isPostMarket) {
+      marketNote = "🌙 Post-market (closed for today)";
+    } else if (marketStatus.isPreMarket) {
+      marketNote = "⏳ Pre-market (opens soon)";
     } else if (liveMarketData.isMarketOpen && !isLive) {
       marketNote = "⏱ Data delayed — verify before entry";
     }
@@ -649,7 +650,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     // CRITICAL: Adjust confidence if data is degraded but ALLOW analysis
     if (!isLive) {
       console.log(`[DEGRADED MODE] ${ticker}. Source: ${liveMarketData.priceSource}. Proceeding with caution.`);
-      adjustedConfidence = Math.min(adjustedConfidence, 7); // Cap confidence at 7 for stale data
+      adjustedConfidence = Math.min(adjustedConfidence, 6); // Cap confidence at 6 for stale data
     }
 
     // Ensure score stays within 1-10 range
@@ -889,10 +890,10 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       currentPrice: activePrice,
       confidence: adjustedConfidence,
       riskLevel: risk.riskLevel || "MEDIUM",
-      action: finalDecision.finalDecision || "HOLD",
+      action: isLive ? (finalDecision.finalDecision || "HOLD") : "Wait for market open confirmation",
       nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
-                (marketStatus.isAfterClose ? "Monitor tomorrow's open" : 
-                (marketStatus.isBeforeOpen ? "Wait for market open" : 
+                (marketStatus.isPostMarket ? "Monitor tomorrow's open" : 
+                (marketStatus.isPreMarket ? "Wait for market open" : 
                 (entryTiming.strategy === "AVOID ENTRY" ? "Monitor for setup" : "Wait for price confirmation"))),
       analysisTimestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
     };

@@ -60,7 +60,7 @@ function getFreeUserFooter(usage, isUpgrade = false) {
 }
 
 function getNextSessionNote(status) {
-  if (status.isWeekend || status.isHoliday || status.isAfterClose) {
+  if (status.isWeekend || status.isHoliday || status.isPostMarket) {
     const next = status.nextTradingDay ? new Date(status.nextTradingDay) : null;
     if (next && status.istTime) {
       const dateStr = next.toDateString().split(' ').slice(0, 3).join(' ');
@@ -68,8 +68,13 @@ function getNextSessionNote(status) {
       const hours = Math.floor(diffMs / (1000 * 60 * 60));
       const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
       
+      let countdown = `${hours}h ${mins}m`;
+      if (hours > 48) {
+        countdown = `${Math.floor(hours / 24)} days`;
+      }
+      
       let note = `👉 Next session: ${dateStr} 9:15 AM\n`;
-      note += `⏳ Opens in ${hours}h ${mins}m`;
+      note += `⏳ Opens in ${countdown}`;
       return note;
     }
   }
@@ -79,6 +84,14 @@ function getNextSessionNote(status) {
 function formatAnalysis(res, symbol) {
   const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
   const nextLine = nextSession ? `${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
+  
+  const lastUpdated = new Date().toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  const priceSource = res.marketStatus?.isLive ? "Live Market" : "Previous Close";
   
   let lastTradeNote = "";
   if (!res.isMarketOpen && res.marketStatus?.lastTradingDay) {
@@ -93,6 +106,9 @@ ${res.marketNote ? `_${res.marketNote}_\n` : ""}${lastTradeNote}🎯 *Confidence
 ⚠ *Risk:* ${res.riskLevel}
 📌 *Action:* ${res.action}
 ${nextLine}
+
+🕒 *Updated:* ${lastUpdated} IST
+📡 *Source:* ${priceSource}
 
 🧠 *Analysis:*
 ${res.decision?.reason || "No reasoning available"}

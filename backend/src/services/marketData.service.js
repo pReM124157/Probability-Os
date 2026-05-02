@@ -187,6 +187,8 @@ async function getMarketStatusIST() {
     const dateStr = ist.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
     
     const holidays = await fetchIndianHolidays(year);
+    const safeHolidays = holidays && holidays.size > 0 ? holidays : new Set();
+    
     const day = ist.getDay(); 
     const hours = ist.getHours();
     const minutes = ist.getMinutes();
@@ -196,8 +198,12 @@ async function getMarketStatusIST() {
     const close = 15 * 60 + 30; // 3:30 PM
     
     const isWeekend = day === 0 || day === 6;
-    const isHoliday = holidays.has(dateStr);
-    const isOpenHours = time >= open && time <= close;
+    const isHoliday = safeHolidays.has(dateStr);
+    
+    // Explicit Phase Classification
+    const isPreMarket = !isWeekend && !isHoliday && time < open;
+    const isLive = !isWeekend && !isHoliday && time >= open && time <= close;
+    const isPostMarket = !isWeekend && !isHoliday && time > close;
 
     // Fix: Consecutive holiday / weekend aware next session logic
     function getNextTradingDay(currentIst, holidaySet) {
@@ -214,7 +220,6 @@ async function getMarketStatusIST() {
         next.setHours(9, 15, 0, 0);
         return next;
     }
-
     // Fix: Accurate last trading day logic
     function getLastTradingDay(currentIst, holidaySet) {
         const prev = new Date(currentIst);
@@ -229,15 +234,16 @@ async function getMarketStatusIST() {
         return prev;
     }
 
-    const nextTradingDay = getNextTradingDay(ist, holidays);
-    const lastTradingDay = getLastTradingDay(ist, holidays);
+    const nextTradingDay = getNextTradingDay(ist, safeHolidays);
+    const lastTradingDay = getLastTradingDay(ist, safeHolidays);
     
     return {
-        isMarketOpen: !isWeekend && !isHoliday && isOpenHours,
+        isMarketOpen: isLive,
+        isPreMarket,
+        isLive,
+        isPostMarket,
         isWeekend,
         isHoliday,
-        isBeforeOpen: !isWeekend && !isHoliday && time < open,
-        isAfterClose: !isWeekend && !isHoliday && time > close,
         nextTradingDay,
         lastTradingDay,
         istTime: ist
