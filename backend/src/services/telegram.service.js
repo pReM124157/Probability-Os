@@ -79,6 +79,16 @@ function getOpenStrategy(preMarket) {
   return "Wait for first 15-min range breakout";
 }
 
+function isCasualMessage(text) {
+  const casual = [
+    "hi", "hello", "hey", "ok", "okay", "thanks",
+    "thank you", "yo", "sup", "bro", "nothing",
+    "bye", "good", "nice", "hmm"
+  ];
+  const clean = safeString(text).toLowerCase().trim();
+  return casual.includes(clean) || clean.length < 4;
+}
+
 function smartFallback(label, data, context = {}) {
   if (data !== undefined && data !== null && data !== "") return data;
   switch (label) {
@@ -762,54 +772,36 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    // ── Intent Detection (Strict Routing) ───
-    const symbolCandidate = extractSymbol(text);
-    // 🔥 FINAL HARD SANITIZE (Gate 0)
-    const normalizedSymbol = safeString(symbolCandidate).replace(/\//g, "").trim().toUpperCase();
+    // ── Final Routing ─────────────────────────
+    const symbol = extractSymbol(text);
+    const isAnalyzeCommand =
+      lowerText.startsWith("analyze") ||
+      text.startsWith("/analyze");
+    const shouldRunAnalysis = shouldAnalyze(safeString(symbol).replace(/\//g, "").trim().toUpperCase());
+    const casualMessage = isCasualMessage(text);
 
-    const isExplicitAnalyze = lowerText.startsWith("/analyze") || lowerText.startsWith("analyze");
-    const isTickerPattern = shouldAnalyze(normalizedSymbol);
-
-    if (isExplicitAnalyze || isTickerPattern) {
+    if ((isAnalyzeCommand || shouldRunAnalysis) && !casualMessage) {
+      const normalizedSymbol = safeString(symbol).replace(/\//g, "").trim().toUpperCase();
       if (normalizedSymbol && normalizedSymbol.length <= 15) {
-        // Second-Layer Validation: Check if symbol actually exists
         const exists = await checkSymbolExists(normalizedSymbol);
         if (exists) {
           await performAnalysis(chatId, normalizedSymbol, !subscribed ? usageFooter : "");
           return;
-        } else if (isExplicitAnalyze) {
-          return await bot.telegram.sendMessage(chatId, "⚠️ I couldn't find that stock. Please check the ticker (e.g., TCS, RELIANCE) and try again.");
+        } else if (isAnalyzeCommand) {
+          return await bot.telegram.sendMessage(chatId, withUsageFooter("⚠️ I couldn't find that stock. Please check the ticker (e.g., TCS, RELIANCE) and try again."));
         }
-        // If it was just a ticker pattern (e.g. "GOOD") and it doesn't exist, let it flow to chat
       }
     }
 
-    const simpleReplies = {
-      'hi': "What do you want to check — a stock or the market?",
-      'hello': "What do you want to analyze today?",
-      'how are you': "Focused on markets. What do you want to check?",
-      'ok': "Got it.",
-      'okay': "Got it.",
-      'thanks': "Anytime.",
-      'thank you': "Anytime.",
-      'bye': "Alright. Reach out when you need clarity."
-    };
-
-    if (simpleReplies[lowerText]) {
-      return await bot.telegram.sendMessage(chatId, withUsageFooter(simpleReplies[lowerText]));
-    }
-
-    // ── AI Conversation (Finance or Casual) ───
-    let finalMessage = "";
+    let reply = "";
     try {
-      const aiResponse = await masterAgent({ userQuery: text, mode: "conversation", isPro: subscribed });
-      finalMessage = aiResponse.response;
+      reply = await generateChatReply(chatId, text);
     } catch (err) {
-      console.error("AI FAIL:", err);
-      finalMessage = "Ask me about any stock or market — I’ll break it down.";
+      console.error("CHAT FAIL:", err);
+      reply = "Ask me about any stock or market — I’ll break it down.";
     }
 
-    await bot.telegram.sendMessage(chatId, withUsageFooter(finalMessage), { parse_mode: 'Markdown' });
+    await bot.telegram.sendMessage(chatId, withUsageFooter(reply), { parse_mode: 'Markdown' });
     return;
 
   } catch (error) {

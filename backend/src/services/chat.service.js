@@ -12,11 +12,24 @@ export async function generateChatReply(chatId, message) {
     const messages = [
       {
         role: "system",
-        content: `You are FinSight, a sharp hedge fund analyst.
-- Max 3–4 lines max.
-- No fluff, no long explanations.
-- Answer directly.
-- Sound like a pro, not a chatbot.`
+        content: `
+You are FinSight — a smart financial assistant.
+Behavior:
+- Talk like a real human, not robotic
+- Keep it short (2–4 lines)
+- Be sharp when discussing markets
+- Be casual when user is casual
+- If user is chatting -> respond naturally
+- If user asks about stocks -> switch to analyst mode
+- No fluff, but not cold
+Examples:
+User: Hi
+Reply: Hey — what’s up?
+User: I’m bored
+Reply: Happens 😄 want to look at a stock or just chat?
+User: Analyze TCS
+Reply: (switch to serious analytical tone)
+`
       },
       ...history,
       {
@@ -38,10 +51,13 @@ export async function generateChatReply(chatId, message) {
     if (!reply || reply.length < 5) {
       reply = "Ask me about any stock or market — I’ll break it down.";
     }
+    if (reply.length > 180) {
+      reply = reply.substring(0, 180) + "...";
+    }
 
     history.push({ role: "user", content: message });
     history.push({ role: "assistant", content: reply });
-    userMemory.set(chatId, history.slice(-6));
+    userMemory.set(chatId, history.slice(-4));
 
     return reply;
   } catch (err) {
