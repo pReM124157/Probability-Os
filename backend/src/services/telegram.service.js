@@ -59,21 +59,25 @@ function getFreeUserFooter(usage, isUpgrade = false) {
   return `\n\n📈 *Requests:* ${projected}/10\n${stars}\nGet unlimited access with /subscribe`;
 }
 
-function getNextSessionNote(status) {
+function getNextSessionNote(status, ist) {
   if (status.isWeekend) return "Next session: Monday 9:15 AM";
-  if (status.isHoliday) return "Next session: Next trading day 9:15 AM";
+  if (status.isHoliday) {
+    const next = new Date(ist);
+    next.setDate(next.getDate() + 1);
+    return `Next session: ${next.toDateString().split(' ').slice(0, 3).join(' ')} 9:15 AM`;
+  }
   if (status.isAfterClose) return "Next session: Tomorrow 9:15 AM";
   return "";
 }
 
 function formatAnalysis(res, symbol) {
-  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
+  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus, res.marketStatus.istTime) : "";
   const nextLine = nextSession ? `👉 ${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
+  const lastTradeNote = !res.isMarketOpen ? "Based on last trading session data\n" : "";
 
   return `
 📊 *${symbol.toUpperCase()} Analysis*
-${res.marketNote ? `_${res.marketNote}_\n` : ""}
-🎯 *Confidence:* ${res.confidence}/10
+${res.marketNote ? `_${res.marketNote}_\n` : ""}${lastTradeNote}🎯 *Confidence:* ${res.confidence}/10
 ⚠ *Risk:* ${res.riskLevel}
 📌 *Action:* ${res.action}
 ${nextLine}
