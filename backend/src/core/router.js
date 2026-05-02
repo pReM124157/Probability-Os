@@ -6,28 +6,31 @@
  *   { type: "analyze", symbol: "TCS" }
  *   { type: "chat" }
  */
-export function parseInput(message) {
-  if (!message) return { type: "chat" };
-
-  const clean = message.trim();
-  const upper = clean.toUpperCase();
-
-  // /analyze TCS  or  /analyze
-  if (/^\/analyze\b/i.test(clean)) {
-    const symbol = clean.replace(/^\/analyze\s*/i, "").trim().toUpperCase();
-    return { type: "analyze", symbol: symbol || null };
+export function parseInput(text) {
+  if (!text) return { type: "chat" };
+  const clean = text.trim();
+  // Ignore casual / acknowledgement messages
+  const ignoreList = [
+    "ok", "okay", "thanks", "thank you", "cool", "nice",
+    "great", "hmm", "hmm.", "yes", "no", "alright"
+  ];
+  if (ignoreList.includes(clean.toLowerCase())) {
+    return { type: "chat" };
   }
-
-  // "Analyze TCS"  or  "analyze tcs"
-  if (/^analyze\s+/i.test(clean)) {
-    const symbol = clean.replace(/^analyze\s+/i, "").trim().toUpperCase();
-    return { type: "analyze", symbol: symbol || null };
+  // /analyze TCS
+  if (clean.toLowerCase().startsWith("/analyze")) {
+    const symbol = clean.split(" ")[1];
+    return symbol ? { type: "analyze", symbol: symbol.toUpperCase() } : { type: "invalid" };
   }
-
-  // Pure ticker — 3–15 uppercase letters only
-  if (/^[A-Z]{3,15}$/.test(upper)) {
-    return { type: "analyze", symbol: upper };
+  // "Analyze TCS"
+  if (clean.toLowerCase().startsWith("analyze ")) {
+    const symbol = clean.split(" ")[1];
+    return symbol ? { type: "analyze", symbol: symbol.toUpperCase() } : { type: "invalid" };
   }
-
+  // Pure ticker (TCS, RELIANCE)
+  if (/^[A-Z]{2,15}$/.test(clean)) {
+    return { type: "analyze", symbol: clean };
+  }
+  // Everything else = chat
   return { type: "chat" };
 }
