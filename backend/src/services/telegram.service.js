@@ -605,13 +605,13 @@ bot.on("text", async (ctx) => {
     }
 
     const simpleReplies = {
-      'hi': "Hi — what do you want to check?",
-      'hello': "Hey — markets or a stock?",
-      'ok': "Got it.",
-      'okay': "Got it.",
+      'hi': "What are you looking at today — a stock or the market?",
+      'hello': "What do you want to analyze?",
+      'ok': "Alright.",
+      'okay': "Alright.",
       'thanks': "Anytime.",
       'thank you': "Anytime.",
-      'bye': "Alright. Come back when you need insights."
+      'bye': "Alright. Reach out when you need clarity."
     };
 
     if (simpleReplies[lowerText]) {
@@ -624,15 +624,15 @@ bot.on("text", async (ctx) => {
     }
 
     const explicitAnalyzeMatch = lowerText.match(/^\/?(?:analyze|analyse|anyze|check|scan)\s+([a-z0-9_.-]+)$/i);
-    const implicitAnalyzeMatch = lowerText.match(/^([a-z0-9_.-]+)$/i);
+    const implicitAnalyzeMatch = lowerText.match(/^[A-Z]{2,10}(\.NS)?$/i);
 
     let tickerToAnalyze = null;
     if (explicitAnalyzeMatch && explicitAnalyzeMatch[1].length <= 15) {
       tickerToAnalyze = explicitAnalyzeMatch[1].toUpperCase();
-    } else if (implicitAnalyzeMatch && implicitAnalyzeMatch[1].length <= 15) {
+    } else if (implicitAnalyzeMatch && implicitAnalyzeMatch[0].length <= 15) {
       const isSystemCommand = ['start', 'status', 'portfolio', 'top', 'scanner', 'sector', 'sectors', 'rotation', 'pay', 'subscribe', 'help'].includes(lowerText);
       if (!isSystemCommand) {
-        tickerToAnalyze = implicitAnalyzeMatch[1].toUpperCase();
+        tickerToAnalyze = implicitAnalyzeMatch[0].toUpperCase();
       }
     }
 
@@ -644,17 +644,18 @@ bot.on("text", async (ctx) => {
 
     // ── Intent Detection & Fallback ───
     function detectIntent(text) {
-      const t = text.toLowerCase();
-      if (
-        t.includes("analyze") ||
-        t.includes("stock") ||
-        t.includes("price") ||
-        t.includes("market") ||
-        t.includes("portfolio") ||
-        t.includes("compare") ||
-        t.includes("top") ||
-        t.includes("best")
-      ) return "finance";
+      const t = text.toLowerCase().trim();
+      const financeKeywords = [
+        "analyze", "stock", "price", "market",
+        "portfolio", "compare", "buy", "sell", "top", "best"
+      ];
+      if (financeKeywords.some(k => t.includes(k))) return "finance";
+      if (t.length < 4) return "chat";
+      
+      const stockPattern = /^[a-z]{2,10}(\.ns)?$/i;
+      if (stockPattern.test(t)) {
+        return "finance";
+      }
       return "chat";
     }
 
@@ -678,7 +679,7 @@ bot.on("text", async (ctx) => {
         ? `${aiResponse.response}\n\n⚠️ For educational purposes only.\nNot SEBI registered investment advice.`
         : aiResponse.response;
     } else {
-      finalMessage = await generateChatReply(text);
+      finalMessage = await generateChatReply(chatId, text);
     }
 
     // Fetch trial status for messaging
