@@ -83,24 +83,27 @@ async function performAnalysis(chatId, symbol, footer = "") {
     const ticker = symbol.toUpperCase();
 
     if (result.status === "DATA_UNAVAILABLE") {
-      await bot.telegram.sendMessage(chatId, `⚠️ Couldn't fetch live data for ${ticker}\nThis can happen due to:\n• Market closed\n• Data delay\n• Temporary provider issue\nTry again in a moment.`);
+      await bot.telegram.sendMessage(chatId, `⚠️ Couldn't fetch data for ${ticker}.\nVerify the symbol or try again later.`);
       return;
     }
 
+    let message = `${ticker} — Snapshot\n`;
+    message += result.isMarketOpen ? `🟢 Live — ${result.analysisTimestamp}\n` : `⚪ Close — ${result.analysisTimestamp}\n`;
+    
+    if (result.marketNote) {
+      message += `⚠️ _${result.marketNote}_\n`;
+    }
+    
+    message += `━━━━━━━━━━━━━━━━━━\n`;
+    message += `🚨 ${result.decision?.finalDecision || "HOLD"} Signal\n`;
+    message += `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n`;
+    message += `⚠ Risk: ${result.risk?.riskLevel || "N/A"}\n`;
+    message += `📊 Strength: ${result.ranking?.rankScore || 0}/10\n`;
+    message += `💰 Allocation: ${result.allocation || "0%"}\n`;
+    message += `📌 Action: ${result.capitalAction || "No immediate action"}\n\n`;
+    message += `🧠 Analysis:\n${result.decision?.reason || "No reasoning available"}`;
+
     const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
-
-    let message = `${ticker} — Snapshot
-${result.isMarketOpen ? `Live update — ${result.analysisTimestamp}` : `As of close — ${result.analysisTimestamp}`}
-━━━━━━━━━━━━━━━━━━
-🚨 ${result.decision?.finalDecision || "HOLD"} Signal
-🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10  
-⚠ Risk: ${result.risk?.riskLevel || "N/A"}  
-📊 Strength: ${result.ranking?.rankScore || 0}/10  
-💰 Suggested Allocation: ${positionSizing.allocation || "0%"}  
-📌 Action: ${positionSizing.capitalAction || "No immediate action"}
-
-🧠 Analysis:
-${result.decision?.reason || "No reasoning available"}`;
 
     if (rebalancer.action && rebalancer.action !== "HOLD") {
       message += `\n\n⚖️ Portfolio Action:\n${rebalancer.action}: ${rebalancer.reason || "Alignment confirmed"}`;

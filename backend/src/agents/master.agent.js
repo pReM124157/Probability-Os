@@ -529,15 +529,12 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         !liveMarketData || 
         !liveMarketData.currentPrice || 
         liveMarketData.currentPrice === 0 || 
-        liveMarketData.priceSource === "UNKNOWN" ||
-        liveMarketData.priceSource === "FAILED" ||
-        liveMarketData.priceSource === "NONE" ||
         liveMarketData.error
     ) {
-        console.warn(`[GLOBAL GUARD] Data Unavailable for ${ticker}. Aborting analysis.`);
+        console.warn(`[GLOBAL GUARD] Critical failure for ${ticker}. Aborting analysis.`);
         return {
             status: "DATA_UNAVAILABLE",
-            message: `⚠ Data Unavailable for ${ticker} — Skipping analysis`,
+            message: `⚠ Data Unavailable for ${ticker}`,
             ticker,
             blockExecution: true
         };
@@ -632,21 +629,14 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       adjustedConfidence = Math.min(adjustedConfidence, 10);
     }
     
-    // CRITICAL: Downgrade confidence and restrict strategy in Degraded/Blocked Mode
-    if (isDegraded || liveMarketData.priceSource !== "LIVE" || liveMarketData.latencyBlocked) {
-      console.log(`[EXECUTION BLOCK] Critical state for ${ticker}. Source: ${liveMarketData.priceSource}, Latency Blocked: ${liveMarketData.latencyBlocked}`);
-      
-      // Normalize degraded confidence [2, 3]
-      adjustedConfidence = Math.min(Math.max(adjustedConfidence, 2), 3);
-      
-      entryStrategy = "WAIT";
-      allocation = 0;
-      capitalAction = "Blocked by execution layer";
+    // --- MARKET STATE CONTEXT ---
+    const isLive = liveMarketData.priceSource === "LIVE" && !liveMarketData.latencyBlocked;
+    const marketNote = isLive ? null : (liveMarketData.isMarketOpen ? "Data delayed — verify before entry" : "Market closed — using last available close");
 
-      entryTiming.strategy = "WAIT";
-      entryTiming.entryUrgency = "LOW";
-      entryTiming.reasoning = `⚠ Critical Data Status: Analysis restricted for safety. Data source is ${liveMarketData.priceSource} and latency is ${liveMarketData.latencyBlocked ? 'BLOCKED' : 'STALE'}.`;
-      entryTiming.finalExecutionAdvice = "Wait for live data restoration.";
+    // CRITICAL: Adjust confidence if data is degraded but ALLOW analysis
+    if (!isLive) {
+      console.log(`[DEGRADED MODE] ${ticker}. Source: ${liveMarketData.priceSource}. Proceeding with caution.`);
+      adjustedConfidence = Math.min(adjustedConfidence, 5); // Cap confidence at 5 for stale data
     }
 
     // Ensure score stays within 1-10 range
@@ -867,30 +857,6 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       };
     }
 
-    // PHASE 7: Metadata & Timestamps (Smart Data Timing)
-    const now = new Date();
-    const istNow = new Date(
-      now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
-    );
-    
-    let displayTime;
-    if (!liveMarketData.isMarketOpen) {
-      // FORCE NSE CLOSE TIME
-      const close = new Date(istNow);
-      close.setHours(15, 30, 0, 0);
-      displayTime = close;
-    } else {
-      displayTime = istNow;
-    }
-
-    const formattedTime = displayTime.toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true
-    }) + " IST";
-
     return {
       risk,
       portfolio,
@@ -902,15 +868,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       valuation,
       entryTiming,
       exitSignal,
-      positionSizing,
-      rebalancer,
-      eventRisk,
-      isDegraded,
-      priceSource: liveMarketData.priceSource,
-      dataAge: liveMarketData.dataAge,
-      nextSessionPlan,
-      analysisTimestamp: formattedTime,
-      isMarketOpen: liveMarketData.isMarketOpen
+      ...positionSizing,
+      status: "SUCCESS",
+      isLive,
+      marketNote,
+      isMarketOpen: liveMarketData.isMarketOpen,
+      currentPrice: activePrice,
+      analysisTimestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
     };
   } catch (error) {
     console.error("Master Agent Error:", error.message);
