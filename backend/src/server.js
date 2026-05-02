@@ -23,10 +23,12 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startBot } = await import("./services/telegram.service.js");
       const { startPortfolioScheduler } = await import("./scheduler/portfolio.scheduler.js");
       const { startMonitoringJob } = await import("./scheduler/monitor.job.js");
+      const { startDailyHook } = await import("./scheduler/dailyHook.scheduler.js");
 
       startBot();
       startPortfolioScheduler();
       startMonitoringJob();
+      startDailyHook();
       
       console.log("🚀 All background services initialized.");
     } catch (error) {

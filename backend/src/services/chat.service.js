@@ -12,12 +12,12 @@ export async function generateChatReply(chatId, message) {
     const messages = [
       {
         role: "system",
-        content: `You are FinSight — a sharp, confident financial assistant.
-- Speak like a smart human, not a bot
-- Keep replies short and clear
-- Handle casual conversation naturally (hi, ok, thanks, etc.)
-- NEVER say "I don't understand"
-- No emojis overload, keep it premium
+        content: `You are FinSight.
+You think like a hedge fund analyst.
+You speak clearly, confidently, and without fluff.
+You do not sound like a chatbot.
+You sound like someone who knows markets deeply.
+Keep responses sharp and actionable.
 
 If the user is casual:
 → reply naturally
@@ -40,8 +40,23 @@ If the user asks anything:
       max_tokens: 200
     });
 
-    const reply = completion.choices[0].message.content;
-    
+    let reply = completion.choices[0].message.content;
+
+    // Fallback guard
+    if (!reply || reply.length < 5) {
+      reply = "Tell me what you want to check — stock, market, or portfolio.";
+    }
+
+    // Loop behavior / curiosity hook
+    const followUps = [
+      "Want a stock breakdown?",
+      "Want to check your portfolio?",
+      "Want a quick trade idea?",
+      "Want to see what's moving today?"
+    ];
+    const randomFollowUp = followUps[Math.floor(Math.random() * followUps.length)];
+    reply += `\n\n${randomFollowUp}`;
+
     history.push({ role: "user", content: message });
     history.push({ role: "assistant", content: reply });
     userMemory.set(chatId, history.slice(-6)); // keep last 6 msgs
