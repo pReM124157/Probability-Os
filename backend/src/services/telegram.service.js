@@ -292,11 +292,7 @@ async function performAnalysis(chatId, symbol, footer = "") {
   });
 
   if (!result.ok) {
-    if (result.message && result.message.includes("DATA_UNAVAILABLE")) {
-      await bot.telegram.sendMessage(chatId, `⚠️ Couldn't fetch data for ${symbol}.\nVerify the symbol or try again later.`);
-    } else {
-      await bot.telegram.sendMessage(chatId, result.message);
-    }
+    await bot.telegram.sendMessage(chatId, result.message);
     return;
   }
 

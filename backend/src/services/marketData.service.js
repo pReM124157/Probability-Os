@@ -4,6 +4,14 @@ import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 
 const yahooFinance = new YahooFinance();
+yahooFinance.setGlobalConfig({
+  fetchOptions: {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json"
+    }
+  }
+});
 
 // --- Institutional Data Layer (Observability & Safety) ---
 export const dataMetrics = {
@@ -215,7 +223,13 @@ export async function getCompanyOverview(symbol) {
     }
 
     if (!result) {
-        throw new Error(`Failed to fetch data for ${upperSymbol} after trying: ${symbolsToTry.join(", ")}`);
+        console.warn(`[FALLBACK] Data unavailable for ${upperSymbol}`);
+        return {
+          Symbol: upperSymbol,
+          price: null,
+          note: "Data temporarily unavailable",
+          status: "DATA_UNAVAILABLE"
+        };
     }
 
     console.log("FETCH SUCCESS (Overview):", fetchSymbol);
@@ -270,7 +284,11 @@ export async function getCompanyOverview(symbol) {
     // Return at least the symbol to prevent downstream "UNKNOWN" errors
     const upperSymbol = safeString(symbol).toUpperCase().replace(/\s+/g, "");
     return {
-      Symbol: upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`
+      Symbol: upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`,
+      symbol: upperSymbol,
+      price: null,
+      note: "Data temporarily unavailable",
+      status: "DATA_UNAVAILABLE"
     };
   }
 }
@@ -413,7 +431,7 @@ export async function getLiveMarketData(symbol) {
     const marketStatus = await getMarketStatusIST();
 
     // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
-    const yahooAvailable = Date.now() >= yahooCooldownUntil;
+    const yahooAvailable = true; // Date.now() >= yahooCooldownUntil; // allow fallback even if tripped
     if (yahooAvailable) {
       for (const sym of symbolsToTry) {
           try {
@@ -429,6 +447,7 @@ export async function getLiveMarketData(symbol) {
           } catch (e) {
               console.warn(`[DATA] source=yahoo symbol=${sym} status=fail error="${e.message}"`);
           }
+          await new Promise(r => setTimeout(r, 300));
       }
     } else {
       console.warn(`[CIRCUIT BREAKER] Skipping Yahoo for ${upperSymbol} (cooling down)`);
@@ -461,7 +480,13 @@ export async function getLiveMarketData(symbol) {
     }
 
     if (!currentPrice || currentPrice === 0) {
-        throw new Error(`Data extraction failed for ${upperSymbol}`);
+        console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
+        return {
+          symbol: upperSymbol,
+          price: null,
+          note: "Data temporarily unavailable",
+          status: "DATA_UNAVAILABLE"
+        };
     }
 
     const finalData = {
@@ -492,11 +517,14 @@ export async function getLiveMarketData(symbol) {
   } catch (error) {
     console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
     return {
+      symbol: upperSymbol,
+      price: null,
+      note: "Data temporarily unavailable",
       error: true,
       message: error.message,
       priceSource: "FAILED",
       dataConfidence: "NONE",
-      status: "error"
+      status: "DATA_UNAVAILABLE"
     };
   }
 }

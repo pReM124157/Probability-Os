@@ -8,7 +8,7 @@ export async function runAnalysisSafe(symbol, agent) {
     console.error("[ANALYSIS ERROR]", err);
     return {
       ok: false,
-      message: "⚠️ Temporary issue. Please try again."
+      message: "⚠️ Live market data is currently unavailable.\nTry again in a few minutes."
     };
   }
 }
