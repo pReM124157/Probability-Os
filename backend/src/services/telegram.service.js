@@ -13,7 +13,7 @@ import {
 } from "./portfolioMemory.service.js";
 import { createPaymentLink, createSubscriptionLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
-import { isFreeLimitReached, incrementUsage, getRemainingUsage, FREE_LIMIT } from "./usage.service.js";
+import { checkAndIncrementUsage, getRemainingUsage, FREE_LIMIT } from "./usage.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -48,13 +48,12 @@ async function isPro(chatId) {
       .eq('telegram_chat_id', chatId.toString())
       .maybeSingle();
 
-    if (!data || (data.status !== 'active' && data.status !== 'grace')) return false;
+    if (!data) return false;
 
     const now = new Date();
     // Paid subscription valid
-    if (data.expires_at && new Date(data.expires_at) > now) {
-      return true;
-    }
+    if (data.status === 'active' && data.plan === 'pro') return true;
+    if (data.status === 'grace' && data.expires_at && new Date(data.expires_at) > now) return true;
     // Trial valid
     if (data.plan === 'trial' && data.trial_ends_at && new Date(data.trial_ends_at) > now) {
       return true;
@@ -198,17 +197,12 @@ bot.command('start', async (ctx) => {
   await ctx.reply(
     `👋 Welcome to *FinSight AI*!\n\n` +
     `I'm your institutional-grade stock analysis assistant.\n\n` +
-    `📊 *Free features:*\n` +
-    `• Basic stock overview\n` +
-    `• Market trend (up/down)\n` +
-    `• Simple metrics\n\n` +
-    `💎 *FinSight Pro includes:*\n` +
-    `• Deep AI analysis\n` +
-    `• Entry & exit levels\n` +
-    `• Portfolio tracking\n` +
-    `• Market scanner\n\n` +
-    `Type /help to see all commands.\n` +
-    `Type /subscribe to unlock Pro.`,
+    `🆓 Free Plan: 10 requests/day\n` +
+    `🧪 Try 3-day FREE trial:\n` +
+    `👉 /trial\n` +
+    `💎 Upgrade to Pro:\n` +
+    `👉 /subscribe\n\n` +
+    `Type /help to see all commands.`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -292,7 +286,14 @@ bot.command('trial', async (ctx) => {
     trial_ends_at: expiry
   });
 
-  ctx.reply("🧪 Trial activated for 3 days.");
+  ctx.reply(
+    `🧪 Trial activated for 3 days!\n` +
+    `You now have unlimited access.\n` +
+    `Explore everything freely.\n` +
+    `⏳ Upgrade before expiry to continue:\n` +
+    `👉 /subscribe`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // ─────────────────────────────────────────────
@@ -441,22 +442,17 @@ bot.on("text", async (ctx) => {
 
     const subscribed = await isPro(chatId);
 
+    let remainingUsage = FREE_LIMIT;
     // Free usage limit gate — skip for Pro users
     if (!subscribed) {
-      const limitReached = await isFreeLimitReached(chatId);
-      if (limitReached) {
+      const usage = await checkAndIncrementUsage(chatId);
+      remainingUsage = usage.remaining;
+      if (!usage.allowed) {
         await ctx.reply(
-          `🚫 *Free Limit Reached*\n\n` +
-          `You've used all ${FREE_LIMIT} free messages.\n\n` +
-          `━━━━━━━━━━━━━━━\n` +
-          `💎 *FinSight Pro — ₹299/month*\n` +
-          `━━━━━━━━━━━━━━━\n\n` +
-          `✓ Full stock analysis\n` +
-          `✓ Entry zones + stop loss\n` +
-          `✓ Profit targets\n` +
-          `✓ Market scanner\n` +
-          `✓ Portfolio tracking\n\n` +
-          `👉 Type /subscribe to unlock`,
+          `🚫 Free limit reached (10/10)\n` +
+          `Resets in 12 hours (IST)\n` +
+          `👉 Try /trial for full access\n` +
+          `👉 Or upgrade using /subscribe`,
           { parse_mode: 'Markdown' }
         );
         return;
@@ -502,20 +498,15 @@ bot.on("text", async (ctx) => {
       try {
         const stockData = await getCompanyOverview(ticker);
         const result = await masterAgent(stockData);
-        const left = subscribed ? null : await getRemainingUsage(chatId);
-        const counterLine = subscribed ? '' : `\n🆓 Free requests left: ${Math.max(0, left - 1)}/${FREE_LIMIT}`;
+        const counterLine = subscribed ? '' : `\n\n🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`;
         const message =
           `⚡ *QUICK VERDICT — ${ticker.toUpperCase()}*\n\n` +
           `📊 Verdict: ${result.decision?.finalDecision || "HOLD"}\n` +
           `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n` +
           `⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}\n\n` +
-          `📝 Summary:\n${result.decision?.reason || "No summary available"}\n\n` +
-          (subscribed
-            ? `📌 For full report: /analyze ${ticker}`
-            : `🔒 Full report (entry zones, targets, stop loss) → /subscribe`) +
+          `📝 Summary:\n${result.decision?.reason || "No summary available"}` +
           counterLine;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        if (!subscribed) await incrementUsage(chatId);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, `❌ Could not analyze ${ticker}`);
       }
@@ -612,7 +603,7 @@ bot.on("text", async (ctx) => {
         await performAnalysis(chatId, text);
       } else {
         await performBasicOverview(chatId, ticker);
-        await incrementUsage(chatId);
+        await bot.telegram.sendMessage(chatId, `🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`);
       }
       return;
     }
@@ -739,7 +730,7 @@ bot.on("text", async (ctx) => {
         await performAnalysis(chatId, ticker);
       } else {
         await performBasicOverview(chatId, ticker);
-        await incrementUsage(chatId);
+        await bot.telegram.sendMessage(chatId, `🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`);
       }
       return;
     }
@@ -795,29 +786,29 @@ bot.on("text", async (ctx) => {
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
       if (trialExpired) {
-        finalMessage += `\n\n🚫 *Trial expired.*\nUpgrade to continue using full analysis:\nType /subscribe — ₹299/month`;
+        finalMessage += `\n\n🚫 Your trial has expired.\nUpgrade to continue using FinSight Pro:\n👉 /subscribe`;
         await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
       } else {
-        const left = await getRemainingUsage(chatId);
-        const afterLeft = Math.max(0, left - 1);
-        finalMessage += `\n\n💎 *Want deeper analysis?* → /pay (or try /trial)`;
-        finalMessage += `\n🆓 Free requests left: ${afterLeft}/${FREE_LIMIT}`;
+        finalMessage += `\n\n🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`;
         await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-        await incrementUsage(chatId);
-
+        
         // Warning triggers
-        if (afterLeft === 3) {
+        if (remainingUsage === 3) {
           await ctx.reply(
             `⚠️ *Only 3 free messages left*\n\n` +
-            `Try our free trial for unlimited access.\n` +
-            `👉 /trial`,
+            `🧪 Try 3-day FREE trial:\n` +
+            `👉 /trial\n` +
+            `💎 Upgrade to Pro:\n` +
+            `👉 /subscribe`,
             { parse_mode: 'Markdown' }
           );
-        } else if (afterLeft === 0) {
+        } else if (remainingUsage === 0) {
           await ctx.reply(
             `⚠️ *That was your last free message.*\n\n` +
-            `Use /trial to get 3 days free or /pay to upgrade.\n` +
-            `👉 /trial`,
+            `🧪 Try 3-day FREE trial:\n` +
+            `👉 /trial\n` +
+            `💎 Upgrade to Pro:\n` +
+            `👉 /subscribe`,
             { parse_mode: 'Markdown' }
           );
         }
@@ -828,9 +819,9 @@ bot.on("text", async (ctx) => {
     if (trialActive) {
       const hoursLeft = Math.floor((new Date(subData.trial_ends_at) - now) / (1000 * 60 * 60));
       if (hoursLeft <= 24) {
-        finalMessage += `\n\n⏳ *Trial ending soon (${hoursLeft}h left)*\nUpgrade now: /pay — ₹299/month`;
+        finalMessage += `\n\n⏳ *Trial ending soon (${hoursLeft}h left)*\nUpgrade now to continue:\n👉 /subscribe`;
       } else {
-        finalMessage += `\n\n🔥 *Trial active* — explore full analysis now.\nUpgrade before expiry to keep access:\nType /pay — ₹299/month`;
+        finalMessage += `\n\n🔥 *Trial active* — explore full analysis now.\nUpgrade before expiry to keep access:\n👉 /subscribe`;
       }
     }
     
