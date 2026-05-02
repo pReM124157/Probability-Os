@@ -25,6 +25,7 @@ import {
 
 import { generateInvestmentAnalysis, generateTieredAnalysis } from "../services/claude.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
+import { fetchCompanyNews } from "../services/news.service.js";
 
 // --- Global Cache for Market Updates ---
 let marketCache = {
@@ -40,6 +41,38 @@ let topOpsCache = {
   timestamp: 0
 };
 let isFetchingTopOps = false;
+
+function smartFallback(label, data, context = {}) {
+  if (data !== undefined && data !== null && data !== "") return data;
+  switch (label) {
+    case "support":
+      return context.price ? `Near ₹${Math.round(context.price * 0.97)}` : "Not clearly defined";
+    case "resistance":
+      return context.price ? `Near ₹${Math.round(context.price * 1.03)}` : "Not clearly defined";
+    case "momentum":
+      if (context.priceChange > 1) return "Bullish momentum building";
+      if (context.priceChange < -1) return "Weak momentum";
+      return "Sideways";
+    case "interpretation":
+      return "Mixed fundamentals — moderate growth with balanced risk profile.";
+    case "news_positive":
+      return "No major positive triggers recently.";
+    case "news_negative":
+      return "No major negative developments detected.";
+    case "trigger_up":
+      return context.price
+        ? `Break above ₹${Math.round(context.price * 1.02)}`
+        : "Watch resistance breakout";
+    case "trigger_down":
+      return context.price
+        ? `Break below ₹${Math.round(context.price * 0.98)}`
+        : "Watch support breakdown";
+    case "final_insight":
+      return "Stock is in a neutral zone — wait for confirmation before taking positions.";
+    default:
+      return "-";
+  }
+}
 
 const TOP_OPS_UNIVERSE = [
   "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
@@ -718,10 +751,10 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     const pbVal = Number(stockData.PriceToBookRatio || 0);
     const deVal = Number(stockData.DebtToEquityRatio || 0);
 
-    const roe = roeVal ? roeVal.toFixed(0) : "N/A";
-    const margin = marginVal ? marginVal.toFixed(0) : "N/A";
-    const pb = pbVal ? pbVal.toFixed(2) : "N/A";
-    const de = deVal ? deVal.toFixed(2) : "N/A";
+    const roe = smartFallback("metric", roeVal ? roeVal.toFixed(0) : "");
+    const margin = smartFallback("metric", marginVal ? marginVal.toFixed(0) : "");
+    const pb = smartFallback("metric", pbVal ? pbVal.toFixed(2) : "");
+    const de = smartFallback("metric", deVal ? deVal.toFixed(2) : "");
 
     professionalReasoning += `Fundamentally, the company shows ${roeVal > 20 ? 'strong' : 'moderate'} profitability (ROE ~${roe}%) and ${marginVal > 10 ? 'stable' : 'pressured'} margins (~${margin}%). `;
     professionalReasoning += `However, ${pbVal > 5 ? 'elevated' : 'reasonable'} valuation (PB ~${pb}) and ${deVal > 2 ? 'high' : 'managed'} leverage (D/E ~${de}) introduce structural risk.\n\n`;
@@ -922,6 +955,9 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       };
     }
 
+    const news = await fetchCompanyNews(ticker, stockData?.Name);
+    console.log("[NEWS DATA]", news);
+
     return {
       risk,
       portfolio,
@@ -942,6 +978,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       confidence: adjustedConfidence,
       riskLevel: risk.riskLevel || "MEDIUM",
       preMarket,
+      news,
       intelligence: {
         relativeStrength: relStrength,
         sector: sectorData,

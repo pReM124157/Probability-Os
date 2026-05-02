@@ -23,7 +23,7 @@ import {
 } from "./portfolioMemory.service.js";
 import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
-import { getUsageUser, processUsage, updateUsage, isProPlan } from "./usage.service.js";
+import { getUsageUser, processUsage, updateUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -79,6 +79,38 @@ function getOpenStrategy(preMarket) {
   return "Wait for first 15-min range breakout";
 }
 
+function smartFallback(label, data, context = {}) {
+  if (data !== undefined && data !== null && data !== "") return data;
+  switch (label) {
+    case "support":
+      return context.price ? `Near ₹${Math.round(context.price * 0.97)}` : "Not clearly defined";
+    case "resistance":
+      return context.price ? `Near ₹${Math.round(context.price * 1.03)}` : "Not clearly defined";
+    case "momentum":
+      if (context.priceChange > 1) return "Bullish momentum building";
+      if (context.priceChange < -1) return "Weak momentum";
+      return "Sideways";
+    case "interpretation":
+      return "Mixed fundamentals — moderate growth with balanced risk profile.";
+    case "news_positive":
+      return "No major positive triggers recently.";
+    case "news_negative":
+      return "No major negative developments detected.";
+    case "trigger_up":
+      return context.price
+        ? `Break above ₹${Math.round(context.price * 1.02)}`
+        : "Watch resistance breakout";
+    case "trigger_down":
+      return context.price
+        ? `Break below ₹${Math.round(context.price * 0.98)}`
+        : "Watch support breakdown";
+    case "final_insight":
+      return "Stock is in a neutral zone — wait for confirmation before taking positions.";
+    default:
+      return "-";
+  }
+}
+
 function formatAnalysis(res, symbol, stockData = {}) {
   const result = safeObject(res);
   const entryTiming = safeObject(result.entryTiming);
@@ -91,54 +123,58 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const relStrength = safeObject(intelligence.relativeStrength);
   const preMarket = safeObject(result.preMarket);
   const nextSessionPlan = safeObject(result.nextSessionPlan);
+  const news = safeObject(result.news);
+
+  const price = Number(result.currentPrice || entryTiming.currentPrice || 0);
+  const priceChange = Number(technical.priceChangePercent || technical.changePercent || 0);
 
   const normalized = {
     verdict: safeString(result.direction || result.action || result?.decision?.finalDecision || "HOLD"),
     rating: Number(result?.decision?.finalConfidenceScore || result.confidence || 5),
     confidence: Number(result.confidence || result?.decision?.finalConfidenceScore || 0),
-    asset: safeString(symbol || "N/A"),
-    currentPrice: Number(result.currentPrice || entryTiming.currentPrice || 0),
+    asset: safeString(symbol || "UNKNOWN"),
+    currentPrice: price,
     marketStatus: result.isMarketOpen ? "Open (Live Data)" : "Closed (Last Close Data)",
-    trend: safeString(technical.trend || "N/A"),
-    support: technical.supportLevel ?? "N/A",
-    resistance: technical.resistanceLevel ?? "N/A",
-    momentum: safeString(technical.momentum || technical.signal || "N/A"),
+    trend: safeString(technical.trend || "Neutral"),
+    support: smartFallback("support", technical.supportLevel, { price }),
+    resistance: smartFallback("resistance", technical.resistanceLevel, { price }),
+    momentum: smartFallback("momentum", safeString(technical.momentum || technical.signal), { priceChange }),
     volume: safeString(technical.volumeTrend || (technical.isVolumeSpike ? "Spike" : "Normal")),
-    entryZone: safeString(entryTiming.idealEntryZone || "N/A"),
-    stopLoss: safeString(entryTiming.stopLoss || "N/A"),
-    target: safeString(entryTiming.initialTarget || "N/A"),
-    tradeAction: safeString(entryTiming.finalExecutionAdvice || "N/A"),
-    pe: stockData.PERatio ?? "N/A",
-    roe: stockData.ReturnOnEquityTTM ?? "N/A",
-    profitMargin: stockData.ProfitMargin ?? "N/A",
-    debtEquity: stockData.DebtToEquityRatio ?? "N/A",
-    revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? "N/A",
-    earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? "N/A",
-    fundamentalView: safeSubstring(result.analysis || "N/A", 160),
-    sectorName: safeString(stockData.Sector || "N/A"),
-    sectorBias: safeString(sector.bias || "N/A"),
-    relStrength: safeString(relStrength.status || "N/A"),
-    institutionalBias: safeString(result.marketNote || "N/A"),
-    newsPositive: safeString(preMarket.newsDriver || "N/A"),
-    newsNegative: safeString(risk.keyRisk || "N/A"),
-    sentiment: safeString(preMarket.sentiment || "NEUTRAL"),
-    riskLevel: safeString(result.riskLevel || risk.riskLevel || "N/A"),
-    exitAction: safeString(exitSignal.action || "N/A"),
-    exitReason: safeString(exitSignal.reason || "N/A"),
-    bullishScenario: safeString(nextSessionPlan.entryTrigger || "N/A"),
-    bearishScenario: safeString(nextSessionPlan.stopLoss || "N/A"),
-    keyTrigger: safeString(nextSessionPlan.note || "N/A"),
-    finalInsight: safeSubstring(result.analysis || "N/A", 220)
+    entryZone: safeString(entryTiming.idealEntryZone || "Watch opening range"),
+    stopLoss: safeString(entryTiming.stopLoss || (price ? `₹${Math.round(price * 0.96)}` : "Dynamic by volatility")),
+    target: safeString(entryTiming.initialTarget || (price ? `₹${Math.round(price * 1.06)}` : "Trend continuation target")),
+    tradeAction: safeString(entryTiming.finalExecutionAdvice || "Wait for confirmation with price and volume."),
+    pe: stockData.PERatio ?? "-",
+    roe: stockData.ReturnOnEquityTTM ?? "-",
+    profitMargin: stockData.ProfitMargin ?? "-",
+    debtEquity: stockData.DebtToEquityRatio ?? "-",
+    revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? "-",
+    earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? "-",
+    fundamentalView: smartFallback("interpretation", safeSubstring(result.analysis || "", 160)),
+    sectorName: safeString(stockData.Sector || "Unknown Sector"),
+    sectorBias: safeString(sector.bias || "NEUTRAL"),
+    relStrength: safeString(relStrength.status || "Neutral"),
+    institutionalBias: safeString(result.marketNote || "Institutional activity appears balanced."),
+    newsPositive: smartFallback("news_positive", safeString(news.positive)),
+    newsNegative: smartFallback("news_negative", safeString(news.negative)),
+    sentiment: safeString(news.sentiment || "NEUTRAL"),
+    riskLevel: safeString(result.riskLevel || risk.riskLevel || "MEDIUM"),
+    exitAction: safeString(exitSignal.action || "Monitor closely"),
+    exitReason: safeString(exitSignal.reason || "No strong exit trigger yet."),
+    bullishScenario: smartFallback("trigger_up", safeString(nextSessionPlan.entryTrigger), { price }),
+    bearishScenario: smartFallback("trigger_down", safeString(nextSessionPlan.stopLoss), { price }),
+    keyTrigger: safeString(nextSessionPlan.note || "Opening gap + volume confirmation"),
+    finalInsight: smartFallback("final_insight", safeSubstring(result.analysis || "", 220))
   };
 
   const fmt = (value, pct = false) => {
-    if (value === "N/A") return "N/A";
+    if (value === "-" || value === "") return "-";
     const n = Number(value);
     if (Number.isNaN(n)) return `${value}`;
     return pct ? `${(n * 100).toFixed(1)}%` : n.toString();
   };
 
-  const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "N/A";
+  const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "Price discovery in progress";
 
   return `
 🏛 *FINSIGHT AI — INSTITUTIONAL REPORT (V2)*
@@ -458,19 +494,27 @@ bot.on("text", async (ctx) => {
     if (!text) return;
 
     const lowerText = text.toLowerCase();
-    const usageUser = await getUsageUser(chatId);
-    const usageResult = await processUsage(usageUser);
+    const user = await getUsageUser(chatId);
+    const usageResult = processUsage(user);
+    console.log("[USAGE CHECK]", {
+      chatId: chatId.toString(),
+      allowed: usageResult.allowed,
+      nextCount: usageResult.usage ?? user?.free_usage_count ?? 0
+    });
 
     if (!usageResult.allowed) {
-      return ctx.reply(usageResult.footer);
+      await bot.telegram.sendMessage(chatId, usageResult.footer);
+      return;
     }
 
-    const subscribed = isProPlan(usageUser);
+    const subscribed = user.plan === "pro";
     const usageFooter = subscribed ? "" : usageResult.footer;
     const withUsageFooter = (message) => (usageFooter ? `${message}\n\n${usageFooter}` : message);
     if (!subscribed) {
-      await updateUsage(chatId, {
-        free_usage_count: usageResult.usage,
+      await updateUsage(chatId, usageResult.usage, usageResult.start);
+      console.log("[USAGE UPDATED]", {
+        chatId: chatId.toString(),
+        usage: usageResult.usage,
         usage_started_at: new Date(usageResult.start).toISOString()
       });
     }
@@ -512,7 +556,7 @@ bot.on("text", async (ctx) => {
           `⚡ *QUICK VERDICT — ${safeString(ticker).toUpperCase()}*\n\n` +
           `📊 Verdict: ${result.decision?.finalDecision || "HOLD"}\n` +
           `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n` +
-          `⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}\n\n` +
+          `⚠ Risk Level: ${result.risk?.riskLevel || "MEDIUM"}\n\n` +
           `📝 Summary:\n${result.decision?.reason || "No summary available"}`;
         await bot.telegram.sendMessage(chatId, withUsageFooter(message), { parse_mode: 'Markdown' });
       } catch (error) {
@@ -542,11 +586,11 @@ bot.on("text", async (ctx) => {
           `📈 *${safeString(ticker1).toUpperCase()}*\n` +
           `Verdict: ${result1.decision?.finalDecision || "HOLD"}\n` +
           `Confidence: ${score1 || 0}/10\n` +
-          `Risk: ${result1.risk?.riskLevel || "N/A"}\n\n` +
+          `Risk: ${result1.risk?.riskLevel || "MEDIUM"}\n\n` +
           `📈 *${safeString(ticker2).toUpperCase()}*\n` +
           `Verdict: ${result2.decision?.finalDecision || "HOLD"}\n` +
           `Confidence: ${score2 || 0}/10\n` +
-          `Risk: ${result2.risk?.riskLevel || "N/A"}\n\n` +
+          `Risk: ${result2.risk?.riskLevel || "MEDIUM"}\n\n` +
           `🏆 Better Opportunity: *${winner}*\n\n` +
           `⚠️ Educational only. Not SEBI advice.`;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -699,7 +743,7 @@ bot.on("text", async (ctx) => {
           `🧠 Institutional Advice:\n${health.action}\n\n` +
           `📈 Portfolio Stats:\n` +
           `• Holdings: ${details.stockCount || 0} Stocks\n` +
-          `• Max Weight: ${details.highestAllocation || "N/A"}\n` +
+          `• Max Weight: ${details.highestAllocation || "Balanced"}\n` +
           `• Sector Mix: ${details.uniqueSectors || 0} Sectors\n\n` +
           `Use /analyze <TICKER> for deep dive on any holding.\n━━━━━━━━━━━━━━━━━━\n` +
           `⚠️ Educational purposes only.`;

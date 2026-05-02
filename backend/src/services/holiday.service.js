@@ -24,7 +24,24 @@ export async function fetchIndianHolidays(year) {
     }
 
     const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/IN`);
-    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`Bad response: ${res.status}`);
+    }
+    const text = await res.text();
+    if (!text || !text.trim()) {
+      console.log("HOLIDAY API FAIL -> using fallback");
+      const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
+      return new Set(fallbackDates);
+    }
+
+    let data = [];
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      console.log("HOLIDAY API FAIL -> using fallback");
+      const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
+      return new Set(fallbackDates);
+    }
 
     const tradingHolidayNames = [
       "Republic Day", "Holi", "Good Friday", "Independence Day",
@@ -49,6 +66,8 @@ export async function fetchIndianHolidays(year) {
 
   } catch (err) {
     console.error("HOLIDAY API ERROR:", err);
-    return new Set(); // fallback safe
+    console.log("HOLIDAY API FAIL -> using fallback");
+    const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
+    return new Set(fallbackDates);
   }
 }
