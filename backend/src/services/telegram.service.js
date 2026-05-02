@@ -50,10 +50,14 @@ async function isProUser(chatId) {
 
 function getFreeUserFooter(usageCount, isHighIntent = false) {
   const remaining = Math.max(0, 10 - usageCount);
-  let footer = `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 requests remaining`;
+  let footer = usageCount === 0
+    ? `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: 10 requests / 12h`
+    : `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 remaining`;
   
-  if (remaining === 2 || remaining === 1) {
-    footer += `\n\n⚠️ ${remaining} request${remaining === 1 ? '' : 's'} left.\nYou're in the middle of tracking something important.\nStopping here breaks the edge. Most users upgrade at this point to stay consistent.\n👉 /subscribe`;
+  if (remaining === 2) {
+    footer += `\n\n⚠️ 2 requests left.\nYou're close to your limit.\n👉 /subscribe`;
+  } else if (remaining === 1) {
+    footer += `\n\n⚠️ 1 request left.\nLast free request before lock.\n👉 /subscribe`;
   } else if (isHighIntent) {
     footer += `\n\n💎 Most users tracking multiple stocks switch to Pro.\nIt removes interruptions.\n👉 /subscribe`;
   } else {
@@ -342,6 +346,7 @@ bot.on("text", async (ctx) => {
     if (!text) return;
 
     const lowerText = text.toLowerCase();
+    const skipUsage = ["ok", "okay", "thanks", "hi"].includes(lowerText);
 
     const subscribed = await isProUser(chatId);
 
@@ -399,7 +404,7 @@ bot.on("text", async (ctx) => {
           `📝 Summary:\n${result.decision?.reason || "No summary available"}` +
           counterLine;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        if (!subscribed) await incrementUsage(chatId, usageCount);
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, `❌ Could not analyze ${ticker}`);
       }
@@ -436,7 +441,7 @@ bot.on("text", async (ctx) => {
           `⚠️ Educational only. Not SEBI advice.`;
         if (!subscribed) message += getFreeUserFooter(usageCount, true);
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        if (!subscribed) await incrementUsage(chatId, usageCount);
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, "❌ Comparison failed. Please check ticker symbols.");
       }
@@ -466,7 +471,7 @@ bot.on("text", async (ctx) => {
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
       if (!subscribed) message += getFreeUserFooter(usageCount, true);
       await bot.telegram.sendMessage(chatId, message);
-      if (!subscribed) await incrementUsage(chatId, usageCount);
+      if (!subscribed && !skipUsage) await incrementUsage(chatId);
       return;
     }
 
@@ -485,7 +490,7 @@ bot.on("text", async (ctx) => {
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
       if (!subscribed) message += getFreeUserFooter(usageCount, true);
       await bot.telegram.sendMessage(chatId, message);
-      if (!subscribed) await incrementUsage(chatId, usageCount);
+      if (!subscribed && !skipUsage) await incrementUsage(chatId);
       return;
     }
 
@@ -498,7 +503,7 @@ bot.on("text", async (ctx) => {
         return;
       }
       await performAnalysis(chatId, text, !subscribed ? getFreeUserFooter(usageCount, true) : "");
-      if (!subscribed) await incrementUsage(chatId, usageCount);
+      if (!subscribed && !skipUsage) await incrementUsage(chatId);
       return;
     }
 
@@ -519,7 +524,7 @@ bot.on("text", async (ctx) => {
         let msg = `✅ Holding Added Successfully\n📈 Stock: ${symbol}\n📦 Quantity: ${quantity}\n💰 Avg Buy Price: ₹${avgPrice}\n📊 Total Invested: ₹${quantity * avgPrice}\n\nUse /portfolio to view full health.`;
         if (!subscribed) msg += getFreeUserFooter(usageCount, true);
         await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed) await incrementUsage(chatId, usageCount);
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error adding holding: ${err.message}`);
       }
@@ -542,7 +547,7 @@ bot.on("text", async (ctx) => {
         let msg = `🔄 Holding Updated\n📈 Stock: ${symbol}\n📦 New Quantity: ${quantity}\n💰 New Avg Price: ₹${avgPrice}\n📊 New Total Invested: ₹${quantity * avgPrice}`;
         if (!subscribed) msg += getFreeUserFooter(usageCount, true);
         await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed) await incrementUsage(chatId, usageCount);
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error updating holding: ${err.message}`);
       }
@@ -557,7 +562,7 @@ bot.on("text", async (ctx) => {
         let msg = `🗑 ${symbol} removed from your portfolio.`;
         if (!subscribed) msg += getFreeUserFooter(usageCount);
         await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed) await incrementUsage(chatId, usageCount);
+        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error removing holding: ${err.message}`);
       }
@@ -600,7 +605,7 @@ bot.on("text", async (ctx) => {
         `⚠️ Educational purposes only.`;
       if (!subscribed) message += getFreeUserFooter(usageCount, true);
       await bot.telegram.sendMessage(chatId, message);
-      if (!subscribed) await incrementUsage(chatId, usageCount);
+      if (!subscribed && !skipUsage) await incrementUsage(chatId);
       return;
     }
 
@@ -654,7 +659,7 @@ bot.on("text", async (ctx) => {
 
     if (tickerToAnalyze) {
       await performAnalysis(chatId, tickerToAnalyze, !subscribed ? getFreeUserFooter(usageCount, true) : "");
-      if (!subscribed) await incrementUsage(chatId, usageCount);
+      if (!subscribed && !skipUsage) await incrementUsage(chatId);
       return;
     }
 
@@ -707,10 +712,10 @@ bot.on("text", async (ctx) => {
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
       finalMessage += getFreeUserFooter(usageCount);
-      await incrementUsage(chatId, usageCount);
     }
     
     await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+    if (!subscribed && !skipUsage) await incrementUsage(chatId);
     return;
 
   } catch (error) {

@@ -35,10 +35,21 @@ export async function checkUsage(chatId) {
   return { allowed: true, remaining: FREE_LIMIT - count, count };
 }
 
-export async function incrementUsage(chatId, currentCount) {
-  await supabase.from('subscribers').update({
-    free_usage_count: (currentCount || 0) + 1
-  }).eq('telegram_chat_id', chatId.toString());
+export async function incrementUsage(chatId) {
+  const { data, error } = await supabase
+    .from('subscribers')
+    .select('free_usage_count')
+    .eq('telegram_chat_id', chatId.toString())
+    .single();
+
+  if (error || !data) return;
+
+  const newCount = (data.free_usage_count || 0) + 1;
+
+  await supabase
+    .from('subscribers')
+    .update({ free_usage_count: newCount })
+    .eq('telegram_chat_id', chatId.toString());
 }
 
 export async function getRemainingUsage(chatId) {
