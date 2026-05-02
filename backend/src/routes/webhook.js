@@ -5,10 +5,15 @@ import supabase from '../services/supabase.service.js';
 
 const router = express.Router();
 
+router.get('/razorpay', (req, res) => {
+  res.send('✅ Razorpay Webhook endpoint is active and reachable.');
+});
+
 router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, res) => {
   console.log('🔥 RAW WEBHOOK RECEIVED');
   const signature = req.headers['x-razorpay-signature'];
   console.log('SIGNATURE HEADER:', signature);
+  console.log('BODY PREVIEW:', req.body.toString().slice(0, 100));
 
   // 1. Respond 200 OK immediately to Razorpay
   res.json({ status: 'ok' });
