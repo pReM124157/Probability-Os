@@ -1,4 +1,5 @@
 import { riskAgent } from "./risk.agent.js";
+import { generatePreMarketInsight } from "../services/premarket.service.js";
 import { portfolioAgent } from "./portfolioAgent.js";
 import { decisionAgent } from "./decision.agent.js";
 import { rebalancingAgent } from "./rebalancing.agent.js";
@@ -656,7 +657,18 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     // Ensure score stays within 1-10 range
     adjustedConfidence = Math.min(Math.max(adjustedConfidence, 1), 10);
 
-    // PHASE 3.5: Professional Reasoning Construction
+    // PHASE 3.5: Pre-Market Intelligence (ROI Upgrade)
+    let preMarket = null;
+    if (marketStatus.isPreMarket) {
+      preMarket = generatePreMarketInsight({
+        previousClose: liveMarketData.previousClose,
+        currentPrice: liveMarketData.price,
+        sector: stockData.Sector
+      });
+      console.log(`[PRE-MARKET] Generated insight for ${ticker}: ${preMarket?.note}`);
+    }
+
+    // PHASE 3.6: Professional Reasoning Construction
     let professionalReasoning = "";
     if (!liveMarketData.isMarketOpen) {
       professionalReasoning += `Market is closed, so this is based on the last available data. Act only after confirmation on open.\n\n`;
@@ -890,6 +902,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       currentPrice: activePrice,
       confidence: adjustedConfidence,
       riskLevel: risk.riskLevel || "MEDIUM",
+      preMarket,
       action: isLive ? (finalDecision.finalDecision || "HOLD") : "Wait for market open confirmation",
       nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
                 (marketStatus.isPostMarket ? "Monitor tomorrow's open" : 

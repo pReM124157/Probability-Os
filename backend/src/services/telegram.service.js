@@ -81,6 +81,17 @@ function getNextSessionNote(status) {
   return "";
 }
 
+function getOpenStrategy(preMarket) {
+  if (!preMarket) return "";
+  if (preMarket.gapType === "gap up") {
+    return "Watch for breakout continuation above opening high";
+  }
+  if (preMarket.gapType === "gap down") {
+    return "Avoid early entry — wait for reversal or support";
+  }
+  return "Wait for first 15-min range breakout";
+}
+
 function formatAnalysis(res, symbol) {
   const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
   const nextLine = nextSession ? `${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
@@ -100,9 +111,20 @@ function formatAnalysis(res, symbol) {
     lastTradeNote = `Based on last trading session (${lastDayName})\n`;
   }
 
+  let preMarketLine = "";
+  if (res.preMarket) {
+    preMarketLine = `
+🔍 *Pre-Market Insight:*
+• Gap: ${res.preMarket.gap}% (${res.preMarket.gapType})
+• Bias: ${res.preMarket.bias}
+
+📌 *Open Strategy:*
+${getOpenStrategy(res.preMarket)}\n`;
+  }
+
   return `
 📊 *${symbol.toUpperCase()} Analysis*
-${res.marketNote ? `_${res.marketNote}_\n` : ""}${lastTradeNote}🎯 *Confidence:* ${res.confidence}/10
+${res.marketNote ? `_${res.marketNote}_\n` : ""}${lastTradeNote}${preMarketLine}🎯 *Confidence:* ${res.confidence}/10
 ⚠ *Risk:* ${res.riskLevel}
 📌 *Action:* ${res.action}
 ${nextLine}
