@@ -1,4 +1,5 @@
 import supabase from './supabase.service.js';
+import { formatIST } from "../utils/time.js";
 
 const LIMIT = 10;
 const WINDOW = 24 * 60 * 60 * 1000;
@@ -29,7 +30,10 @@ export function processUsage(user) {
       allowed: false,
       usage: LIMIT,
       start,
-      footer: `⛔ Limit reached (10/10)\nYou can chat again at ${new Date(start + WINDOW).toLocaleString()}`
+      footer: `⛔ Limit reached (10/10)
+You can chat again at ${formatIST(start + WINDOW)}
+💎 Want unlimited access?
+👉 /subscribe`
     };
   }
   // INCREMENT

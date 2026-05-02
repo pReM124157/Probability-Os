@@ -25,6 +25,7 @@ import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } fro
 import supabase from "./supabase.service.js";
 import { getUsageUser, processUsage, updateUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
+import { formatIST } from "../utils/time.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
@@ -305,6 +306,18 @@ async function performAnalysis(chatId, symbol, footer = "") {
   }
 }
 
+async function sendSubscriptionLink(chatId) {
+  const { url } = await createPaymentLink(chatId.toString());
+  await bot.telegram.sendMessage(
+    chatId,
+    `💎 Unlock FinSight Pro
+• Unlimited chats
+• Full analysis access
+• Priority insights
+👉 Pay here: ${url}`
+  );
+}
+
 // ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────
@@ -325,25 +338,9 @@ bot.command('start', async (ctx) => {
 
 
 bot.command('subscribe', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const name = ctx.from?.first_name || "there";
-
-  await ctx.reply('⏳ Generating your payment link...');
   try {
-    const { url } = await createPaymentLink(chatId);
-
-    return ctx.reply(
-      `💎 *Subscribe to FinSight Pro*\n\n` +
-      `Hey ${name},\n` +
-      `₹299 one-time (Full Month Access)\n\n` +
-      `👉 ${url}\n\n` +
-      `⚡ Unlock unlimited analysis instantly.\n` +
-      `Access activates automatically after payment.`,
-      { 
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true
-      }
-    );
+    await sendSubscriptionLink(ctx.chat.id);
+    return;
   } catch (err) {
     console.error('Payment link error:', err.message, err);
     await ctx.reply(`⚠️ Could not generate payment link.\nCheck server logs for details.`);
@@ -367,7 +364,7 @@ bot.command('cancel', async (ctx) => {
   }
 
   const expiryDate = data.expires_at
-    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    ? formatIST(data.expires_at)
     : 'Not set';
 
   return ctx.reply(
@@ -423,7 +420,7 @@ bot.command('status', async (ctx) => {
   }
 
   const expiryDate = data.expires_at
-    ? new Date(data.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    ? formatIST(data.expires_at)
     : 'Not set';
 
   let expiryText = `Expires: ${expiryDate}`;
@@ -526,8 +523,11 @@ bot.on("text", async (ctx) => {
     console.log("CHAT ID:", chatId);
     const text = ctx.message.text?.trim() || "";
     if (!text) return;
-
     const lowerText = text.toLowerCase();
+    if (lowerText === "/subscribe") {
+      await sendSubscriptionLink(chatId);
+      return;
+    }
     const user = await getUsageUser(chatId);
     const usageResult = processUsage(user);
     console.log("[USAGE CHECK]", {
