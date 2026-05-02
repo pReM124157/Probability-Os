@@ -4,14 +4,7 @@ import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 
 const yahooFinance = new YahooFinance();
-yahooFinance.setGlobalConfig({
-  fetchOptions: {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept": "application/json"
-    }
-  }
-});
+// Global config removed to prevent startup crash
 
 // --- Institutional Data Layer (Observability & Safety) ---
 export const dataMetrics = {
@@ -86,11 +79,11 @@ export async function checkSymbolExists(symbol) {
     if (!upper || upper.length < 3) return false;
 
     // Direct check with .NS
-    const res = await yahooFinance.quote(upper + ".NS");
+    const res = await yahooFinance.quote(upper + ".NS", { headers: { "User-Agent": "Mozilla/5.0" } });
     if (res && (res.regularMarketPrice || res.currentPrice)) return true;
 
     // Fallback to .BO
-    const res2 = await yahooFinance.quote(upper + ".BO");
+    const res2 = await yahooFinance.quote(upper + ".BO", { headers: { "User-Agent": "Mozilla/5.0" } });
     if (res2 && (res2.regularMarketPrice || res2.currentPrice)) return true;
 
     return false;
@@ -117,7 +110,7 @@ async function fetchWithRetry(fn, retries = 2) {
 export async function getIndianIndices() {
   try {
     const symbols = ["^NSEI", "^BSESN"]; // Nifty 50 and Sensex
-    const results = await yahooFinance.quote(symbols);
+    const results = await yahooFinance.quote(symbols, { headers: { "User-Agent": "Mozilla/5.0" } });
     
     const nifty = results.find(r => r.symbol === "^NSEI") || {};
     const sensex = results.find(r => r.symbol === "^BSESN") || {};
@@ -148,7 +141,7 @@ export async function getIndianIndices() {
  */
 export async function getIndianMarketNews() {
   try {
-    const result = await yahooFinance.search("India stock market", { newsCount: 5 });
+    const result = await yahooFinance.search("India stock market", { newsCount: 5, headers: { "User-Agent": "Mozilla/5.0" } });
     return result.news.map(n => n.title);
   } catch (error) {
     console.warn("Failed to fetch news:", error.message);
@@ -161,7 +154,7 @@ export async function getIndianMarketNews() {
 export async function getIndianSectors() {
   try {
     const symbols = ["^NSEBANK", "^CNXIT"]; // Nifty Bank and Nifty IT
-    const results = await yahooFinance.quote(symbols);
+    const results = await yahooFinance.quote(symbols, { headers: { "User-Agent": "Mozilla/5.0" } });
     
     const bank = results.find(r => r.symbol === "^NSEBANK") || {};
     const it = results.find(r => r.symbol === "^CNXIT") || {};
@@ -210,7 +203,8 @@ export async function getCompanyOverview(symbol) {
         try {
             console.log(`FETCH ATTEMPT (Overview): ${sym}`);
             const tempResult = await retry(() => yahooFinance.quoteSummary(sym, {
-                modules: ["financialData", "defaultKeyStatistics", "assetProfile", "summaryDetail", "calendarEvents"]
+                modules: ["financialData", "defaultKeyStatistics", "assetProfile", "summaryDetail", "calendarEvents"],
+                headers: { "User-Agent": "Mozilla/5.0" }
             }), 2, 500);
             if (tempResult && tempResult.assetProfile) {
                 result = tempResult;
@@ -436,7 +430,7 @@ export async function getLiveMarketData(symbol) {
       for (const sym of symbolsToTry) {
           try {
               console.log(`[DATA] attempt=yahoo symbol=${sym}`);
-              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), 3500);
+              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym, { headers: { "User-Agent": "Mozilla/5.0" } }), 1, 500), 3500);
               if (tempResult && (tempResult.regularMarketPrice || tempResult.currentPrice)) {
                   result = tempResult;
                   fetchSymbol = sym;
