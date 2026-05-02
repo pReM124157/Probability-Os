@@ -13,7 +13,7 @@ import {
 } from "./portfolioMemory.service.js";
 import { createSubscriptionLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
-import { checkAndIncrementUsage, getRemainingUsage, FREE_LIMIT } from "./usage.service.js";
+import { checkUsage, incrementUsage, FREE_LIMIT } from "./usage.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
