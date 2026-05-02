@@ -46,6 +46,32 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       const event = data.event;
       const payload = data.payload;
 
+      if (event === 'payment.captured') {
+        const payment = payload.payment.entity;
+        let chatId = payment.notes?.telegram_chat_id;
+        if (!chatId) {
+          console.log("❌ No chatId in payment notes");
+          return;
+        }
+        console.log("💰 PAYMENT SUCCESS:", chatId);
+        await supabase.from('subscribers').update({
+          status: 'active',
+          plan: 'pro',
+          subscription_started_at: new Date(),
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        }).eq('telegram_chat_id', chatId);
+
+        try {
+          await bot.telegram.sendMessage(
+            chatId,
+            "🎉 Payment successful! You now have FinSight Pro access for 30 days."
+          );
+        } catch (err) {
+          console.error("Failed to send success message:", err.message);
+        }
+        return;
+      }
+
 
     if (event === 'subscription.activated') {
       const sub = payload.subscription.entity;

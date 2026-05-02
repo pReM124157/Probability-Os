@@ -6,12 +6,19 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-export async function createSubscriptionLink(chatId) {
+export async function createPaymentLink(chatId) {
   try {
-    const subscription = await razorpay.subscriptions.create({
-      plan_id: process.env.RAZORPAY_PLAN_ID,
-      total_count: 12,
-      customer_notify: 1,
+    const link = await razorpay.paymentLink.create({
+      amount: 29900, // ₹299
+      currency: "INR",
+      description: "FinSight Pro",
+      customer: {
+        name: "FinSight User"
+      },
+      notify: {
+        sms: false,
+        email: false
+      },
       notes: {
         telegram_chat_id: chatId
       }
@@ -19,16 +26,16 @@ export async function createSubscriptionLink(chatId) {
 
     await supabase.from('subscribers').upsert({
       telegram_chat_id: chatId,
-      razorpay_subscription_id: subscription.id,
-      status: 'pending'
+      status: 'pending',
+      razorpay_payment_link_id: link.id
     });
 
     return { 
-      url: subscription.short_url || `https://rzp.io/i/${subscription.id}`, 
-      id: subscription.id 
+      url: link.short_url, 
+      id: link.id 
     };
   } catch (err) {
-    console.error("RAZORPAY SUBSCRIPTION CREATE ERROR:", JSON.stringify(err, null, 2));
+    console.error("PAYMENT LINK ERROR:", err);
     throw err;
   }
 }

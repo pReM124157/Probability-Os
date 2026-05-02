@@ -11,7 +11,7 @@ import {
   removeHolding,
   updateHolding
 } from "./portfolioMemory.service.js";
-import { createSubscriptionLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
+import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
 import { checkUsage, incrementUsage, FREE_LIMIT, getRemainingUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
@@ -157,14 +157,14 @@ bot.command('subscribe', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const name = ctx.from?.first_name || "there";
 
-  await ctx.reply('⏳ Generating your subscription link...');
+  await ctx.reply('⏳ Generating your payment link...');
   try {
-    const { url } = await createSubscriptionLink(chatId);
+    const { url } = await createPaymentLink(chatId);
 
     return ctx.reply(
       `💎 *Subscribe to FinSight Pro*\n\n` +
       `Hey ${name},\n` +
-      `₹299/month (auto-renew)\n\n` +
+      `₹299 one-time (Full Month Access)\n\n` +
       `👉 ${url}\n\n` +
       `⚡ Unlock unlimited analysis instantly.\n` +
       `Access activates automatically after payment.`,
@@ -174,8 +174,8 @@ bot.command('subscribe', async (ctx) => {
       }
     );
   } catch (err) {
-    console.error('Subscription link error:', err.message, err);
-    await ctx.reply(`⚠️ Could not generate subscription link.\nCheck server logs for details.`);
+    console.error('Payment link error:', err.message, err);
+    await ctx.reply(`⚠️ Could not generate payment link.\nCheck server logs for details.`);
   }
 });
 
