@@ -603,16 +603,43 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    const analyzeMatch = lowerText.match(/^(?:\/?(?:analyze|analyse|anyze|check|scan))?\s*([a-z0-9_.-]+)$/i);
-    if (analyzeMatch && analyzeMatch[1] && analyzeMatch[1].length <= 15) {
-      const ticker = analyzeMatch[1].toUpperCase();
-      // Ignore common conversational words that might match a 1-word string
-      const ignoreWords = ['hi', 'hello', 'hey', 'help', 'start', 'status', 'portfolio', 'top', 'scanner', 'sector', 'sectors', 'rotation', 'pay', 'subscribe'];
-      if (!ignoreWords.includes(lowerText)) {
-        await performAnalysis(chatId, ticker, !subscribed ? getFreeUserFooter(usageCount) : "");
-        if (!subscribed) await incrementUsage(chatId, usageCount);
-        return;
+    const simpleReplies = {
+      'ok': "Got it. Tell me what you'd like to check next.",
+      'okay': "Got it. Tell me what you'd like to check next.",
+      'thanks': "Anytime. Want me to look at a stock or your portfolio?",
+      'thank you': "Anytime. Want me to look at a stock or your portfolio?",
+      'hi': "Hello! Tell me what you'd like to analyze — stock, market, or portfolio.",
+      'hello': "Hello! Tell me what you'd like to analyze — stock, market, or portfolio.",
+      'hey': "Hey there! Tell me what you'd like to analyze — stock, market, or portfolio.",
+      'bye': "Goodbye! Let me know when you need more market insights."
+    };
+
+    if (simpleReplies[lowerText]) {
+      let reply = simpleReplies[lowerText];
+      if (!subscribed) {
+        reply += getFreeUserFooter(usageCount);
+        await incrementUsage(chatId, usageCount);
       }
+      return await bot.telegram.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+    }
+
+    const explicitAnalyzeMatch = lowerText.match(/^\/?(?:analyze|analyse|anyze|check|scan)\s+([a-z0-9_.-]+)$/i);
+    const implicitAnalyzeMatch = lowerText.match(/^([a-z0-9_.-]+)$/i);
+
+    let tickerToAnalyze = null;
+    if (explicitAnalyzeMatch && explicitAnalyzeMatch[1].length <= 15) {
+      tickerToAnalyze = explicitAnalyzeMatch[1].toUpperCase();
+    } else if (implicitAnalyzeMatch && implicitAnalyzeMatch[1].length <= 15) {
+      const isSystemCommand = ['start', 'status', 'portfolio', 'top', 'scanner', 'sector', 'sectors', 'rotation', 'pay', 'subscribe', 'help'].includes(lowerText);
+      if (!isSystemCommand) {
+        tickerToAnalyze = implicitAnalyzeMatch[1].toUpperCase();
+      }
+    }
+
+    if (tickerToAnalyze) {
+      await performAnalysis(chatId, tickerToAnalyze, !subscribed ? getFreeUserFooter(usageCount) : "");
+      if (!subscribed) await incrementUsage(chatId, usageCount);
+      return;
     }
 
     // ── Conversational AI Fallback (tiered) ───

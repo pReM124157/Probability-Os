@@ -370,7 +370,7 @@ export async function masterAgent(input) {
       // 2. Intent Detection: Vague / Open-ended (PRIORITY 2)
       const isVague = /do one task|help me|can you help|do something/i.test(userQuery);
       if (isVague) {
-        return { response: "What do you want me to check — market or a stock?" };
+        return { response: "Tell me what you'd like to analyze — stock, market, or portfolio." };
       }
 
       // 3. Intent Detection: Market Updates (PRIORITY 3 - India Override)
@@ -476,7 +476,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       // 5. Final Intent Check (Safety Guard)
       const hasExplicitIntent = /analyze|market|nifty|sensex|stock/i.test(userQuery);
       if (!isLikelyTicker && !hasExplicitIntent) {
-        return { response: "What do you want me to check — market or a stock?" };
+        return { response: "Tell me what you'd like to analyze — stock, market, or portfolio." };
       }
 
       // 6. LLM Call (tiered by subscription)
