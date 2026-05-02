@@ -28,7 +28,7 @@ import {
 } from "./portfolioMemory.service.js";
 import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
-import { getUsageUser, processUsage, updateUsage } from "./usage.service.js";
+import { handleUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
 import { formatIST } from "../utils/time.js";
 
@@ -524,31 +524,52 @@ bot.on("text", async (ctx) => {
     if (!text) return;
 
     // ── Single DB fetch ─────────────────────────────────────────────
-    const { data: user } = await supabase
+    let { data: user } = await supabase
       .from("subscribers")
-      .select("plan, is_pro, free_usage_count, usage_started_at")
+      .select("plan, is_pro, subscription_end")
       .eq("telegram_chat_id", chatId)
       .maybeSingle();
 
-    console.log("[DB FETCH] chatId:", chatId, "| user:", JSON.stringify(user));
-
-    const proUser = isPro(user);
-    console.log("[PLAN CHECK] plan:", user?.plan, "| is_pro:", user?.is_pro, "| isPro:", proUser);
-
-    // ── Usage gate (FREE only) ──────────────────────────────────────
-    const safeUser = user || { plan: "FREE", is_pro: false, free_usage_count: 0, usage_started_at: null };
-    const usageResult = proUser ? { allowed: true, footer: "" } : processUsage(safeUser);
-
-    if (!proUser) {
-      if (!usageResult.allowed) {
-        await bot.telegram.sendMessage(chatId, usageResult.footer);
-        return;
+    // ── Expiry Check (Auto-Downgrade) ──────────────────────────────
+    if (user && isPro(user) && user.subscription_end) {
+      if (new Date() > new Date(user.subscription_end)) {
+        console.log("⏳ SUBSCRIPTION EXPIRED:", chatId);
+        await supabase
+          .from("subscribers")
+          .update({ plan: "FREE", is_pro: false })
+          .eq("telegram_chat_id", chatId);
+          
+        user.plan = "FREE";
+        user.is_pro = false;
+        
+        await bot.telegram.sendMessage(
+          chatId, 
+          "⚠️ *Subscription Expired*\nYour FinSight Pro access has ended. You are now on the Free plan.\n\n👉 /subscribe to renew.",
+          { parse_mode: "Markdown" }
+        );
       }
-      await updateUsage(chatId, usageResult.usage, usageResult.start);
     }
 
-    const footer = proUser ? "" : (usageResult.footer || "");
-    console.log("[FOOTER GATE] isPro:", proUser, "| footer:", footer || "(none)");
+    const proUser = isPro(user);
+
+    // ── Usage gate (FREE only) ──────────────────────────────────────
+    let usage = { allowed: true, count: 0, reset_time: null };
+    if (!proUser) {
+      usage = await handleUsage(chatId);
+      if (!usage.allowed) {
+        const resetIST = new Date(usage.reset_time).toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "numeric",
+          month: "short",
+          hour: "numeric",
+          minute: "2-digit"
+        });
+        await ctx.reply(`⛔ Limit reached (10/10)\nYou can chat again at ${resetIST}\n💎 Want unlimited access?\n👉 /subscribe`);
+        return; // HARD STOP
+      }
+    }
+
+    const footer = proUser ? "" : `\n\n📈 Requests: ${usage.count}/10`;
 
     // Single send helper — all messages pass through buildMessage
     const send = (msg, opts) =>

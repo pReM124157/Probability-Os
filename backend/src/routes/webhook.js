@@ -48,28 +48,37 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
 
       if (event === 'payment.captured') {
         const payment = payload.payment.entity;
-        let chatId = payment.notes?.telegram_chat_id;
+        const chatId = payment.notes?.telegram_chat_id?.toString();
         if (!chatId) {
-          console.log("❌ No chatId in payment notes");
+          console.error("❌ Missing telegram_chat_id in Razorpay notes");
           return;
         }
-        console.log("💰 PAYMENT SUCCESS:", chatId);
-        await supabase.from('subscribers').update({
-          is_pro: true,
-          status: 'active',
-          plan: 'PRO',
-          subscription_started_at: new Date(),
-          subscription_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-        }).eq('telegram_chat_id', chatId);
 
-        try {
-          await bot.telegram.sendMessage(
-            chatId,
-            "🎉 Payment successful! You now have FinSight Pro access for 30 days."
-          );
-        } catch (err) {
-          console.error("Failed to send success message:", err.message);
+        // 30 days expiry (IST safe)
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 30);
+
+        const { error } = await supabase
+          .from("subscribers")
+          .upsert({
+            telegram_chat_id: chatId,
+            plan: "PRO",
+            is_pro: true,
+            subscription_end: expiryDate.toISOString()
+          });
+
+        if (error) {
+          console.error("❌ PRO upgrade failed:", error);
+        } else {
+          console.log("✅ User upgraded to PRO:", chatId);
+          try {
+            await bot.telegram.sendMessage(
+              chatId,
+              "🎉 Payment successful! You now have FinSight Pro access for 30 days."
+            );
+          } catch (err) {
+            console.error("Failed to send success message:", err.message);
+          }
         }
         return;
       }
