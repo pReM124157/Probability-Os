@@ -63,7 +63,7 @@ async function withTimeout(promise, ms = 5000) {
 }
 
 function normalizeSymbol(symbol) {
-  if (!symbol) return "";
+  if (!symbol || typeof symbol !== "string") return "";
   return symbol
     .replace(/\//g, "") // Remove ALL slashes to prevent double-slash API errors
     .trim()
@@ -74,16 +74,20 @@ function normalizeSymbol(symbol) {
 export async function checkSymbolExists(symbol) {
   try {
     const upper = normalizeSymbol(symbol);
-    const symbols = upper.includes(".") ? [upper] : [`${upper}.NS`, `${upper}.BO`];
-    for (const s of symbols) {
-      try {
-        const q = await yahooFinance.quote(s);
-        if (q && (q.regularMarketPrice || q.currentPrice)) return true;
-      } catch (e) { continue; }
-    }
+    if (!upper || upper.length < 3) return false;
+
+    // Direct check with .NS
+    const res = await yahooFinance.quote(upper + ".NS");
+    if (res && (res.regularMarketPrice || res.currentPrice)) return true;
+
+    // Fallback to .BO
+    const res2 = await yahooFinance.quote(upper + ".BO");
+    if (res2 && (res2.regularMarketPrice || res2.currentPrice)) return true;
+
     return false;
   } catch (err) {
-    return false;
+    console.log("API failed, allowing:", symbol);
+    return true; // 🔥 NEVER BLOCK USER
   }
 }
 
@@ -214,8 +218,8 @@ export async function getCompanyOverview(symbol) {
     }
 
     console.log("FETCH SUCCESS (Overview):", fetchSymbol);
-
-    console.log("RAW YAHOO SUMMARY RESULT:", JSON.stringify(result).substring(0, 500));
+    const safeRaw = JSON.stringify(result) || "";
+    console.log("RAW YAHOO SUMMARY RESULT:", safeRaw.substring(0, 500));
 
     const {
       financialData = {},

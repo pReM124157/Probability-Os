@@ -510,7 +510,8 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
 
     // Otherwise, treat as stock analysis request
     const stockData = input || {};
-    console.log("MASTER AGENT INPUT:", JSON.stringify(stockData).substring(0, 200));
+    const safeInput = JSON.stringify(stockData) || "";
+    console.log("MASTER AGENT INPUT:", safeInput.substring(0, 200));
 
     const ticker = 
       stockData.Symbol || 

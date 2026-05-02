@@ -146,7 +146,8 @@ export async function analyzeEntryTiming({
         console.log("--- ENTRY TIMING DEBUG ---");
         console.log("SYMBOL:", fetchSymbol);
         console.log("CURRENT PRICE:", activePrice);
-        console.log("MARKET DATA:", JSON.stringify(marketData).substring(0, 200));
+        const safeMarket = JSON.stringify(marketData) || "";
+        console.log("MARKET DATA:", safeMarket.substring(0, 200));
         console.log("--------------------------");
 
         return {

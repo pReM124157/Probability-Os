@@ -30,26 +30,26 @@ bot.use(session());
 
 const userStates = new Map();
 
-const IGNORE_WORDS = [
-  "HI", "HELLO", "HEY", "OK", "THANKS", "YES", "NO", "HELP", "GOOD", "WELL", "HOW",
-  "NICE", "GREAT", "MONEY", "POWER", "TRADE", "BUY", "SELL", "STOCK", "MARKET"
-];
-
-function isValidTicker(symbol) {
-  if (!symbol) return false;
-  const clean = symbol.trim().toUpperCase();
-  if (IGNORE_WORDS.includes(clean)) return false;
-  // Enforce 3-10 characters for tickers, optional .NS/.BO suffix
-  return /^[A-Z&]{3,10}(\.NS|\.BO)?$/.test(clean);
+function shouldAnalyze(symbol) {
+  if (!symbol || typeof symbol !== "string") return false;
+  const clean = symbol.trim().toUpperCase().replace(/\//g, "");
+  if (clean.length < 3) return false;
+  // Check pattern of the ticker part (before any suffix like .NS)
+  const tickerPart = clean.split(".")[0];
+  if (!/^[A-Z&]+$/.test(tickerPart)) return false;
+  
+  const ignore = ["HI", "HELLO", "HEY", "OK", "THANKS", "GOOD", "NICE", "YES", "NO", "HELP"];
+  if (ignore.includes(clean)) return false;
+  return true;
 }
 
 function extractSymbol(text) {
-  if (!text) return "";
+  if (!text || typeof text !== "string") return "";
   let clean = text.trim().toUpperCase();
-  // Remove command prefixes
-  clean = clean.replace(/^\/ANALYZE\s+/i, "");
+  // Remove command prefixes (case-insensitive regex)
+  clean = clean.replace(/^\/(ANALYZE|QUICK|REMOVE|ADD|UPDATE)\s+/i, "");
   clean = clean.replace(/^\//, "");
-  // Remove spaces
+  // Remove all internal spaces
   return clean.replace(/\s+/g, "");
 }
 
@@ -160,6 +160,8 @@ function formatAnalysis(res, symbol) {
   const transparencyIcon = res.dataConfidence === "CACHED" ? "🟡" : (res.dataConfidence === "DEGRADED_SOURCE" ? "🔴" : "🟢");
   const transparencyText = res.dataConfidence === "CACHED" ? `Cached (${res.dataAge}s old)` : (res.dataConfidence === "DEGRADED_SOURCE" ? "Fallback" : "Live");
 
+  const insight = (res.analysis || "").substring(0, 200).trim();
+
   return `
 🏛 *FINSIGHT AI — INSTITUTIONAL REPORT*
 ━━━━━━━━━━━━━━━━━━
@@ -170,7 +172,7 @@ function formatAnalysis(res, symbol) {
 🌐 *SECTOR:* ${sectorBias}
 ${signalLine}${preMarketLine}
 🧠 *INSIGHT:*
-${res.analysis.substring(0, 200).trim()}...
+${insight}...
 ${nextLine}
 
 🕒 *Updated:* ${lastUpdated} IST | ${transparencyIcon} ${transparencyText}
@@ -506,8 +508,8 @@ bot.on("text", async (ctx) => {
     }
 
     // ── /quick (Free) ──────────────────────────
-    if (lowerText.startsWith("/quick ")) {
-      const ticker = extractSymbol(text.substring(7));
+    if (lowerText.startsWith("/quick")) {
+      const ticker = extractSymbol(text.replace(/^\/quick/i, ""));
       if (!ticker || ticker.length > 15) {
         await bot.telegram.sendMessage(chatId, "Please enter a valid ticker like TCS, RELIANCE, INFY");
         return;
@@ -675,8 +677,8 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    if (lowerText.startsWith("/remove ")) {
-      const symbol = text.substring(8).trim().toUpperCase();
+    if (lowerText.startsWith("/remove")) {
+      const symbol = extractSymbol(text.replace(/^\/remove/i, ""));
       if (!symbol) return bot.telegram.sendMessage(chatId, "Usage: /remove TICKER");
       try {
         await removeHolding(chatId, symbol);
@@ -711,6 +713,8 @@ bot.on("text", async (ctx) => {
         }
 
         const health = await analyzePortfolioHealth(stocks);
+        const details = health.details || {};
+        
         const message =
           `🏥 PORTFOLIO HEALTH REPORT\n━━━━━━━━━━━━━━━━━━\n` +
           `📊 Health Score: ${health.score}/10\n` +
@@ -720,9 +724,9 @@ bot.on("text", async (ctx) => {
           `⚖️ Concentration: ${health.concentrationRisk}\n\n` +
           `🧠 Institutional Advice:\n${health.action}\n\n` +
           `📈 Portfolio Stats:\n` +
-          `• Holdings: ${health.details.stockCount} Stocks\n` +
-          `• Max Weight: ${health.details.highestAllocation}\n` +
-          `• Sector Mix: ${health.details.uniqueSectors} Sectors\n\n` +
+          `• Holdings: ${details.stockCount || 0} Stocks\n` +
+          `• Max Weight: ${details.highestAllocation || "N/A"}\n` +
+          `• Sector Mix: ${details.uniqueSectors || 0} Sectors\n\n` +
           `Use /analyze <TICKER> for deep dive on any holding.\n━━━━━━━━━━━━━━━━━━\n` +
           `⚠️ Educational purposes only.`;
         if (!subscribed) message += getFreeUserFooter(displayedUsage, true);
@@ -743,9 +747,14 @@ bot.on("text", async (ctx) => {
     }
 
     // ── Intent Detection (Strict Routing) ───
-    const symbolCandidate = extractSymbol(text);
+    let symbolCandidate = extractSymbol(text);
+    // 🔥 FINAL HARD SANITIZE (Gate 0)
+    if (typeof symbolCandidate === "string") {
+      symbolCandidate = symbolCandidate.replace(/\//g, "").trim().toUpperCase();
+    }
+
     const isExplicitAnalyze = lowerText.startsWith("/analyze") || lowerText.startsWith("analyze");
-    const isTickerPattern = isValidTicker(symbolCandidate);
+    const isTickerPattern = shouldAnalyze(symbolCandidate);
 
     if (isExplicitAnalyze || isTickerPattern) {
       if (symbolCandidate && symbolCandidate.length <= 15) {

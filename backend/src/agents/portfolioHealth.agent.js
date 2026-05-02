@@ -89,7 +89,12 @@ export async function analyzePortfolioHealth(portfolio = []) {
             riskLevel: "MEDIUM",
             diversification: "UNKNOWN",
             concentrationRisk: "UNKNOWN",
-            action: "System error calculating health. Monitor manually."
+            action: "System error calculating health. Monitor manually.",
+            details: {
+                stockCount: "N/A",
+                highestAllocation: "N/A",
+                uniqueSectors: "N/A"
+            }
         };
     }
 }
