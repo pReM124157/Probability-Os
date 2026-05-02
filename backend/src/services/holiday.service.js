@@ -16,29 +16,28 @@ export async function fetchIndianHolidays(year) {
 
     const data = await res.json();
 
-    const tradingKeywords = [
-      "Diwali",
+    const tradingHolidayNames = [
+      "Republic Day",
       "Holi",
       "Good Friday",
       "Independence Day",
-      "Republic Day",
       "Gandhi Jayanti",
       "Dussehra",
-      "Muharram",
-      "Ramzan",
-      "Ganesh Chaturthi",
+      "Diwali",
+      "Christmas",
+      "Maharashtra Day",
       "Ambedkar Jayanti",
-      "Mahashivratri"
+      "Mahashivratri",
+      "Ramzan Id",
+      "Bakri Id",
+      "Muharram",
+      "Ganesh Chaturthi",
+      "Guru Nanak Jayanti"
     ];
 
     const holidayDates = new Set(
       data
-        .filter(h =>
-          tradingKeywords.some(k =>
-            h.localName.toLowerCase().includes(k.toLowerCase()) ||
-            h.name.toLowerCase().includes(k.toLowerCase())
-          )
-        )
+        .filter(h => tradingHolidayNames.includes(h.localName) || tradingHolidayNames.includes(h.name))
         .map(h => h.date) // format: YYYY-MM-DD
     );
 

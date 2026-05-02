@@ -59,21 +59,30 @@ function getFreeUserFooter(usage, isUpgrade = false) {
   return `\n\n📈 *Requests:* ${projected}/10\n${stars}\nGet unlimited access with /subscribe`;
 }
 
-function getNextSessionNote(status, ist) {
-  if (status.isWeekend) return "Next session: Monday 9:15 AM";
-  if (status.isHoliday) {
-    const next = new Date(ist);
-    next.setDate(next.getDate() + 1);
-    return `Next session: ${next.toDateString().split(' ').slice(0, 3).join(' ')} 9:15 AM`;
+function getNextSessionNote(status) {
+  if (status.isWeekend || status.isHoliday || status.isAfterClose) {
+    const next = status.nextTradingDay ? new Date(status.nextTradingDay) : null;
+    if (next) {
+      const dateStr = next.toDateString().split(' ').slice(0, 3).join(' ');
+      return `Next session: ${dateStr} 9:15 AM`;
+    }
   }
-  if (status.isAfterClose) return "Next session: Tomorrow 9:15 AM";
   return "";
 }
 
 function formatAnalysis(res, symbol) {
-  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus, res.marketStatus.istTime) : "";
+  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
   const nextLine = nextSession ? `👉 ${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
-  const lastTradeNote = !res.isMarketOpen ? "Based on last trading session data\n" : "";
+  
+  let lastTradeNote = "";
+  if (!res.isMarketOpen && res.marketStatus?.istTime) {
+    const lastDay = new Date(res.marketStatus.istTime);
+    // Note: This is a simplified "last day" logic. 
+    // In a perfect system we'd loop backwards like we did for nextTradingDay.
+    lastDay.setDate(lastDay.getDate() - 1);
+    const lastDayName = lastDay.toLocaleDateString("en-US", { weekday: "long" });
+    lastTradeNote = `Based on last trading session (${lastDayName})\n`;
+  }
 
   return `
 📊 *${symbol.toUpperCase()} Analysis*

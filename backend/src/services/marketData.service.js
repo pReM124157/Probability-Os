@@ -182,9 +182,11 @@ async function getMarketStatusIST() {
     const now = new Date();
     const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const year = ist.getFullYear();
-    const dateStr = ist.toISOString().split("T")[0];
-    const holidays = await fetchIndianHolidays(year);
     
+    // Fix: Safe IST date string conversion
+    const dateStr = ist.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    
+    const holidays = await fetchIndianHolidays(year);
     const day = ist.getDay(); 
     const hours = ist.getHours();
     const minutes = ist.getMinutes();
@@ -196,6 +198,22 @@ async function getMarketStatusIST() {
     const isWeekend = day === 0 || day === 6;
     const isHoliday = holidays.has(dateStr);
     const isOpenHours = time >= open && time <= close;
+
+    // Fix: Consecutive holiday / weekend aware next session logic
+    function getNextTradingDay(currentIst, holidaySet) {
+        const next = new Date(currentIst);
+        while (true) {
+            next.setDate(next.getDate() + 1);
+            const d = next.getDay();
+            const dStr = next.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+            const isWknd = d === 0 || d === 6;
+            const isHolid = holidaySet.has(dStr);
+            if (!isWknd && !isHolid) break;
+        }
+        return next;
+    }
+
+    const nextTradingDay = getNextTradingDay(ist, holidays);
     
     return {
         isMarketOpen: !isWeekend && !isHoliday && isOpenHours,
@@ -203,6 +221,7 @@ async function getMarketStatusIST() {
         isHoliday,
         isBeforeOpen: !isWeekend && !isHoliday && time < open,
         isAfterClose: !isWeekend && !isHoliday && time > close,
+        nextTradingDay,
         istTime: ist
     };
 }
