@@ -1,3 +1,17 @@
+const NSE_HOLIDAYS_FALLBACK = {
+  2026: [
+    "2026-01-26",
+    "2026-03-06",
+    "2026-03-27",
+    "2026-04-14",
+    "2026-05-01",
+    "2026-08-15",
+    "2026-10-02",
+    "2026-11-12",
+    "2026-12-25"
+  ]
+};
+
 let holidayCache = {
   year: null,
   dates: new Set()
@@ -5,49 +19,33 @@ let holidayCache = {
 
 export async function fetchIndianHolidays(year) {
   try {
-    // cache check
     if (holidayCache.year === year) {
       return holidayCache.dates;
     }
 
-    const res = await fetch(
-      `https://date.nager.at/api/v3/PublicHolidays/${year}/IN`
-    );
-
+    const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/IN`);
     const data = await res.json();
 
     const tradingHolidayNames = [
-      "Republic Day",
-      "Holi",
-      "Good Friday",
-      "Independence Day",
-      "Gandhi Jayanti",
-      "Dussehra",
-      "Diwali",
-      "Christmas",
-      "Maharashtra Day",
-      "Ambedkar Jayanti",
-      "Mahashivratri",
-      "Ramzan Id",
-      "Bakri Id",
-      "Muharram",
-      "Ganesh Chaturthi",
-      "Guru Nanak Jayanti"
+      "Republic Day", "Holi", "Good Friday", "Independence Day",
+      "Gandhi Jayanti", "Dussehra", "Diwali", "Christmas",
+      "Maharashtra Day", "Ambedkar Jayanti", "Mahashivratri",
+      "Ramzan Id", "Bakri Id", "Muharram", "Ganesh Chaturthi", "Guru Nanak Jayanti"
     ];
 
-    const holidayDates = new Set(
-      data
-        .filter(h => tradingHolidayNames.includes(h.localName) || tradingHolidayNames.includes(h.name))
-        .map(h => h.date) // format: YYYY-MM-DD
-    );
+    const apiDates = data
+      .filter(h => tradingHolidayNames.includes(h.localName) || tradingHolidayNames.includes(h.name))
+      .map(h => h.date);
 
-    // store in cache
+    const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
+    const finalDates = new Set([...apiDates, ...fallbackDates]);
+
     holidayCache = {
       year,
-      dates: holidayDates
+      dates: finalDates
     };
 
-    return holidayDates;
+    return finalDates;
 
   } catch (err) {
     console.error("HOLIDAY API ERROR:", err);

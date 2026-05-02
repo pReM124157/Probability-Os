@@ -210,10 +210,27 @@ async function getMarketStatusIST() {
             const isHolid = holidaySet.has(dStr);
             if (!isWknd && !isHolid) break;
         }
+        // Force 9:15 AM
+        next.setHours(9, 15, 0, 0);
         return next;
     }
 
+    // Fix: Accurate last trading day logic
+    function getLastTradingDay(currentIst, holidaySet) {
+        const prev = new Date(currentIst);
+        while (true) {
+            prev.setDate(prev.getDate() - 1);
+            const d = prev.getDay();
+            const dStr = prev.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+            const isWknd = d === 0 || d === 6;
+            const isHolid = holidaySet.has(dStr);
+            if (!isWknd && !isHolid) break;
+        }
+        return prev;
+    }
+
     const nextTradingDay = getNextTradingDay(ist, holidays);
+    const lastTradingDay = getLastTradingDay(ist, holidays);
     
     return {
         isMarketOpen: !isWeekend && !isHoliday && isOpenHours,
@@ -222,6 +239,7 @@ async function getMarketStatusIST() {
         isBeforeOpen: !isWeekend && !isHoliday && time < open,
         isAfterClose: !isWeekend && !isHoliday && time > close,
         nextTradingDay,
+        lastTradingDay,
         istTime: ist
     };
 }

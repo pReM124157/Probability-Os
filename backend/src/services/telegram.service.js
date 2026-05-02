@@ -62,9 +62,15 @@ function getFreeUserFooter(usage, isUpgrade = false) {
 function getNextSessionNote(status) {
   if (status.isWeekend || status.isHoliday || status.isAfterClose) {
     const next = status.nextTradingDay ? new Date(status.nextTradingDay) : null;
-    if (next) {
+    if (next && status.istTime) {
       const dateStr = next.toDateString().split(' ').slice(0, 3).join(' ');
-      return `Next session: ${dateStr} 9:15 AM`;
+      const diffMs = next - new Date(status.istTime);
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      
+      let note = `👉 Next session: ${dateStr} 9:15 AM\n`;
+      note += `⏳ Opens in ${hours}h ${mins}m`;
+      return note;
     }
   }
   return "";
@@ -72,14 +78,11 @@ function getNextSessionNote(status) {
 
 function formatAnalysis(res, symbol) {
   const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
-  const nextLine = nextSession ? `👉 ${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
+  const nextLine = nextSession ? `${nextSession}` : `👉 Next: ${res.nextStep || "Wait for confirmation"}`;
   
   let lastTradeNote = "";
-  if (!res.isMarketOpen && res.marketStatus?.istTime) {
-    const lastDay = new Date(res.marketStatus.istTime);
-    // Note: This is a simplified "last day" logic. 
-    // In a perfect system we'd loop backwards like we did for nextTradingDay.
-    lastDay.setDate(lastDay.getDate() - 1);
+  if (!res.isMarketOpen && res.marketStatus?.lastTradingDay) {
+    const lastDay = new Date(res.marketStatus.lastTradingDay);
     const lastDayName = lastDay.toLocaleDateString("en-US", { weekday: "long" });
     lastTradeNote = `Based on last trading session (${lastDayName})\n`;
   }
