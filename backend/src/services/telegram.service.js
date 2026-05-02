@@ -23,7 +23,7 @@ import {
 } from "./portfolioMemory.service.js";
 import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } from "../routes/payment.js";
 import supabase from "./supabase.service.js";
-import { checkUsage, incrementUsage, FREE_LIMIT, getRemainingUsage } from "./usage.service.js";
+import { getUsageUser, processUsage, updateUsage, isProPlan } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -45,42 +45,6 @@ function canCall(userId) {
 
 
 // ─────────────────────────────────────────────
-
-// ─────────────────────────────────────────────
-// SUBSCRIPTION CHECK
-// ─────────────────────────────────────────────
-
-async function isProUser(chatId) {
-  try {
-    const { data } = await supabase
-      .from('subscribers')
-      .select('status, plan, expires_at')
-      .eq('telegram_chat_id', chatId.toString())
-      .maybeSingle();
-
-    if (!data) return false;
-
-    const now = new Date();
-    if (data.status === 'active' && data.plan === 'pro') return true;
-    if (data.status === 'grace' && data.expires_at && new Date(data.expires_at) > now) return true;
-    
-    return false;
-  } catch (err) {
-    console.error('Subscription check failed:', err.message);
-    return false;
-  }
-}
-
-function getFreeUserFooter(usage, isUpgrade = false) {
-  const projected = usage + 1;
-  const stars = "⭐".repeat(Math.min(projected, 10));
-  
-  if (isUpgrade) {
-    return `\n\n💎 *Unlock FinSight Pro*\nUnlimited analysis and sharp signals.\n/subscribe — ₹299/month`;
-  }
-  
-  return `\n\n📈 *Requests:* ${projected}/10\n${stars}\nGet unlimited access with /subscribe`;
-}
 
 function getNextSessionNote(status) {
   if (status.isWeekend || status.isHoliday || status.isPostMarket) {
@@ -115,46 +79,123 @@ function getOpenStrategy(preMarket) {
   return "Wait for first 15-min range breakout";
 }
 
-function formatAnalysis(res, symbol) {
-  const lastUpdated = new Date().toLocaleTimeString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+function formatAnalysis(res, symbol, stockData = {}) {
+  const result = safeObject(res);
+  const entryTiming = safeObject(result.entryTiming);
+  const technical = safeObject(result.technical);
+  const valuation = safeObject(result.valuation);
+  const risk = safeObject(result.risk);
+  const exitSignal = safeObject(result.exitSignal);
+  const intelligence = safeObject(result.intelligence);
+  const sector = safeObject(intelligence.sector);
+  const relStrength = safeObject(intelligence.relativeStrength);
+  const preMarket = safeObject(result.preMarket);
+  const nextSessionPlan = safeObject(result.nextSessionPlan);
 
-  const intel = res.intelligence || {};
-  const relStrength = intel.relativeStrength?.status || "Neutral";
-  const sectorBias = intel.sector?.bias || "NEUTRAL";
-  
-  let signalLine = "";
-  if (intel.signals?.length > 0) {
-    signalLine = `\n🚨 *Intelligence Signals:*\n${intel.signals.map(s => `• ${s.type}: ${s.note}`).join("\n")}\n`;
-  }
+  const normalized = {
+    verdict: safeString(result.direction || result.action || result?.decision?.finalDecision || "HOLD"),
+    rating: Number(result?.decision?.finalConfidenceScore || result.confidence || 5),
+    confidence: Number(result.confidence || result?.decision?.finalConfidenceScore || 0),
+    asset: safeString(symbol || "N/A"),
+    currentPrice: Number(result.currentPrice || entryTiming.currentPrice || 0),
+    marketStatus: result.isMarketOpen ? "Open (Live Data)" : "Closed (Last Close Data)",
+    trend: safeString(technical.trend || "N/A"),
+    support: technical.supportLevel ?? "N/A",
+    resistance: technical.resistanceLevel ?? "N/A",
+    momentum: safeString(technical.momentum || technical.signal || "N/A"),
+    volume: safeString(technical.volumeTrend || (technical.isVolumeSpike ? "Spike" : "Normal")),
+    entryZone: safeString(entryTiming.idealEntryZone || "N/A"),
+    stopLoss: safeString(entryTiming.stopLoss || "N/A"),
+    target: safeString(entryTiming.initialTarget || "N/A"),
+    tradeAction: safeString(entryTiming.finalExecutionAdvice || "N/A"),
+    pe: stockData.PERatio ?? "N/A",
+    roe: stockData.ReturnOnEquityTTM ?? "N/A",
+    profitMargin: stockData.ProfitMargin ?? "N/A",
+    debtEquity: stockData.DebtToEquityRatio ?? "N/A",
+    revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? "N/A",
+    earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? "N/A",
+    fundamentalView: safeSubstring(result.analysis || "N/A", 160),
+    sectorName: safeString(stockData.Sector || "N/A"),
+    sectorBias: safeString(sector.bias || "N/A"),
+    relStrength: safeString(relStrength.status || "N/A"),
+    institutionalBias: safeString(result.marketNote || "N/A"),
+    newsPositive: safeString(preMarket.newsDriver || "N/A"),
+    newsNegative: safeString(risk.keyRisk || "N/A"),
+    sentiment: safeString(preMarket.sentiment || "NEUTRAL"),
+    riskLevel: safeString(result.riskLevel || risk.riskLevel || "N/A"),
+    exitAction: safeString(exitSignal.action || "N/A"),
+    exitReason: safeString(exitSignal.reason || "N/A"),
+    bullishScenario: safeString(nextSessionPlan.entryTrigger || "N/A"),
+    bearishScenario: safeString(nextSessionPlan.stopLoss || "N/A"),
+    keyTrigger: safeString(nextSessionPlan.note || "N/A"),
+    finalInsight: safeSubstring(result.analysis || "N/A", 220)
+  };
 
-  const preMarketLine = res.preMarket ? `\n🔍 *Pre-Market:* ${res.preMarket.bias} (${res.preMarket.gap}%)\n` : "";
-  const nextSession = res.marketStatus ? getNextSessionNote(res.marketStatus) : "";
-  const nextLine = nextSession ? `\n📅 *Market Context:*\n${nextSession}` : `\n👉 *Next Step:* ${res.nextStep || "Wait for confirmation"}`;
+  const fmt = (value, pct = false) => {
+    if (value === "N/A") return "N/A";
+    const n = Number(value);
+    if (Number.isNaN(n)) return `${value}`;
+    return pct ? `${(n * 100).toFixed(1)}%` : n.toString();
+  };
 
-  const transparencyIcon = res.dataConfidence === "CACHED" ? "🟡" : (res.dataConfidence === "DEGRADED_SOURCE" ? "🔴" : "🟢");
-  const transparencyText = res.dataConfidence === "CACHED" ? `Cached (${res.dataAge}s old)` : (res.dataConfidence === "DEGRADED_SOURCE" ? "Fallback" : "Live");
-
-  const insight = safeSubstring(res?.analysis, 200).trim();
+  const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "N/A";
 
   return `
-🏛 *FINSIGHT AI — INSTITUTIONAL REPORT*
+🏛 *FINSIGHT AI — INSTITUTIONAL REPORT (V2)*
 ━━━━━━━━━━━━━━━━━━
-📊 *VERDICT:* ${res.direction}
-📈 *Asset:* ${symbol} | *Confidence:* ${res.confidence}/10
-
-🎯 *EDGE:* ${relStrength}
-🌐 *SECTOR:* ${sectorBias}
-${signalLine}${preMarketLine}
-🧠 *INSIGHT:*
-${insight}...
-${nextLine}
-
-🕒 *Updated:* ${lastUpdated} IST | ${transparencyIcon} ${transparencyText}
-━━━━━━━━━━━━━━━━━━`.trim();
+📊 *VERDICT:* ${normalized.verdict}
+⭐ *RATING:* ${normalized.rating}/10 | Confidence: ${normalized.confidence}/10
+📈 *Asset:* ${normalized.asset}
+💰 *Current Price:* ${priceText}
+🕒 *Market Status:* ${normalized.marketStatus}
+━━━━━━━━━━━━━━━━━━
+📊 *TECHNICAL VIEW*
+• Trend: ${normalized.trend}
+• Support: ${normalized.support}
+• Resistance: ${normalized.resistance}
+• Momentum: ${normalized.momentum}
+• Volume: ${normalized.volume}
+📍 Trade Setup:
+• Entry Zone: ${normalized.entryZone}
+• Stop Loss: ${normalized.stopLoss}
+• Target: ${normalized.target}
+• Action: ${normalized.tradeAction}
+━━━━━━━━━━━━━━━━━━
+📉 *FUNDAMENTAL SNAPSHOT*
+• P/E Ratio: ${fmt(normalized.pe)}
+• ROE: ${fmt(normalized.roe, true)}
+• Profit Margin: ${fmt(normalized.profitMargin, true)}
+• Debt/Equity: ${fmt(normalized.debtEquity)}
+• Revenue Growth (YoY): ${fmt(normalized.revenueGrowth, true)}
+• Earnings Growth (YoY): ${fmt(normalized.earningsGrowth, true)}
+🧠 Interpretation:
+${normalized.fundamentalView}
+━━━━━━━━━━━━━━━━━━
+🌐 *SECTOR & RELATIVE STRENGTH*
+• Sector: ${normalized.sectorName} → ${normalized.sectorBias}
+• Relative Strength vs Nifty: ${normalized.relStrength}
+• Institutional Bias: ${normalized.institutionalBias}
+━━━━━━━━━━━━━━━━━━
+📰 *LATEST NEWS & SENTIMENT*
+• Positive: ${normalized.newsPositive}
+• Negative: ${normalized.newsNegative}
+• Overall Sentiment: ${normalized.sentiment}
+━━━━━━━━━━━━━━━━━━
+🚨 *RISK & EXIT VIEW*
+• Risk Level: ${normalized.riskLevel}
+• Exit Signal: ${normalized.exitAction}
+• Suggested Action: ${normalized.exitAction}
+• Reason: ${normalized.exitReason}
+━━━━━━━━━━━━━━━━━━
+🔮 *WHAT HAPPENS AFTER MARKET OPENS*
+• If price breaks confirmation zone → ${normalized.bullishScenario}
+• If price weakens below risk zone → ${normalized.bearishScenario}
+• Key Trigger: ${normalized.keyTrigger}
+━━━━━━━━━━━━━━━━━━
+🧠 *FINAL INSIGHT*
+${normalized.finalInsight}
+━━━━━━━━━━━━━━━━━━
+⚠️ Educational use only. Not financial advice.`.trim();
 }
 
 // ─────────────────────────────────────────────
@@ -172,9 +213,6 @@ async function performAnalysis(chatId, symbol, footer = "") {
     const stockData = await getCompanyOverview(symbol);
     const result = await masterAgent(stockData);
 
-    const entryTiming = safeObject(result?.entryTiming);
-    const exitSignal = safeObject(result?.exitSignal);
-    const positionSizing = safeObject(result?.positionSizing);
     const rebalancer = safeObject(result?.rebalancer);
     const ticker = safeString(symbol).toUpperCase();
 
@@ -183,35 +221,12 @@ async function performAnalysis(chatId, symbol, footer = "") {
       return;
     }
 
-    let message = formatAnalysis(result, ticker);
-
-    const executionAdvice = entryTiming?.finalExecutionAdvice || "No clear entry signal at this time. Maintain caution and monitor price action.";
+    let message = formatAnalysis(result, ticker, stockData);
 
     if (rebalancer.action && rebalancer.action !== "HOLD") {
       message += `\n\n⚖️ Portfolio Action:\n${rebalancer.action}: ${rebalancer.reason || "Alignment confirmed"}`;
     }
-
-    message += `\n\n📍 Trade Setup:
-Price: ₹${entryTiming?.currentPrice || 0} ${result.priceSource !== "LIVE" ? "(last close)" : ""}  
-Watch Zone: ${entryTiming?.idealEntryZone || "Avoid"}  
-Stop Loss: ${entryTiming?.stopLoss || "-"}  
-Target: ${entryTiming?.initialTarget || "-"}  
-Action: ${executionAdvice}
-
-🚨 Exit View:
-${exitSignal?.action || "Continue holding"}
-Reason: ${exitSignal?.reason || "No significant exit triggers detected"}`;
-
-    if (result.nextSessionPlan) {
-      message += `\n\n🚀 Next Market Plan:
-Watch the ${result.nextSessionPlan.entryTrigger} zone after market opens.  
-Take action only if price confirms strength.  
-Maintain discipline with stop loss at ${result.nextSessionPlan.stopLoss}.  
-Avoid impulsive entries without confirmation.`;
-    }
-
-    message += `\n\n⚠️ This is an AI-generated analysis for educational purposes only. Not financial advice.`;
-    if (footer) message += footer;
+    if (footer) message += `\n\n${footer}`;
 
     await bot.telegram.sendMessage(chatId, message);
   } catch (err) {
@@ -443,24 +458,22 @@ bot.on("text", async (ctx) => {
     if (!text) return;
 
     const lowerText = text.toLowerCase();
-    const skipUsage = ["ok", "okay", "thanks", "hi"].includes(lowerText);
+    const usageUser = await getUsageUser(chatId);
+    const usageResult = await processUsage(usageUser);
 
-    const subscribed = await isProUser(chatId);
-
-    let usageCount = 0;
-    if (!subscribed) {
-      const usage = await checkUsage(chatId);
-      usageCount = usage.count;
-      if (!usage.allowed) {
-        return ctx.reply(
-          `🚫 Limit reached (10/10)\nResets in 12 hours\n💎 Upgrade:\n👉 /subscribe`,
-          { parse_mode: 'Markdown' }
-        );
-      }
+    if (!usageResult.allowed) {
+      return ctx.reply(usageResult.footer);
     }
 
-    const displayedUsage = skipUsage ? usageCount : usageCount + 1;
-    console.log(`[DEBUG] ChatID: ${chatId} | skipUsage: ${skipUsage} | usageCount: ${usageCount} | displayedUsage: ${displayedUsage}`);
+    const subscribed = isProPlan(usageUser);
+    const usageFooter = subscribed ? "" : usageResult.footer;
+    const withUsageFooter = (message) => (usageFooter ? `${message}\n\n${usageFooter}` : message);
+    if (!subscribed) {
+      await updateUsage(chatId, {
+        free_usage_count: usageResult.usage,
+        usage_started_at: new Date(usageResult.start).toISOString()
+      });
+    }
 
     // ── /help ──────────────────────────────────
     if (lowerText === "/help") {
@@ -495,16 +508,13 @@ bot.on("text", async (ctx) => {
       try {
         const stockData = await getCompanyOverview(ticker);
         const result = await masterAgent(stockData);
-        const counterLine = subscribed ? '' : getFreeUserFooter(displayedUsage, true);
-        const message =
+        let message =
           `⚡ *QUICK VERDICT — ${safeString(ticker).toUpperCase()}*\n\n` +
           `📊 Verdict: ${result.decision?.finalDecision || "HOLD"}\n` +
           `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n` +
           `⚠ Risk Level: ${result.risk?.riskLevel || "N/A"}\n\n` +
-          `📝 Summary:\n${result.decision?.reason || "No summary available"}` +
-          counterLine;
-        await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
+          `📝 Summary:\n${result.decision?.reason || "No summary available"}`;
+        await bot.telegram.sendMessage(chatId, withUsageFooter(message), { parse_mode: 'Markdown' });
       } catch (error) {
         await bot.telegram.sendMessage(chatId, "⚠️ Temporary issue analyzing this stock. Try again in a moment.");
       }
@@ -539,9 +549,7 @@ bot.on("text", async (ctx) => {
           `Risk: ${result2.risk?.riskLevel || "N/A"}\n\n` +
           `🏆 Better Opportunity: *${winner}*\n\n` +
           `⚠️ Educational only. Not SEBI advice.`;
-        if (!subscribed) message += getFreeUserFooter(displayedUsage, true);
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, "❌ Comparison failed. Please check ticker symbols.");
       }
@@ -569,9 +577,7 @@ bot.on("text", async (ctx) => {
         message += `📌 Advice:\n${stock.finalExecutionAdvice}\n\n`;
       });
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-      if (!subscribed) message += getFreeUserFooter(displayedUsage, true);
-      await bot.telegram.sendMessage(chatId, message);
-      if (!subscribed && !skipUsage) await incrementUsage(chatId);
+      await bot.telegram.sendMessage(chatId, withUsageFooter(message));
       return;
     }
 
@@ -588,9 +594,7 @@ bot.on("text", async (ctx) => {
         message += `🏆 Strength Score: ${item.avgScore}/10\n\n`;
       });
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-      if (!subscribed) message += getFreeUserFooter(displayedUsage, true);
-      await bot.telegram.sendMessage(chatId, message);
-      if (!subscribed && !skipUsage) await incrementUsage(chatId);
+      await bot.telegram.sendMessage(chatId, withUsageFooter(message));
       return;
     }
 
@@ -602,8 +606,7 @@ bot.on("text", async (ctx) => {
         await bot.telegram.sendMessage(chatId, "Please enter a valid stock ticker like TCS, RELIANCE, INFY");
         return;
       }
-      await performAnalysis(chatId, text, !subscribed ? getFreeUserFooter(displayedUsage, true) : "");
-      if (!subscribed && !skipUsage) await incrementUsage(chatId);
+      await performAnalysis(chatId, text, !subscribed ? usageFooter : "");
       return;
     }
 
@@ -622,9 +625,7 @@ bot.on("text", async (ctx) => {
       try {
         await addHolding(chatId, { symbol, quantity, avgPrice });
         let msg = `✅ Holding Added Successfully\n📈 Stock: ${symbol}\n📦 Quantity: ${quantity}\n💰 Avg Buy Price: ₹${avgPrice}\n📊 Total Invested: ₹${quantity * avgPrice}\n\nUse /portfolio to view full health.`;
-        if (!subscribed) msg += getFreeUserFooter(displayedUsage, true);
-        await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
+        await bot.telegram.sendMessage(chatId, withUsageFooter(msg));
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error adding holding: ${err.message}`);
       }
@@ -645,9 +646,7 @@ bot.on("text", async (ctx) => {
       try {
         await updateHolding(chatId, symbol, { quantity, avg_price: avgPrice, updated_at: new Date() });
         let msg = `🔄 Holding Updated\n📈 Stock: ${symbol}\n📦 New Quantity: ${quantity}\n💰 New Avg Price: ₹${avgPrice}\n📊 New Total Invested: ₹${quantity * avgPrice}`;
-        if (!subscribed) msg += getFreeUserFooter(displayedUsage, true);
-        await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
+        await bot.telegram.sendMessage(chatId, withUsageFooter(msg));
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error updating holding: ${err.message}`);
       }
@@ -660,9 +659,7 @@ bot.on("text", async (ctx) => {
       try {
         await removeHolding(chatId, symbol);
         let msg = `🗑 ${symbol} removed from your portfolio.`;
-        if (!subscribed) msg += getFreeUserFooter(displayedUsage);
-        await bot.telegram.sendMessage(chatId, msg);
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
+        await bot.telegram.sendMessage(chatId, withUsageFooter(msg));
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error removing holding: ${err.message}`);
       }
@@ -692,7 +689,7 @@ bot.on("text", async (ctx) => {
         const health = await analyzePortfolioHealth(stocks);
         const details = safeObject(health?.details);
         
-        const message =
+        let message =
           `🏥 PORTFOLIO HEALTH REPORT\n━━━━━━━━━━━━━━━━━━\n` +
           `📊 Health Score: ${health.score}/10\n` +
           `🏅 Status: ${health.status}\n` +
@@ -706,9 +703,7 @@ bot.on("text", async (ctx) => {
           `• Sector Mix: ${details.uniqueSectors || 0} Sectors\n\n` +
           `Use /analyze <TICKER> for deep dive on any holding.\n━━━━━━━━━━━━━━━━━━\n` +
           `⚠️ Educational purposes only.`;
-        if (!subscribed) message += getFreeUserFooter(displayedUsage, true);
         await bot.telegram.sendMessage(chatId, message);
-        if (!subscribed && !skipUsage) await incrementUsage(chatId);
       } catch (err) {
         console.error("PORTFOLIO ERROR:", err);
         await bot.telegram.sendMessage(chatId, "⚠️ Unable to fetch portfolio health right now. Please try again later.");
@@ -736,8 +731,7 @@ bot.on("text", async (ctx) => {
         // Second-Layer Validation: Check if symbol actually exists
         const exists = await checkSymbolExists(normalizedSymbol);
         if (exists) {
-          await performAnalysis(chatId, normalizedSymbol, !subscribed ? getFreeUserFooter(displayedUsage) : "");
-          if (!subscribed && !skipUsage) await incrementUsage(chatId);
+          await performAnalysis(chatId, normalizedSymbol, !subscribed ? usageFooter : "");
           return;
         } else if (isExplicitAnalyze) {
           return await bot.telegram.sendMessage(chatId, "⚠️ I couldn't find that stock. Please check the ticker (e.g., TCS, RELIANCE) and try again.");
@@ -758,7 +752,7 @@ bot.on("text", async (ctx) => {
     };
 
     if (simpleReplies[lowerText]) {
-      return await bot.telegram.sendMessage(chatId, simpleReplies[lowerText]);
+      return await bot.telegram.sendMessage(chatId, withUsageFooter(simpleReplies[lowerText]));
     }
 
     // ── AI Conversation (Finance or Casual) ───
@@ -771,12 +765,7 @@ bot.on("text", async (ctx) => {
       finalMessage = "Ask me about any stock or market — I’ll break it down.";
     }
 
-    if (!subscribed) {
-      finalMessage += getFreeUserFooter(displayedUsage);
-    }
-    
-    await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-    if (!subscribed && !skipUsage) await incrementUsage(chatId);
+    await bot.telegram.sendMessage(chatId, withUsageFooter(finalMessage), { parse_mode: 'Markdown' });
     return;
 
   } catch (error) {

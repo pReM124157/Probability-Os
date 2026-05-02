@@ -1,88 +1,79 @@
 import supabase from './supabase.service.js';
 
-const FREE_LIMIT = 10;
+const LIMIT = 10;
+const WINDOW_MS = 24 * 60 * 60 * 1000;
 
-export async function checkUsage(chatId) {
+function formatTime(date) {
+  return date.toLocaleString("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+    day: "numeric",
+    month: "short"
+  });
+}
+
+export async function getUsageUser(chatId) {
   const { data } = await supabase
-    .from('subscribers')
-    .select('plan, free_usage_count, free_usage_reset_at')
-    .eq('telegram_chat_id', chatId.toString())
+    .from("subscribers")
+    .select("plan, status, expires_at, free_usage_count, usage_started_at")
+    .eq("telegram_chat_id", chatId.toString())
     .maybeSingle();
-
-  let count = data?.free_usage_count || 0;
-  let resetAt = data?.free_usage_reset_at;
-  const now = new Date();
-
-  if (!resetAt || now > new Date(resetAt)) {
-    count = 0;
-    const IST_OFFSET = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(now.getTime() + IST_OFFSET);
-    const nextReset = new Date(istNow);
-    nextReset.setHours(istNow.getHours() + 12, 0, 0, 0);
-    resetAt = new Date(nextReset.getTime() - IST_OFFSET).toISOString();
-    
-    await supabase.from('subscribers').upsert({
-      telegram_chat_id: chatId.toString(),
-      free_usage_count: 0,
-      free_usage_reset_at: resetAt
-    });
-  }
-
-  if (count >= FREE_LIMIT) {
-    return { allowed: false, remaining: 0, count };
-  }
-
-  return { allowed: true, remaining: FREE_LIMIT - count, count };
+  return data || { plan: "free", free_usage_count: 0, usage_started_at: null };
 }
 
-export async function incrementUsage(chatId) {
-  const { data, error } = await supabase
-    .from('subscribers')
-    .select('free_usage_count')
-    .eq('telegram_chat_id', chatId.toString())
-    .single();
-
-  if (error || !data) return;
-
-  const newCount = (data.free_usage_count || 0) + 1;
-
-  await supabase
-    .from('subscribers')
-    .update({ free_usage_count: newCount })
-    .eq('telegram_chat_id', chatId.toString());
+export function isProPlan(user = {}) {
+  const now = new Date();
+  return user.plan === "pro" && (
+    user.status === "active" ||
+    (user.status === "grace" && user.expires_at && new Date(user.expires_at) > now)
+  );
 }
 
-export async function getRemainingUsage(chatId) {
-  const { data, error } = await supabase
-    .from('subscribers')
-    .select('free_usage_count, free_usage_reset_at')
-    .eq('telegram_chat_id', chatId.toString())
-    .single();
-  if (error || !data) {
-    console.error("USAGE FETCH ERROR:", error);
-    return { remaining: 10, resetAt: null }; // fallback instead of crashing
+export async function processUsage(user) {
+  const now = Date.now();
+
+  if (isProPlan(user)) {
+    return {
+      allowed: true,
+      footer: "",
+      remaining: "∞"
+    };
   }
-  const now = new Date();
-  let usage = data.free_usage_count || 0;
-  let resetAt = data.free_usage_reset_at
-    ? new Date(data.free_usage_reset_at)
-    : null;
-  // RESET LOGIC
-  if (!resetAt || now > resetAt) {
+
+  let usage = user?.free_usage_count || 0;
+  let start = user?.usage_started_at ? new Date(user.usage_started_at).getTime() : now;
+
+  if (now - start > WINDOW_MS) {
     usage = 0;
-    resetAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
-    await supabase
-      .from('subscribers')
-      .update({
-        free_usage_count: 0,
-        free_usage_reset_at: resetAt.toISOString()
-      })
-      .eq('telegram_chat_id', chatId.toString());
+    start = now;
   }
+
+  if (usage >= LIMIT) {
+    const resetTime = new Date(start + WINDOW_MS);
+    return {
+      allowed: false,
+      footer: `⛔ Limit reached (10/10)\nYou can chat again at ${formatTime(resetTime)}`
+    };
+  }
+
+  usage += 1;
+  const remaining = LIMIT - usage;
   return {
-    remaining: Math.max(0, 10 - usage),
-    resetAt
+    allowed: true,
+    usage,
+    start,
+    remaining,
+    footer: `📈 Requests: ${usage}/10`
   };
 }
 
-export { FREE_LIMIT };
+export async function updateUsage(chatId, payload) {
+  await supabase
+    .from("subscribers")
+    .upsert({
+      telegram_chat_id: chatId.toString(),
+      ...payload
+    }, {
+      onConflict: "telegram_chat_id"
+    });
+}
