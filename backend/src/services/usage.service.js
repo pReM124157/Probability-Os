@@ -43,15 +43,34 @@ export async function incrementUsage(chatId, currentCount) {
 
 export async function getRemainingUsage(chatId) {
   const { data, error } = await supabase
-    .from("subscribers")
-    .select("free_usage_count, free_usage_reset_at")
-    .eq("telegram_chat_id", chatId.toString())
+    .from('subscribers')
+    .select('free_usage_count, free_usage_reset_at')
+    .eq('telegram_chat_id', chatId.toString())
     .single();
-  if (error || !data) return null;
-  const remaining = 10 - (data.free_usage_count || 0);
+  if (error || !data) {
+    console.error("USAGE FETCH ERROR:", error);
+    return { remaining: 10, resetAt: null }; // fallback instead of crashing
+  }
+  const now = new Date();
+  let usage = data.free_usage_count || 0;
+  let resetAt = data.free_usage_reset_at
+    ? new Date(data.free_usage_reset_at)
+    : null;
+  // RESET LOGIC
+  if (!resetAt || now > resetAt) {
+    usage = 0;
+    resetAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+    await supabase
+      .from('subscribers')
+      .update({
+        free_usage_count: 0,
+        free_usage_reset_at: resetAt.toISOString()
+      })
+      .eq('telegram_chat_id', chatId.toString());
+  }
   return {
-    remaining,
-    resetAt: data.free_usage_reset_at
+    remaining: Math.max(0, 10 - usage),
+    resetAt
   };
 }
 

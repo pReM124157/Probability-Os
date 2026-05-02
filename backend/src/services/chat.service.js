@@ -67,6 +67,6 @@ If the user asks anything:
     return reply;
   } catch (err) {
     console.error("GROQ ERROR:", err);
-    throw new Error("Something went wrong. Try again.");
+    return "Tell me something specific — a stock, market trend, or your portfolio.";
   }
 }

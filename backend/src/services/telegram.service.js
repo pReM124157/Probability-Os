@@ -1,4 +1,4 @@
-import { Telegraf, Markup } from "telegraf";
+import { Telegraf, Markup, session } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { getCompanyOverview } from "./marketData.service.js";
 import { analyzePortfolio } from "../agents/portfolioAgent.js";
@@ -17,6 +17,7 @@ import { checkUsage, incrementUsage, FREE_LIMIT, getRemainingUsage } from "./usa
 import { generateChatReply } from "./chat.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+bot.use(session());
 
 const userStates = new Map();
 
@@ -51,7 +52,7 @@ function getFreeUserFooter(usageCount, isHighIntent = false) {
   const remaining = Math.max(0, 10 - usageCount);
   let footer = `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 requests remaining`;
   
-  if (remaining > 0 && remaining <= 2) {
+  if (remaining === 2 || remaining === 1) {
     footer += `\n\n⚠️ ${remaining} request${remaining === 1 ? '' : 's'} left.\nYou're in the middle of tracking something important.\nStopping here breaks the edge. Most users upgrade at this point to stay consistent.\n👉 /subscribe`;
   } else if (isHighIntent) {
     footer += `\n\n💎 Most users tracking multiple stocks switch to Pro.\nIt removes interruptions.\n👉 /subscribe`;
@@ -621,9 +622,13 @@ bot.on("text", async (ctx) => {
     };
 
     if (simpleReplies[lowerText]) {
+      if (!ctx.session) ctx.session = {};
+      if (ctx.session.lastMessage === lowerText) return;
+      ctx.session.lastMessage = lowerText;
       let reply = simpleReplies[lowerText];
       return await bot.telegram.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
     }
+    if (ctx.session) ctx.session.lastMessage = null;
 
     if (lowerText.includes("free request") || lowerText.includes("usage") || lowerText === "/usage") {
       const usage = await getRemainingUsage(chatId);
@@ -690,7 +695,12 @@ bot.on("text", async (ctx) => {
         ? `${aiResponse.response}\n\n⚠️ For educational purposes only.\nNot SEBI registered investment advice.`
         : aiResponse.response;
     } else {
-      finalMessage = await generateChatReply(chatId, text);
+      try {
+        finalMessage = await generateChatReply(chatId, text);
+      } catch (err) {
+        console.error("CHAT FAIL:", err);
+        finalMessage = "Ask me about any stock or market — I’ll break it down.";
+      }
     }
 
     // Fetch trial status for messaging
