@@ -4,12 +4,98 @@ import { fetchIndianHolidays } from "./holiday.service.js";
 
 const yahooFinance = new YahooFinance();
 
+// --- Institutional Data Layer (Observability & Safety) ---
+export const dataMetrics = {
+  yahooSuccess: 0,
+  yahooFail: 0,
+  alphaSuccess: 0,
+  cacheHit: 0,
+  lastGlobalCall: 0
+};
+
+const dataCache = new Map();
+const CACHE_TTL_HIGH = 5 * 60 * 1000; // 5 mins (Yahoo/Live)
+const CACHE_TTL_LOW = 60 * 1000;      // 1 min (Fallback/Degraded)
+
+// --- Circuit Breaker State ---
+let yahooFailureCount = 0;
+let yahooCooldownUntil = 0;
+const MAX_YAHOO_FAILURES = 5;
+const YAHOO_COOLDOWN_MS = 60000;
+
+function getCached(key) {
+  const entry = dataCache.get(key);
+  if (!entry) return null;
+  
+  const ttl = entry.quality === "HIGH" ? CACHE_TTL_HIGH : CACHE_TTL_LOW;
+  if (Date.now() - entry.timestamp > ttl) {
+    dataCache.delete(key);
+    return null;
+  }
+  dataMetrics.cacheHit++;
+  return entry.data;
+}
+
+function setCached(key, data, quality = "HIGH") {
+  dataCache.set(key, { data, timestamp: Date.now(), quality });
+}
+
+function reportYahooStatus(success) {
+  if (success) {
+    yahooFailureCount = 0;
+    dataMetrics.yahooSuccess++;
+  } else {
+    yahooFailureCount++;
+    dataMetrics.yahooFail++;
+    if (yahooFailureCount >= MAX_YAHOO_FAILURES) {
+      console.warn(`[CIRCUIT BREAKER] Yahoo tripped. Cooldown active.`);
+      yahooCooldownUntil = Date.now() + YAHOO_COOLDOWN_MS;
+    }
+  }
+}
+
+async function withTimeout(promise, ms = 5000) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Institutional Timeout")), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
 function normalizeSymbol(symbol) {
   if (!symbol) return "";
-  return symbol.trim()
+  return symbol
+    .replace(/\//g, "") // Remove ALL slashes to prevent double-slash API errors
+    .trim()
     .toUpperCase()
-    .replace(/^\//, "")  // Remove leading slash
     .replace(/\s+/g, ""); // Remove spaces
+}
+
+export async function checkSymbolExists(symbol) {
+  try {
+    const upper = normalizeSymbol(symbol);
+    const symbols = upper.includes(".") ? [upper] : [`${upper}.NS`, `${upper}.BO`];
+    for (const s of symbols) {
+      try {
+        const q = await yahooFinance.quote(s);
+        if (q && (q.regularMarketPrice || q.currentPrice)) return true;
+      } catch (e) { continue; }
+    }
+    return false;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function fetchWithRetry(fn, retries = 2) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (retries === 0) throw e;
+    console.warn(`[RETRY] API call failed. Retries left: ${retries}. Error: ${e.message}`);
+    await new Promise(r => setTimeout(r, 500));
+    return fetchWithRetry(fn, retries - 1);
+  }
 }
 
 /**
@@ -110,16 +196,16 @@ export async function getCompanyOverview(symbol) {
     for (const sym of symbolsToTry) {
         try {
             console.log(`FETCH ATTEMPT (Overview): ${sym}`);
-            const tempResult = await yahooFinance.quoteSummary(sym, {
+            const tempResult = await retry(() => yahooFinance.quoteSummary(sym, {
                 modules: ["financialData", "defaultKeyStatistics", "assetProfile", "summaryDetail", "calendarEvents"]
-            });
+            }), 2, 500);
             if (tempResult && tempResult.assetProfile) {
                 result = tempResult;
                 fetchSymbol = sym;
                 break;
             }
         } catch (e) {
-            console.warn(`[FAIL] quoteSummary for ${sym}: ${e.message}`);
+            console.warn(`[RETRY FAIL] Overview fetch failed for ${sym}:`, e.message);
         }
     }
 
@@ -270,10 +356,45 @@ async function retry(fn, retries = 3, initialDelay = 500) {
     }
 }
 
+async function alphaFetch(symbol) {
+  try {
+    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) return null;
+    
+    const avSymbol = symbol.replace(".NS", ".NSE").replace(".BO", ".BSE");
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${avSymbol}&apikey=${apiKey}`;
+    
+    const response = await axios.get(url, { timeout: 3000 });
+    const quote = response.data["Global Quote"];
+    
+    if (!quote || !quote["05. price"]) return null;
+    
+    return {
+      symbol: symbol,
+      regularMarketPrice: parseFloat(quote["05. price"]),
+      regularMarketChangePercent: parseFloat(quote["10. change percent"].replace("%", "")),
+      regularMarketPreviousClose: parseFloat(quote["08. previous close"]),
+      source: "FALLBACK"
+    };
+  } catch (err) {
+    console.warn(`[FALLBACK FAIL] ${symbol}: ${err.message}`);
+    return null;
+  }
+}
+
 export async function getLiveMarketData(symbol) {
   const startTime = Date.now();
+  const upperSymbol = normalizeSymbol(symbol);
+  
+  // 1. CHECK CACHE (Institutional Guard)
+  const cached = getCached(`LIVE_${upperSymbol}`);
+  if (cached) {
+    const age = Math.floor((Date.now() - cached.timestamp) / 1000);
+    console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
+    return { ...cached, dataAge: age, dataConfidence: "CACHED" };
+  }
+
   try {
-    const upperSymbol = normalizeSymbol(symbol);
     const symbolsToTry = upperSymbol.includes(".")
         ? [upperSymbol]
         : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
@@ -281,100 +402,109 @@ export async function getLiveMarketData(symbol) {
     let result = null;
     let fetchSymbol = "";
     let priceSource = "FAILED";
-    const marketStatus = await getMarketStatusIST();
-    const isMarketOpen = marketStatus.isMarketOpen;
+    let dataConfidence = "LIVE_VERIFIED";
+    let completeness = "FULL";
 
-    // 1. ATTEMPT LIVE FETCH
-    for (const sym of symbolsToTry) {
-        try {
-            console.log(`FETCH ATTEMPT (Live): ${sym}`);
-            const tempResult = await retry(() => yahooFinance.quote(sym), 3, 500);
-            if (tempResult && (tempResult.regularMarketPrice || tempResult.currentPrice)) {
-                result = tempResult;
-                fetchSymbol = sym;
-                priceSource = "LIVE";
-                break;
-            }
-        } catch (e) {
-            console.warn(`[FAIL] quote for ${sym}: ${e.message}`);
-        }
+    const marketStatus = await getMarketStatusIST();
+
+    // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
+    const yahooAvailable = Date.now() >= yahooCooldownUntil;
+    if (yahooAvailable) {
+      for (const sym of symbolsToTry) {
+          try {
+              console.log(`[DATA] attempt=yahoo symbol=${sym}`);
+              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), 3500);
+              if (tempResult && (tempResult.regularMarketPrice || tempResult.currentPrice)) {
+                  result = tempResult;
+                  fetchSymbol = sym;
+                  priceSource = "YAHOO";
+                  reportYahooStatus(true);
+                  break;
+              }
+          } catch (e) {
+              console.warn(`[DATA] source=yahoo symbol=${sym} status=fail error="${e.message}"`);
+          }
+      }
+    } else {
+      console.warn(`[CIRCUIT BREAKER] Skipping Yahoo for ${upperSymbol} (cooling down)`);
+    }
+
+    if (!result) reportYahooStatus(false);
+
+    // 3. FALLBACK FETCH (Alpha Vantage)
+    if (!result) {
+      console.log(`[DATA] attempt=alpha symbol=${upperSymbol}`);
+      result = await alphaFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
+      if (result) {
+        priceSource = "ALPHA_VANTAGE";
+        dataConfidence = "DEGRADED_SOURCE";
+        completeness = "PARTIAL";
+        fetchSymbol = result.symbol;
+        dataMetrics.alphaSuccess++;
+        console.log(`[DATA] source=alpha symbol=${upperSymbol} status=fallback`);
+      }
     }
 
     const fetchDuration = Date.now() - startTime;
-    let currentPrice = 0;
+    let currentPrice = result?.regularMarketPrice || result?.currentPrice || 0;
     let previousClose = result?.regularMarketPreviousClose || result?.previousClose || 0;
-    let isStale = false;
-    
-    // Fix 1: Strict Latency Threshold (Execution Risk > 2s)
-    const latencyBlocked = fetchDuration > 2000;
+    const latencyBlocked = fetchDuration > 2500;
 
-    // 2. EXTRACTION & LIQUIDITY-BASED CACHING
-    if (result) {
-        currentPrice = result.regularMarketPrice || result.currentPrice || previousClose || 0;
-        if (currentPrice > 0) {
-            priceCache.set(upperSymbol, {
-                price: currentPrice,
-                timestamp: Date.now(),
-                volume: result.regularMarketVolume || 0,
-                avgVolume: result.averageDailyVolume3Month || 1 // Avoid div by zero
-            });
-        }
+    if (!currentPrice && previousClose) {
+        currentPrice = previousClose;
+        priceSource = "PREVIOUS_CLOSE";
     }
 
-    // 3. MULTI-LAYER FALLBACK & TTL
-    if (currentPrice === 0 || !isMarketOpen) {
-        if (!isMarketOpen && priceSource === "LIVE") {
-            console.log(`[MARKET CLOSED] Live data received outside hours for ${upperSymbol}. Semantically PREVIOUS_CLOSE.`);
-            priceSource = "PREVIOUS_CLOSE";
-        }
-        
-        if (currentPrice === 0) {
-            if (previousClose > 0) {
-                currentPrice = previousClose;
-                priceSource = "PREVIOUS_CLOSE";
-            } else if (priceCache.has(upperSymbol)) {
-                const cached = priceCache.get(upperSymbol);
-                currentPrice = cached.price;
-                const ageSeconds = Math.floor((Date.now() - cached.timestamp) / 1000);
-                
-                // Liquidity-based TTL
-                const liquidity = cached.volume / (cached.avgVolume || 1);
-                const ttl = liquidity > 1 ? 5 * 60 : 10 * 60;
-                
-                if (ageSeconds > ttl) isStale = true;
-                priceSource = isStale ? "CACHE_STALE" : "CACHE_FRESH";
-            }
-        }
+    if (!currentPrice || currentPrice === 0) {
+        throw new Error(`Data extraction failed for ${upperSymbol}`);
     }
 
-    if (!currentPrice || currentPrice === 0 || priceSource === "NONE" || priceSource === "FAILED") {
-        throw new Error(`Critical data failure: Valid price or source could not be established for ${upperSymbol}`);
-    }
-
-    return {
-      symbol: fetchSymbol || upperSymbol,
-      currentPrice: currentPrice,
-      priceSource: priceSource,
-      dataAge: result ? 0 : Math.floor((Date.now() - (priceCache.get(upperSymbol)?.timestamp || Date.now())) / 1000),
-      isStale: isStale || !isMarketOpen || latencyBlocked,
-      latencyBlocked: latencyBlocked,
-      fetchDuration: fetchDuration,
-      isMarketOpen: isMarketOpen,
-      marketStatus: marketStatus,
-      previousClose: previousClose || (priceCache.get(upperSymbol)?.price) || 0,
-      volume: result?.regularMarketVolume || 0,
-      averageVolume: result?.averageDailyVolume3Month || 0,
-      marketCap: result?.marketCap || 0,
-      currency: result?.currency || "INR"
+    const finalData = {
+        symbol: fetchSymbol || upperSymbol,
+        price: currentPrice,
+        currentPrice: currentPrice,
+        previousClose: previousClose,
+        change: result?.regularMarketChangePercent || 0,
+        changeRaw: result?.regularMarketChange || 0,
+        isMarketOpen: marketStatus.isMarketOpen,
+        marketStatus,
+        priceSource,
+        dataConfidence,
+        completeness,
+        latencyBlocked,
+        fetchDuration,
+        dataAge: 0,
+        timestamp: Date.now(),
+        status: "success"
     };
 
+    // 5. SELECTIVE CACHING
+    setCached(`LIVE_${upperSymbol}`, finalData, priceSource === "YAHOO" ? "HIGH" : "LOW");
+    
+    console.log(`[DATA] source=${priceSource.toLowerCase()} symbol=${upperSymbol} status=success latency=${fetchDuration}ms`);
+    return finalData;
+
   } catch (error) {
+    console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
     return {
       error: true,
       message: error.message,
-      currentPrice: 0,
       priceSource: "FAILED",
-      isStale: true
+      dataConfidence: "NONE",
+      status: "error"
     };
   }
 }
+
+// --- Warm Cache Strategy (Institutional Boot) ---
+const POPULAR_SYMBOLS = ["TCS", "RELIANCE", "INFY", "HDFCBANK", "ICICIBANK"];
+setTimeout(() => {
+  console.log(`[BOOT] Warming up data cache for ${POPULAR_SYMBOLS.length} symbols...`);
+  POPULAR_SYMBOLS.forEach(async (symbol) => {
+    try {
+      await getLiveMarketData(symbol);
+    } catch (err) {
+      // Silent fail for warm boot
+    }
+  });
+}, 5000);

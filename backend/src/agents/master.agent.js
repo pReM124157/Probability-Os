@@ -16,6 +16,12 @@ import { analyzeRebalancing } from "./rebalancer.agent.js";
 import { getPortfolio } from "../services/portfolioMemory.service.js";
 import { logRecommendation, getLearningBoost } from "./performanceTracker.agent.js";
 import { analyzeEventRisk } from "./eventRisk.agent.js";
+import { 
+  calculateRelativeStrength, 
+  generateSignals, 
+  getSectorMomentum,
+  calculatePositionSize as calcPositionIntelligence
+} from "../services/intelligence.service.js";
 
 import { generateInvestmentAnalysis, generateTieredAnalysis } from "../services/claude.service.js";
 
@@ -630,6 +636,22 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       adjustedConfidence = Math.min(adjustedConfidence, 10);
     }
     
+    // PHASE 2.7: Intelligence Layer (Decision Edge)
+    const indices = await getIndianIndices();
+    const niftyChange = indices.nifty.change || 0;
+    const relStrength = calculateRelativeStrength(liveMarketData.change, niftyChange);
+    
+    const sectorMap = getSectorMomentum();
+    const sectorData = sectorMap[stockData.Sector?.toUpperCase()] || { strength: 0, bias: "NEUTRAL" };
+    
+    const intelligenceSignals = generateSignals({
+      roe: parseFloat(stockData.ReturnOnEquityTTM) || 0,
+      revenueGrowth: parseFloat(stockData.QuarterlyRevenueGrowthYOY) || 0,
+      pe: parseFloat(stockData.TrailingPE) || 0,
+      priceAboveMA200: technical.priceAboveMA200 || false,
+      volumeSpike: technical.isVolumeSpike || false
+    });
+
     // --- MARKET STATE CONTEXT ---
     const isLive = liveMarketData.priceSource === "LIVE" && !liveMarketData.latencyBlocked;
     const marketStatus = liveMarketData.marketStatus || {};
@@ -642,7 +664,16 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       marketNote = "📅 Market closed (Holiday)";
     } else if (marketStatus.isPostMarket) {
       marketNote = "🌙 Post-market (closed for today)";
-    } else if (marketStatus.isPreMarket) {
+    }
+    
+    // Adjust confidence based on intelligence signals
+    if (relStrength.strength === "STRONG") adjustedConfidence += 1;
+    if (sectorData.bias === "STRONG_BULLISH") adjustedConfidence += 1;
+    if (intelligenceSignals.length > 0) adjustedConfidence += 1;
+    
+    adjustedConfidence = Math.max(1, Math.min(10, adjustedConfidence));
+    
+    if (marketStatus.isPreMarket) {
       marketNote = "⏳ Pre-market (opens soon)";
     } else if (liveMarketData.isMarketOpen && !isLive) {
       marketNote = "⏱ Data delayed — verify before entry";
@@ -666,6 +697,12 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         sector: stockData.Sector
       });
       console.log(`[PRE-MARKET] Generated insight for ${ticker}: ${preMarket?.note}`);
+    }
+
+    // Adjust for Data Completeness
+    if (liveMarketData.completeness === "PARTIAL") {
+      adjustedConfidence = Math.min(adjustedConfidence, 5);
+      marketNote = marketNote ? `${marketNote}\n⚠ Limited data source — confidence reduced` : "⚠ Limited data source";
     }
 
     // PHASE 3.6: Professional Reasoning Construction
@@ -903,6 +940,11 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       confidence: adjustedConfidence,
       riskLevel: risk.riskLevel || "MEDIUM",
       preMarket,
+      intelligence: {
+        relativeStrength: relStrength,
+        sector: sectorData,
+        signals: intelligenceSignals
+      },
       action: isLive ? (finalDecision.finalDecision || "HOLD") : "Wait for market open confirmation",
       nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
                 (marketStatus.isPostMarket ? "Monitor tomorrow's open" : 
