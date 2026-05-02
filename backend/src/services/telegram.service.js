@@ -50,9 +50,7 @@ async function isProUser(chatId) {
 
 function getFreeUserFooter(usageCount, isHighIntent = false) {
   const remaining = Math.max(0, 10 - usageCount);
-  let footer = usageCount === 0
-    ? `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: 10 requests / 12h`
-    : `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 remaining`;
+  let footer = `\n\n━━━━━━━━━━━━━━━━━━\n🆓 Free Plan: ${remaining}/10 remaining`;
   
   if (remaining === 2) {
     footer += `\n\n⚠️ 2 requests left.\nYou're close to your limit.\n👉 /subscribe`;
@@ -363,6 +361,7 @@ bot.on("text", async (ctx) => {
     }
 
     const displayedUsage = skipUsage ? usageCount : usageCount + 1;
+    console.log(`[DEBUG] ChatID: ${chatId} | skipUsage: ${skipUsage} | usageCount: ${usageCount} | displayedUsage: ${displayedUsage}`);
 
     // ── /help ──────────────────────────────────
     if (lowerText === "/help") {
@@ -717,7 +716,11 @@ bot.on("text", async (ctx) => {
     }
     
     await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-    if (!subscribed && !skipUsage) await incrementUsage(chatId);
+    if (!subscribed && !skipUsage) {
+      await incrementUsage(chatId);
+      const { count: afterCount } = await checkUsage(chatId);
+      console.log(`[DEBUG] ChatID: ${chatId} | USAGE AFTER DB: ${afterCount}`);
+    }
     return;
 
   } catch (error) {
