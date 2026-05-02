@@ -524,9 +524,9 @@ bot.on("text", async (ctx) => {
     const text = ctx.message.text?.trim() || "";
     if (!text) return;
     const user = await getUsageUser(chatId);
-    console.log("USER PLAN:", user?.plan, "IS_PRO:", user?.is_pro);
     const lowerText = text.toLowerCase();
     const isProUser = (user?.plan || "").toLowerCase() === "pro" || user?.is_pro === true;
+    console.log("[PLAN CHECK] plan:", user?.plan, "| is_pro:", user?.is_pro, "| isProUser:", isProUser);
 
     if (lowerText === "/subscribe") {
       await sendSubscriptionLink(chatId);
@@ -547,7 +547,8 @@ bot.on("text", async (ctx) => {
     }
 
     const subscribed = isProUser;
-    const usageFooter = subscribed ? "" : usageResult.footer;
+    const usageFooter = isProUser ? "" : (usageResult.footer || "");
+    console.log("[FOOTER GATE] isProUser:", isProUser, "| footer suppressed:", isProUser, "| footer:", usageFooter || "(none)");
     const withUsageFooter = (message) => (usageFooter ? `${message}\n\n${usageFooter}` : message);
     if (!isProUser) {
       await updateUsage(chatId, usageResult.usage, usageResult.start);
