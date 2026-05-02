@@ -20,83 +20,30 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const userStates = new Map();
 
 // ─────────────────────────────────────────────
-// TIER DEFINITIONS
-// ─────────────────────────────────────────────
-
-const PRO_COMMANDS = [
-  '/analyze', '/compare', '/top', '/scanner',
-  '/opportunities', '/sector', '/sectors', '/rotation',
-  '/portfolio', '/add', '/update', '/remove'
-];
-
-const PRO_KEYWORDS = [
-  'deep', 'entry', 'target', 'stop loss', 'stoploss',
-  'portfolio', 'long term', 'buy or sell', 'should i buy',
-  'should i sell', 'best entry', 'exit', 'allocation',
-  'rebalance', 'compare', 'sector', 'watchlist', 'analyse'
-];
 
 // ─────────────────────────────────────────────
 // SUBSCRIPTION CHECK
 // ─────────────────────────────────────────────
 
-async function isPro(chatId) {
+async function isProUser(chatId) {
   try {
     const { data } = await supabase
       .from('subscribers')
-      .select('status, plan, expires_at, cancel_at_period_end, trial_ends_at')
+      .select('status, plan, expires_at')
       .eq('telegram_chat_id', chatId.toString())
       .maybeSingle();
 
     if (!data) return false;
 
     const now = new Date();
-    // Paid subscription valid
     if (data.status === 'active' && data.plan === 'pro') return true;
     if (data.status === 'grace' && data.expires_at && new Date(data.expires_at) > now) return true;
-    // Trial valid
-    if (data.plan === 'trial' && data.trial_ends_at && new Date(data.trial_ends_at) > now) {
-      return true;
-    }
+    
     return false;
   } catch (err) {
     console.error('Subscription check failed:', err.message);
     return false;
   }
-}
-
-// ─────────────────────────────────────────────
-// UPSELL MESSAGE HELPERS
-// ─────────────────────────────────────────────
-
-async function sendProUpsell(ctx) {
-  await ctx.reply(
-    `🔒 *Pro Feature*\n\n` +
-    `This requires FinSight Pro.\n\n` +
-    `💎 *You'll unlock:*\n` +
-    `• Deep AI stock analysis\n` +
-    `• Entry & exit levels\n` +
-    `• Portfolio tracking\n` +
-    `• Market scanner\n` +
-    `• Sector rotation reports\n\n` +
-    `₹299/month — Cancel anytime.\n\n` +
-    `👉 Type /subscribe to unlock instantly`,
-    { parse_mode: 'Markdown' }
-  );
-}
-
-async function sendKeywordUpsell(ctx) {
-  await ctx.reply(
-    `🔍 You're asking for advanced analysis.\n\n` +
-    `That's part of *FinSight Pro*.\n\n` +
-    `💎 *Includes:*\n` +
-    `• Entry zones & targets\n` +
-    `• Stop-loss levels\n` +
-    `• AI-powered deep dive\n` +
-    `• Portfolio rebalancing\n\n` +
-    `👉 Unlock here: /subscribe`,
-    { parse_mode: 'Markdown' }
-  );
 }
 
 // ─────────────────────────────────────────────
@@ -167,27 +114,7 @@ Avoid impulsive entries without confirmation.`;
   }
 }
 
-async function performBasicOverview(chatId, symbol) {
-  await bot.telegram.sendMessage(chatId, `📊 Fetching basic overview for ${symbol}...`);
-  try {
-    const stockData = await getCompanyOverview(symbol);
-    const result = await masterAgent(stockData);
-    const ticker = symbol.toUpperCase();
-
-    const message =
-      `📊 *Basic Overview — ${ticker}*\n\n` +
-      `Signal: ${result.decision?.finalDecision || 'HOLD'}\n` +
-      `Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n` +
-      `Risk Level: ${result.risk?.riskLevel || 'N/A'}\n` +
-      `Market Trend: ${result.decision?.finalDecision === 'BUY' ? 'Bullish' : result.decision?.finalDecision === 'SELL' ? 'Bearish' : 'Range-bound'}\n\n` +
-      `⚠️ *Want entry points, targets & deep analysis?*\n` +
-      `👉 Upgrade to Pro: /subscribe`;
-
-    await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-  } catch (err) {
-    await bot.telegram.sendMessage(chatId, `❌ Could not fetch overview for ${symbol}.`);
-  }
-}
+// ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────
 // FREE COMMANDS (no gate)
@@ -197,10 +124,8 @@ bot.command('start', async (ctx) => {
   await ctx.reply(
     `👋 Welcome to *FinSight AI*!\n\n` +
     `I'm your institutional-grade stock analysis assistant.\n\n` +
-    `🆓 Free Plan: 10 requests/day\n` +
-    `🧪 Try 3-day FREE trial:\n` +
-    `👉 /trial\n` +
-    `💎 Upgrade to Pro:\n` +
+    `🆓 Free Plan: 10 requests / 12h\n` +
+    `💎 Upgrade for unlimited:\n` +
     `👉 /subscribe\n\n` +
     `Type /help to see all commands.`,
     { parse_mode: 'Markdown' }
@@ -262,39 +187,6 @@ bot.command('cancel', async (ctx) => {
 });
 
 // ─────────────────────────────────────────────
-// /trial COMMAND  (must be before bot.on('text'))
-// ─────────────────────────────────────────────
-
-bot.command('trial', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const { data } = await supabase
-    .from('subscribers')
-    .select('*')
-    .eq('telegram_chat_id', chatId)
-    .single();
-
-  if (data?.trial_used) {
-    return ctx.reply("❌ Trial already used.");
-  }
-
-  const expiry = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-  await supabase.from('subscribers').upsert({
-    telegram_chat_id: chatId,
-    status: 'active',
-    plan: 'trial',
-    trial_used: true,
-    trial_ends_at: expiry
-  });
-
-  ctx.reply(
-    `🧪 Trial activated for 3 days!\n` +
-    `You now have unlimited access.\n` +
-    `Explore everything freely.\n` +
-    `⏳ Upgrade before expiry to continue:\n` +
-    `👉 /subscribe`,
-    { parse_mode: 'Markdown' }
-  );
-});
 
 // ─────────────────────────────────────────────
 // /status COMMAND  (must be before bot.on('text'))
@@ -304,14 +196,14 @@ bot.command('status', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const { data } = await supabase
     .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end, plan, trial_ends_at, razorpay_subscription_id')
+    .select('status, expires_at, cancel_at_period_end, plan, razorpay_subscription_id')
     .eq('telegram_chat_id', chatId)
     .maybeSingle();
 
   const now = new Date();
   const isActive =
     (data?.status === 'active' || data?.status === 'grace') &&
-    ((data.expires_at && new Date(data.expires_at) > now) || (data.trial_ends_at && new Date(data.trial_ends_at) > now));
+    (data.expires_at && new Date(data.expires_at) > now);
 
   if (!data || !isActive) {
     return ctx.reply(
@@ -328,13 +220,6 @@ bot.command('status', async (ctx) => {
       `Your subscription is in a 48-hour grace period.\n` +
       `We'll retry the payment automatically.\n` +
       `Update your payment method to avoid interruption.`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  if (data.trial_ends_at && new Date(data.trial_ends_at) > new Date()) {
-    return ctx.reply(
-      `🧪 *Trial Active*\n\nExpires: ${new Date(data.trial_ends_at).toDateString()}`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -440,39 +325,28 @@ bot.on("text", async (ctx) => {
 
     const lowerText = text.toLowerCase();
 
-    const subscribed = await isPro(chatId);
+    const subscribed = await isProUser(chatId);
 
-    let remainingUsage = FREE_LIMIT;
-    // Free usage limit gate — skip for Pro users
+    let usageCount = 0;
     if (!subscribed) {
-      const usage = await checkAndIncrementUsage(chatId);
-      remainingUsage = usage.remaining;
+      const usage = await checkUsage(chatId);
+      usageCount = usage.count;
       if (!usage.allowed) {
-        await ctx.reply(
-          `🚫 Free limit reached (10/10)\n` +
-          `Resets in 12 hours (IST)\n` +
-          `👉 Try /trial for full access\n` +
-          `👉 Or upgrade using /subscribe`,
+        return ctx.reply(
+          `🚫 Limit reached (10/10)\nResets in 12 hours\n💎 Upgrade:\n👉 /subscribe`,
           { parse_mode: 'Markdown' }
         );
-        return;
       }
     }
 
     // ── /help ──────────────────────────────────
     if (lowerText === "/help") {
-      const proTag = subscribed ? '✅ Pro' : '🔒 Pro';
       await bot.telegram.sendMessage(
         chatId,
         `🏦 *Finsight AI — Command Menu*\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🆓 *Free Commands:*\n` +
-        `• /analyze <TICKER> — Basic overview\n` +
-        `• /quick <TICKER> — Quick trend check\n` +
-        `• /start — Welcome info\n` +
-        `• /pay — Unlock Pro\n\n` +
-        `${proTag} *Commands:*\n` +
         `• /analyze <TICKER> — Full deep-dive report\n` +
+        `• /quick <TICKER> — Quick trend check\n` +
         `• /compare <T1> <T2> — Side-by-side comparison\n` +
         `• /top — 🚀 Top market opportunities\n` +
         `• /sector — 📊 Sector rotation report\n` +
@@ -498,7 +372,7 @@ bot.on("text", async (ctx) => {
       try {
         const stockData = await getCompanyOverview(ticker);
         const result = await masterAgent(stockData);
-        const counterLine = subscribed ? '' : `\n\n🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`;
+        const counterLine = subscribed ? '' : `\n\n🆓 Free Plan: 10 requests / 12h\n💎 Upgrade for unlimited:\n👉 /subscribe`;
         const message =
           `⚡ *QUICK VERDICT — ${ticker.toUpperCase()}*\n\n` +
           `📊 Verdict: ${result.decision?.finalDecision || "HOLD"}\n` +
@@ -507,6 +381,7 @@ bot.on("text", async (ctx) => {
           `📝 Summary:\n${result.decision?.reason || "No summary available"}` +
           counterLine;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        if (!subscribed) await incrementUsage(chatId, usageCount);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, `❌ Could not analyze ${ticker}`);
       }
@@ -515,7 +390,6 @@ bot.on("text", async (ctx) => {
 
     // ── PRO: /compare ──────────────────────────
     if (lowerText.startsWith("/compare ")) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       const parts = text.split(" ");
       if (parts.length < 3) {
         await bot.telegram.sendMessage(chatId, "Example: /compare TCS INFY");
@@ -543,6 +417,7 @@ bot.on("text", async (ctx) => {
           `🏆 Better Opportunity: *${winner}*\n\n` +
           `⚠️ Educational only. Not SEBI advice.`;
         await bot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        if (!subscribed) await incrementUsage(chatId, usageCount);
       } catch (error) {
         await bot.telegram.sendMessage(chatId, "❌ Comparison failed. Please check ticker symbols.");
       }
@@ -551,7 +426,6 @@ bot.on("text", async (ctx) => {
 
     // ── PRO: /top /scanner /opportunities ─────
     if (["/scanner", "/top", "/opportunities"].includes(lowerText)) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       await bot.telegram.sendMessage(chatId, "🔍 Running Institutional Scanner...\nPlease wait.");
       const opportunities = await scannerAgent();
       if (!opportunities || !opportunities.length) {
@@ -571,12 +445,13 @@ bot.on("text", async (ctx) => {
         message += `📌 Advice:\n${stock.finalExecutionAdvice}\n\n`;
       });
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-      return await bot.telegram.sendMessage(chatId, message);
+      await bot.telegram.sendMessage(chatId, message);
+      if (!subscribed) await incrementUsage(chatId, usageCount);
+      return;
     }
 
     // ── PRO: /sector /sectors /rotation ───────
     if (["/sector", "/sectors", "/rotation"].includes(lowerText)) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       await bot.telegram.sendMessage(chatId, "📊 Running Sector Rotation Scanner...");
       const sectors = await sectorScannerAgent();
       if (!sectors.length) {
@@ -588,7 +463,9 @@ bot.on("text", async (ctx) => {
         message += `🏆 Strength Score: ${item.avgScore}/10\n\n`;
       });
       message += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-      return await bot.telegram.sendMessage(chatId, message);
+      await bot.telegram.sendMessage(chatId, message);
+      if (!subscribed) await incrementUsage(chatId, usageCount);
+      return;
     }
 
     // ── Awaiting stock input ───────────────────
@@ -599,18 +476,13 @@ bot.on("text", async (ctx) => {
         await bot.telegram.sendMessage(chatId, "Please enter a valid stock ticker like TCS, RELIANCE, INFY");
         return;
       }
-      if (subscribed) {
-        await performAnalysis(chatId, text);
-      } else {
-        await performBasicOverview(chatId, ticker);
-        await bot.telegram.sendMessage(chatId, `🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`);
-      }
+      await performAnalysis(chatId, text);
+      if (!subscribed) await incrementUsage(chatId, usageCount);
       return;
     }
 
     // ── PRO: Portfolio Commands ────────────────
     if (lowerText.startsWith("/add ")) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       const parts = text.split(/\s+/);
       if (parts.length < 4) {
         return bot.telegram.sendMessage(chatId, "Usage: /add TICKER QUANTITY PRICE\nExample: /add HDFCBANK 50 1450");
@@ -627,6 +499,7 @@ bot.on("text", async (ctx) => {
           chatId,
           `✅ Holding Added Successfully\n📈 Stock: ${symbol}\n📦 Quantity: ${quantity}\n💰 Avg Buy Price: ₹${avgPrice}\n📊 Total Invested: ₹${quantity * avgPrice}\n\nUse /portfolio to view full health.`
         );
+        if (!subscribed) await incrementUsage(chatId, usageCount);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error adding holding: ${err.message}`);
       }
@@ -634,7 +507,6 @@ bot.on("text", async (ctx) => {
     }
 
     if (lowerText.startsWith("/update ")) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       const parts = text.split(/\s+/);
       if (parts.length < 4) {
         return bot.telegram.sendMessage(chatId, "Usage: /update TICKER QUANTITY PRICE\nExample: /update HDFCBANK 80 1425");
@@ -651,6 +523,7 @@ bot.on("text", async (ctx) => {
           chatId,
           `🔄 Holding Updated\n📈 Stock: ${symbol}\n📦 New Quantity: ${quantity}\n💰 New Avg Price: ₹${avgPrice}\n📊 New Total Invested: ₹${quantity * avgPrice}`
         );
+        if (!subscribed) await incrementUsage(chatId, usageCount);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error updating holding: ${err.message}`);
       }
@@ -658,12 +531,12 @@ bot.on("text", async (ctx) => {
     }
 
     if (lowerText.startsWith("/remove ")) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       const symbol = text.substring(8).trim().toUpperCase();
       if (!symbol) return bot.telegram.sendMessage(chatId, "Usage: /remove TICKER");
       try {
         await removeHolding(chatId, symbol);
         await bot.telegram.sendMessage(chatId, `🗑 ${symbol} removed from your portfolio.`);
+        if (!subscribed) await incrementUsage(chatId, usageCount);
       } catch (err) {
         await bot.telegram.sendMessage(chatId, `❌ Error removing holding: ${err.message}`);
       }
@@ -671,7 +544,6 @@ bot.on("text", async (ctx) => {
     }
 
     if (lowerText.startsWith("/portfolio")) {
-      if (!subscribed) { await sendProUpsell(ctx); return; }
       const lines = text.split("\n").slice(1);
       let stocks = lines
         .map((line) => {
@@ -706,6 +578,7 @@ bot.on("text", async (ctx) => {
         `Use /analyze <TICKER> for deep dive on any holding.\n━━━━━━━━━━━━━━━━━━\n` +
         `⚠️ Educational purposes only.`;
       await bot.telegram.sendMessage(chatId, message);
+      if (!subscribed) await incrementUsage(chatId, usageCount);
       return;
     }
 
@@ -726,35 +599,12 @@ bot.on("text", async (ctx) => {
         return;
       }
 
-      if (subscribed) {
-        await performAnalysis(chatId, ticker);
-      } else {
-        await performBasicOverview(chatId, ticker);
-        await bot.telegram.sendMessage(chatId, `🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`);
-      }
+      await performAnalysis(chatId, ticker);
+      if (!subscribed) await incrementUsage(chatId, usageCount);
       return;
     }
 
     // ── Conversational AI Fallback (tiered) ───
-    // Block advanced intent BEFORE any AI call fires
-    const advancedKeywords = [
-      'entry', 'target', 'stop loss', 'stoploss', 'stop-loss',
-      'buy', 'sell', 'should i buy', 'should i sell',
-      'price level', 'long term', 'short term',
-      'portfolio', 'allocation', 'best entry',
-      'deep', 'analyse', 'full analysis', 'exit',
-      'rebalance', 'when to buy', 'when to sell'
-    ];
-    const wantsAdvanced = advancedKeywords.some(k => lowerText.includes(k));
-    if (!subscribed && wantsAdvanced) {
-      await ctx.reply(
-        `🔒 *Pro Feature*\n\n` +
-        `Detailed analysis requires FinSight Pro.\n\n` +
-        `👉 Unlock here: /subscribe`,
-        { parse_mode: 'Markdown' }
-      );
-      return;
-    }
 
     let contextualQuery = text;
     if (ctx.message.reply_to_message?.text) {
@@ -773,56 +623,10 @@ bot.on("text", async (ctx) => {
       : aiResponse.response;
 
     // Fetch trial status for messaging
-    const { data: subData } = await supabase
-      .from('subscribers')
-      .select('trial_ends_at, trial_used')
-      .eq('telegram_chat_id', chatId.toString())
-      .maybeSingle();
-
-    const now = new Date();
-    const trialActive = subData?.trial_ends_at && new Date(subData.trial_ends_at) > now;
-    const trialExpired = subData?.trial_used && (!subData.trial_ends_at || new Date(subData.trial_ends_at) <= now);
-
     // Append upgrade prompt + usage counter for free users
     if (!subscribed) {
-      if (trialExpired) {
-        finalMessage += `\n\n🚫 Your trial has expired.\nUpgrade to continue using FinSight Pro:\n👉 /subscribe`;
-        await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-      } else {
-        finalMessage += `\n\n🆓 Free requests left: ${remainingUsage}/10\n👉 Use /trial for unlimited access\n👉 Or /subscribe to upgrade`;
-        await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
-        
-        // Warning triggers
-        if (remainingUsage === 3) {
-          await ctx.reply(
-            `⚠️ *Only 3 free messages left*\n\n` +
-            `🧪 Try 3-day FREE trial:\n` +
-            `👉 /trial\n` +
-            `💎 Upgrade to Pro:\n` +
-            `👉 /subscribe`,
-            { parse_mode: 'Markdown' }
-          );
-        } else if (remainingUsage === 0) {
-          await ctx.reply(
-            `⚠️ *That was your last free message.*\n\n` +
-            `🧪 Try 3-day FREE trial:\n` +
-            `👉 /trial\n` +
-            `💎 Upgrade to Pro:\n` +
-            `👉 /subscribe`,
-            { parse_mode: 'Markdown' }
-          );
-        }
-      }
-      return;
-    }
-
-    if (trialActive) {
-      const hoursLeft = Math.floor((new Date(subData.trial_ends_at) - now) / (1000 * 60 * 60));
-      if (hoursLeft <= 24) {
-        finalMessage += `\n\n⏳ *Trial ending soon (${hoursLeft}h left)*\nUpgrade now to continue:\n👉 /subscribe`;
-      } else {
-        finalMessage += `\n\n🔥 *Trial active* — explore full analysis now.\nUpgrade before expiry to keep access:\n👉 /subscribe`;
-      }
+      finalMessage += `\n\n🆓 Free Plan: 10 requests / 12h\n💎 Upgrade for unlimited:\n👉 /subscribe`;
+      await incrementUsage(chatId, usageCount);
     }
     
     await bot.telegram.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
