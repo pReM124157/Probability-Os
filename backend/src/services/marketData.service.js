@@ -4,6 +4,14 @@ import { fetchIndianHolidays } from "./holiday.service.js";
 
 const yahooFinance = new YahooFinance();
 
+function normalizeSymbol(symbol) {
+  if (!symbol) return "";
+  return symbol.trim()
+    .toUpperCase()
+    .replace(/^\//, "")  // Remove leading slash
+    .replace(/\s+/g, ""); // Remove spaces
+}
+
 /**
  * Fetches Nifty 50 and Sensex current quotes.
  */
@@ -90,7 +98,7 @@ const indianStocks = [
 
 export async function getCompanyOverview(symbol) {
   try {
-    const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
+    const upperSymbol = normalizeSymbol(symbol);
 
     const symbolsToTry = upperSymbol.includes(".")
       ? [upperSymbol]
@@ -265,7 +273,7 @@ async function retry(fn, retries = 3, initialDelay = 500) {
 export async function getLiveMarketData(symbol) {
   const startTime = Date.now();
   try {
-    const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
+    const upperSymbol = normalizeSymbol(symbol);
     const symbolsToTry = upperSymbol.includes(".")
         ? [upperSymbol]
         : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
