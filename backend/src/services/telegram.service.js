@@ -190,7 +190,7 @@ function formatAnalysis(res, symbol, stockData = {}) {
     debtEquity: stockData.DebtToEquityRatio ?? "-",
     revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? "-",
     earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? "-",
-    fundamentalView: smartFallback("interpretation", safeSubstring(result.analysis || "", 160)),
+    fundamentalView: smartFallback("interpretation", result.analysis || ""),
     sectorName: safeString(stockData.Sector || "Unknown Sector"),
     sectorBias: safeString(sector.bias || "NEUTRAL"),
     relStrength: safeString(relStrength.status || "Neutral"),
@@ -204,7 +204,7 @@ function formatAnalysis(res, symbol, stockData = {}) {
     bullishScenario: smartFallback("trigger_up", safeString(nextSessionPlan.entryTrigger), { price }),
     bearishScenario: smartFallback("trigger_down", safeString(nextSessionPlan.stopLoss), { price }),
     keyTrigger: safeString(nextSessionPlan.note || "Opening gap + volume confirmation"),
-    finalInsight: smartFallback("final_insight", safeSubstring(result.analysis || "", 220))
+    finalInsight: smartFallback("final_insight", result.analysis || "")
   };
 
   const fmt = (value, pct = false) => {

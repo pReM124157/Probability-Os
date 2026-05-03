@@ -203,7 +203,7 @@ export async function getCompanyOverview(symbol) {
         try {
             console.log(`FETCH ATTEMPT (Overview): ${sym}`);
             const tempResult = await retry(() => yahooFinance.quoteSummary(sym, {
-                modules: ["price", "summaryDetail", "financialData"]
+                modules: ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile", "calendarEvents"]
             }), 2, 500);
             if (tempResult && tempResult.assetProfile) {
                 result = tempResult;
@@ -239,26 +239,50 @@ export async function getCompanyOverview(symbol) {
     console.log("RAW YAHOO SUMMARY RESULT:", safeSubstring(safeRaw, 500));
 
     const {
-      financialData = {},
-      defaultKeyStatistics = {},
       assetProfile = {},
-      summaryDetail = {},
       calendarEvents = {}
     } = result;
+
+    const summary = result.summaryDetail || {};
+    const financials = result.financialData || {};
+    const stats = result.defaultKeyStatistics || {};
+    
+    const fundamentals = {
+      pe: summary.trailingPE ?? null,
+      roe: financials.returnOnEquity ?? null,
+      profitMargin: financials.profitMargins ?? null,
+      debtToEquity: financials.debtToEquity ?? null,
+      revenueGrowth: financials.revenueGrowth ?? null,
+      earningsGrowth: financials.earningsGrowth ?? null
+    };
+
+    const format = (val, isPercent = false) => {
+      if (val === null || val === undefined) return "-";
+      return isPercent ? `${(val * 100).toFixed(2)}%` : val.toFixed(2);
+    };
 
     const companyOverview = {
       Symbol: fetchSymbol,
       Name: assetProfile.longName || fetchSymbol,
       
-      MarketCapitalization: summaryDetail.marketCap ?? null,
-      PERatio: summaryDetail.trailingPE ?? null,
-      ProfitMargin: financialData.profitMargins ?? null,
-      ReturnOnEquityTTM: financialData.returnOnEquity ?? null,
-      DebtToEquityRatio: financialData.debtToEquity ?? null,
-      QuarterlyEarningsGrowthYOY: financialData.earningsGrowth ?? null,
-      QuarterlyRevenueGrowthYOY: financialData.revenueGrowth ?? null,
-      PriceToBookRatio: defaultKeyStatistics.priceToBook ?? null,
-      Beta: defaultKeyStatistics.beta ?? null,
+      "P/E Ratio": format(fundamentals.pe),
+      "ROE": format(fundamentals.roe, true),
+      "Profit Margin": format(fundamentals.profitMargin, true),
+      "Debt/Equity": format(fundamentals.debtToEquity),
+      "Revenue Growth (YoY)": format(fundamentals.revenueGrowth, true),
+      "Earnings Growth (YoY)": format(fundamentals.earningsGrowth, true),
+
+      // Retain old keys for compatibility with telegram.service.js
+      PERatio: format(fundamentals.pe),
+      ReturnOnEquityTTM: format(fundamentals.roe, true),
+      ProfitMargin: format(fundamentals.profitMargin, true),
+      DebtToEquityRatio: format(fundamentals.debtToEquity),
+      QuarterlyRevenueGrowthYOY: format(fundamentals.revenueGrowth, true),
+      QuarterlyEarningsGrowthYOY: format(fundamentals.earningsGrowth, true),
+
+      MarketCapitalization: summary.marketCap ?? null,
+      PriceToBookRatio: stats.priceToBook ?? null,
+      Beta: stats.beta ?? null,
       Sector: assetProfile.sector ?? null,
       Industry: assetProfile.industry ?? null,
       BusinessSummary: assetProfile.longBusinessSummary ?? null,

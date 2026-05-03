@@ -41,8 +41,7 @@ Reply: (switch to serious analytical tone)
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages,
-      temperature: 0.7,
-      max_tokens: 100
+      temperature: 0.7
     });
 
     let reply = completion.choices[0].message.content;
@@ -51,9 +50,12 @@ Reply: (switch to serious analytical tone)
     if (!reply || reply.length < 5) {
       reply = "Ask me about any stock or market — I’ll break it down.";
     }
-    if (reply.length > 180) {
-      reply = reply.substring(0, 180) + "...";
-    }
+    
+    // Telegram safe limit
+    const finalMessage = reply.length > 4000
+      ? reply.slice(0, 4000)
+      : reply;
+    reply = finalMessage;
 
     history.push({ role: "user", content: message });
     history.push({ role: "assistant", content: reply });

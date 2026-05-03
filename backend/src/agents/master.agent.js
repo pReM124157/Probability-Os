@@ -526,10 +526,9 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
       
-      // Smart length control
-      if (response.length > 600) {
-        const cutoff = response.lastIndexOf(".", 600);
-        if (cutoff > 200) response = response.slice(0, cutoff + 1);
+      // Telegram safe limit
+      if (response.length > 4000) {
+        response = response.slice(0, 4000);
       }
 
       // Optional bridge (60% chance)
