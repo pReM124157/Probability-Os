@@ -526,24 +526,30 @@ bot.on("text", async (ctx) => {
       .eq("telegram_chat_id", chatId)
       .maybeSingle();
 
-    // ── Expiry Check (Auto-Downgrade) ──────────────────────────────
-    if (user && isPro(user) && user.subscription_end) {
-      if (new Date() > new Date(user.subscription_end)) {
-        console.log("⏳ SUBSCRIPTION EXPIRED:", chatId);
-        await supabase
-          .from("subscribers")
-          .update({ plan: "FREE", is_pro: false })
-          .eq("telegram_chat_id", chatId);
-          
-        user.plan = "FREE";
-        user.is_pro = false;
-        
-        await bot.telegram.sendMessage(
-          chatId, 
-          "⚠️ *Subscription Expired*\nYour FinSight Pro access has ended. You are now on the Free plan.\n\n👉 /subscribe to renew.",
-          { parse_mode: "Markdown" }
-        );
-      }
+    if (
+      user?.plan === "PRO" &&
+      user?.subscription_end &&
+      new Date(user.subscription_end) < new Date()
+    ) {
+      console.log("⚠️ Auto downgrade triggered:", chatId);
+      await supabase
+        .from("subscribers")
+        .update({
+          plan: "FREE",
+          is_pro: false,
+          subscription_end: null,
+          free_usage_count: 0,
+          usage_started_at: new Date()
+        })
+        .eq("telegram_chat_id", chatId);
+      user.plan = "FREE";
+      user.is_pro = false;
+      
+      await bot.telegram.sendMessage(
+        chatId, 
+        "⚠️ *Subscription Expired*\nYour FinSight Pro access has ended. You are now on the Free plan.\n\n👉 /subscribe to renew.",
+        { parse_mode: "Markdown" }
+      );
     }
 
     const proUser = isPro(user);

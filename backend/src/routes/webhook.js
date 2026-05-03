@@ -46,41 +46,78 @@ router.post('/razorpay', express.raw({ type: 'application/json' }), async (req, 
       const event = data.event;
       const payload = data.payload;
 
-      if (event === 'payment.captured') {
-        const payment = payload.payment.entity;
-        const chatId = payment.notes?.telegram_chat_id?.toString();
-        if (!chatId) {
-          console.error("❌ Missing telegram_chat_id in Razorpay notes");
+      if (event === "payment.captured") {
+        try {
+          const payment = payload.payment.entity;
+          const chatId = payment.notes?.telegram_chat_id;
+          if (!chatId) {
+            console.log("❌ Missing telegram_chat_id in notes");
+            return;
+          }
+
+          const paymentId = payment.id;
+          // Check if already processed
+          const { data: existing } = await supabase
+            .from("payments")
+            .select("id")
+            .eq("id", paymentId)
+            .maybeSingle();
+          if (existing) {
+            console.log("⚠️ Duplicate webhook ignored:", paymentId);
+            return;
+          }
+
+          const subscriptionEnd = new Date(
+            Date.now() + 30 * 24 * 60 * 60 * 1000
+          );
+          const { error } = await supabase
+            .from("subscribers")
+            .upsert(
+              {
+                telegram_chat_id: chatId.toString(),
+                plan: "PRO",
+                is_pro: true,
+                subscription_end: subscriptionEnd
+              },
+              { onConflict: "telegram_chat_id" }
+            );
+          if (error) {
+            console.error("❌ PRO upgrade failed:", error);
+          } else {
+            console.log("✅ PRO upgrade success for:", chatId);
+            await supabase.from("payments").insert({
+              id: paymentId,
+              telegram_chat_id: chatId.toString(),
+              amount: payment.amount,
+              created_at: new Date()
+            });
+          }
+          return;
+        } catch (err) {
+          console.error("❌ Webhook error:", err);
           return;
         }
+      }
 
-        // 30 days expiry (IST safe)
-        const expiryDate = new Date();
-        expiryDate.setDate(expiryDate.getDate() + 30);
-
-        const { error } = await supabase
-          .from("subscribers")
-          .upsert({
-            telegram_chat_id: chatId,
-            plan: "PRO",
-            is_pro: true,
-            subscription_end: expiryDate.toISOString()
-          });
-
-        if (error) {
-          console.error("❌ PRO upgrade failed:", error);
-        } else {
-          console.log("✅ User upgraded to PRO:", chatId);
-          try {
-            await bot.telegram.sendMessage(
-              chatId,
-              "🎉 Payment successful! You now have FinSight Pro access for 30 days."
-            );
-          } catch (err) {
-            console.error("Failed to send success message:", err.message);
-          }
+      if (event === "payment.failed") {
+        try {
+          const payment = payload.payment.entity;
+          const chatId = payment.notes?.telegram_chat_id;
+          if (!chatId) return;
+          await supabase
+            .from("subscribers")
+            .update({
+              plan: "FREE",
+              is_pro: false,
+              subscription_end: null,
+              free_usage_count: 0,
+              usage_started_at: new Date()
+            })
+            .eq("telegram_chat_id", chatId.toString());
+          console.log("⚠️ Downgraded user due to payment failure:", chatId);
+        } catch (err) {
+          console.error("❌ Downgrade error:", err);
         }
-        return;
       }
 
 
