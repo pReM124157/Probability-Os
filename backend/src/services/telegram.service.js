@@ -285,9 +285,13 @@ async function performAnalysis(chatId, symbol, footer = "") {
   const result = await runAnalysisSafe(symbol, async (sym) => {
     const stockData = await getCompanyOverview(sym);
     const data = await masterAgent(stockData);
-    if (data.status === "DATA_UNAVAILABLE") {
+    // ✅ Allow fallback to pass through
+    if (!data) {
+      console.log("[GLOBAL GUARD] No data at all for", sym);
       throw new Error("DATA_UNAVAILABLE");
     }
+    // ❌ REMOVE blocking on DATA_UNAVAILABLE
+    // Fallback data should continue to analysis
     return formatAnalysis(data, sym, stockData);
   });
 
