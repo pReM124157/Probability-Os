@@ -544,6 +544,7 @@ bot.on("text", async (ctx) => {
         .eq("telegram_chat_id", chatId);
       user.plan = "FREE";
       user.is_pro = false;
+      user.free_usage_count = 0;
       
       await bot.telegram.sendMessage(
         chatId, 
