@@ -98,6 +98,46 @@ function isMarketOpenIST() {
   return timeInMinutes >= (9 * 60 + 15) && timeInMinutes <= (15 * 60 + 30); // 9:15 AM - 3:30 PM
 }
 
+function generateExitSignal(triggers, stopLoss) {
+  if (!triggers || triggers.length === 0) {
+    return {
+      signal: "HOLD POSITION",
+      reason: `No exit triggers detected. Monitor stop loss at ₹${stopLoss}`
+    };
+  }
+  if (
+    triggers.includes("stop_loss_breach") ||
+    triggers.includes("trend_reversal")
+  ) {
+    return {
+      signal: "REDUCE OR EXIT",
+      reason: triggers.join(", ")
+    };
+  }
+  return {
+    signal: "HOLD POSITION",
+    reason: "No strong exit triggers"
+  };
+}
+
+function formatMetric(value, formatter, fallback = "Data unavailable — check manually") {
+  if (value === null || value === undefined || value === "" || value === "-") {
+    return fallback;
+  }
+  return formatter(value);
+}
+
+function interpretDebt(debtToEquity) {
+  if (debtToEquity == null) return "";
+  if (debtToEquity > 4.0) {
+    return `⚠️ CRITICAL — D/E of ${debtToEquity} is extremely high, solvency risk if revenues decline`;
+  }
+  if (debtToEquity > 2.0) {
+    return `⚠️ High leverage — D/E of ${debtToEquity}, monitor debt servicing`;
+  }
+  return "";
+}
+
 /**
  * Generates a fresh market update with full intelligence pipeline.
  */
@@ -484,6 +524,37 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         if (/I am|I’m an AI|AI assistant|sophisticated AI/i.test(text)) return original;
         return text;
       };
+      
+      const extractAllocationAmount = (query) => {
+        const match = query.match(/(?:₹|rs\.?\s?|inr\s?)([\d,]+(?:\.\d+)?)/i) || query.match(/\b([\d,]+(?:\.\d+)?)\b/);
+        if (!match) return 0;
+        return Number(String(match[1]).replace(/,/g, "")) || 0;
+      };
+
+      const buildApiBackedSharePlan = async (ticker, allocation) => {
+        const live = await getLiveMarketData(ticker);
+        const price = Number(live?.currentPrice || 0);
+        if (!price || price <= 0) {
+          return {
+            ticker,
+            error: "Price unavailable"
+          };
+        }
+
+        const shares = Math.floor(allocation / price);
+        const totalCost = shares * price;
+        const remainder = allocation - totalCost;
+        return {
+          ticker,
+          shares,
+          pricePerShare: price,
+          totalCost,
+          undeployed: remainder,
+          note: shares === 0
+            ? `₹${allocation} insufficient for 1 share at ₹${price}`
+            : null
+        };
+      };
 
       const isPitchQuery = (query) => {
         const lower = query.toLowerCase();
@@ -521,10 +592,14 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       // 6. LLM Call (tiered by subscription)
-      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line.`.trim();
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.`.trim();
       let originalResponse = await generateTieredAnalysis(masterPrompt, isPro);
       let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
+      response = response
+        .split("\n")
+        .filter((line) => !/\b\d+\s+shares?\b/i.test(line))
+        .join("\n");
       
       // Telegram safe limit
       if (response.length > 4000) {
@@ -535,6 +610,16 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       const bridges = ["Here’s the view:", "Quick take:", "Right now:"];
       if (Math.random() < 0.6) {
         response = bridges[Math.floor(Math.random() * bridges.length)] + "\n\n" + response;
+      }
+
+      const allocationAmount = extractAllocationAmount(userQuery);
+      if (isLikelyTicker && allocationAmount > 0) {
+        const plan = await buildApiBackedSharePlan(tickerMatch[0], allocationAmount);
+        if (!plan.error) {
+          const cost = Number(plan.totalCost || 0).toFixed(2);
+          const undeployed = Number(plan.undeployed || 0).toFixed(2);
+          response += `\n\n${plan.ticker} — ${plan.shares} shares at ₹${plan.pricePerShare} (₹${cost} used, ₹${undeployed} unused)`;
+        }
       }
 
       response = ensureWhatMatters(response);
@@ -642,6 +727,9 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       companyData: stockData,
       valuationScore: valuation.score
     });
+    const normalizedExitTriggers = [];
+    if (exitSignal?.signal === "STOP LOSS EXIT") normalizedExitTriggers.push("stop_loss_breach");
+    if (exitSignal?.signal === "TRIM POSITION" || technical?.trend === "BEARISH") normalizedExitTriggers.push("trend_reversal");
 
     // PHASE 2.6: Event Risk Analysis
     const eventRisk = await analyzeEventRisk({
@@ -750,13 +838,20 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
     const pbVal = Number(stockData.PriceToBookRatio || 0);
     const deVal = Number(stockData.DebtToEquityRatio || 0);
 
-    const roe = smartFallback("metric", roeVal ? roeVal.toFixed(0) : "");
+    const roe = formatMetric(
+      Number.isFinite(roeVal) && roeVal !== 0 ? roeVal : null,
+      (v) => Number(v).toFixed(1) + "%"
+    );
     const margin = smartFallback("metric", marginVal ? marginVal.toFixed(0) : "");
     const pb = smartFallback("metric", pbVal ? pbVal.toFixed(2) : "");
     const de = smartFallback("metric", deVal ? deVal.toFixed(2) : "");
+    const debtNote = interpretDebt(Number.isFinite(deVal) && deVal > 0 ? Number(deVal.toFixed(2)) : null);
+    const debtDisplay = deVal > 0
+      ? `${de}${debtNote ? ` ${debtNote}` : ""}`
+      : "Data unavailable — check manually";
 
-    professionalReasoning += `Fundamentally, the company shows ${roeVal > 20 ? 'strong' : 'moderate'} profitability (ROE ~${roe}%) and ${marginVal > 10 ? 'stable' : 'pressured'} margins (~${margin}%). `;
-    professionalReasoning += `However, ${pbVal > 5 ? 'elevated' : 'reasonable'} valuation (PB ~${pb}) and ${deVal > 2 ? 'high' : 'managed'} leverage (D/E ~${de}) introduce structural risk.\n\n`;
+    professionalReasoning += `Fundamentally, the company shows ${roeVal > 20 ? 'strong' : 'moderate'} profitability (ROE: ${roe}) and ${marginVal > 10 ? 'stable' : 'pressured'} margins (~${margin}%). `;
+    professionalReasoning += `However, ${pbVal > 5 ? 'elevated' : 'reasonable'} valuation (PB ~${pb}) and ${deVal > 2 ? 'high' : 'managed'} leverage (Debt/Equity: ${debtDisplay}) introduce structural risk.\n\n`;
     
     professionalReasoning += `Technically, price action indicates ${technical.trend === 'BEARISH' ? 'weakness' : 'consolidation'} with ${technical.rsi > 60 ? 'overbought' : 'breakdown'} signals near key levels. `;
     professionalReasoning += `Combined with fundamental factors, this supports a ${entryTiming.strategy.includes('AVOID') ? 'cautious or trimming' : 'selective'} approach, resulting in a ${decision.finalDecision || 'HOLD'} verdict.\n`;
@@ -895,6 +990,10 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       
       finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 3);
     }
+
+    const exit = generateExitSignal(normalizedExitTriggers, parseCurrency(entryTiming.stopLoss));
+    exitSignal.signal = exit.signal;
+    exitSignal.reason = exit.reason;
 
     // PHASE 5: Action Alignment
     // Override recommended action based on combined verdict + timing urgency
