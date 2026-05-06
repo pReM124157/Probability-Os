@@ -547,7 +547,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         for (const p of filteredPositions) {
           deployed += Number(p.actual_cost || 0);
         }
-        const undeployed = Math.max(0, Number(totalAmount) - deployed);
+        let undeployed = Math.max(0, Number(totalAmount) - deployed);
         const fmtINR = (value) => `₹${Math.round(Number(value || 0)).toLocaleString("en-IN")}`;
         const thesisByTicker = {
           INFY: "Strong cash reserves and improving IT demand recovery.",
@@ -555,6 +555,34 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
           TATACONSUM: "Defensive consumption exposure improves portfolio balance.",
           HDFCBANK: "High-quality banking franchise with resilient credit growth."
         };
+
+        // Secondary deterministic redistribution to reduce idle cash.
+        if (undeployed > 3000 && filteredPositions.length > 0) {
+          const priority = ["INFY", "ICICIPRULI", "TATACONSUM"];
+          let progressed = true;
+          while (undeployed > 3000 && progressed) {
+            progressed = false;
+            for (const t of priority) {
+              const p = filteredPositions.find((x) => x.ticker === t);
+              if (!p) continue;
+              const price = Number(p.live_price || 0);
+              if (price > 0 && undeployed >= price) {
+                p.shares = Number(p.shares || 0) + 1;
+                p.actual_cost = Number(p.actual_cost || 0) + price;
+                undeployed -= price;
+                progressed = true;
+              }
+              if (undeployed <= 3000) break;
+            }
+          }
+          deployed = filteredPositions.reduce((sum, p) => sum + Number(p.actual_cost || 0), 0);
+          undeployed = Math.max(0, Number(totalAmount) - deployed);
+          filteredPositions.forEach((p) => {
+            p.actual_percentage = deployed > 0
+              ? ((Number(p.actual_cost || 0) / deployed) * 100).toFixed(1)
+              : 0;
+          });
+        }
 
         const currentLines = holdingReviews.length
           ? holdingReviews.map((h) =>
@@ -595,6 +623,7 @@ ${newLines}
 📌 Diversification: ${filteredPositions.length >= 3 ? "IMPROVED" : "STABLE"}
 📌 Sector Balance: ${holdingReviews.some((h) => h.action === "REDUCE") ? "HEALTHIER" : "BALANCED"}
 📌 Expected Stability: ${holdingReviews.some((h) => h.action === "REDUCE") ? "STRONGER" : "STABLE"}
+${undeployed > Number(totalAmount) * 0.1 ? "📌 Cash Reserve Note: Elevated cash retained intentionally due to current allocation constraints." : ""}
 ━━━━━━━━━━━━━━━━━━
 🧠 STRATEGIC OUTLOOK
 Portfolio now has lower concentration risk,
