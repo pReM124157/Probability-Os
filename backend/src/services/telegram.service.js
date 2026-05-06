@@ -776,6 +776,20 @@ bot.on("text", async (ctx) => {
     }
 
     // ── Chat fallback ───────────────────────────────────────────────
+    const financeIntent =
+      /(portfolio|invest|allocation|allocate|stock|shares|price|buy|sell|market|nifty|sensex|₹\d+)/i.test(text);
+    if (financeIntent) {
+      console.log("ROUTING TO MASTER AGENT");
+      console.log("MESSAGE:", text);
+      const result = await masterAgent({
+        mode: "conversation",
+        userQuery: text,
+        chatId
+      });
+      await send(result?.response || "Unable to process finance query right now.");
+      return;
+    }
+
     let reply = "";
     try {
       reply = await generateChatReply(chatId, text);
