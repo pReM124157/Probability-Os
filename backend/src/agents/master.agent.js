@@ -616,9 +616,11 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       const portfolioIntent =
-        /portfolio|build.*portfolio|invest.*₹|allocate|allocation/i
+        /(portfolio|invest|allocation|allocate|build.*portfolio)/i
           .test(userMessage || "");
+      console.log("PORTFOLIO INTENT:", portfolioIntent);
       if (portfolioIntent) {
+        console.log("BUILD PORTFOLIO TOOL CALLED");
         const portfolioData =
           await executeTool("buildPortfolio", {
             totalAmount: 20000,
