@@ -469,8 +469,41 @@ export async function masterAgent(input) {
         return { response };
       }
 
+      const userMessage = userQuery || "";
+      const buildPortfolioIntent =
+        /(build|create|make).*(portfolio)|portfolio.*₹|₹.*portfolio/i.test(userMessage);
+      if (buildPortfolioIntent) {
+        console.log("BUILD PORTFOLIO TOOL CALLED");
+        const portfolioData =
+          await executeTool("buildPortfolio", {
+            totalAmount: 20000,
+            allocations: [
+              { ticker: "HDFCBANK", percentage: 40 },
+              { ticker: "INFY", percentage: 30 },
+              { ticker: "TATACONSUM", percentage: 15 },
+              { ticker: "ICICIPRULI", percentage: 15 }
+            ]
+          });
+
+        const verifiedPortfolioPrompt = `
+VERIFIED LIVE PORTFOLIO DATA
+${JSON.stringify(portfolioData, null, 2)}
+Rules:
+- Use ONLY these prices and share counts
+- Do NOT invent numbers
+- Do NOT approximate
+- Explain allocations and risks only
+`.trim();
+
+        const portfolioPrompt = `${FINSIGHT_PERSONA}\n\n${verifiedPortfolioPrompt}\n\nUser Question: ${userQuery}`.trim();
+        const portfolioOriginalResponse = await generateTieredAnalysis(portfolioPrompt, isPro);
+        let portfolioResponse = isPro ? cleanOutput(portfolioOriginalResponse) : portfolioOriginalResponse;
+        portfolioResponse = validateResponse(portfolioResponse, portfolioOriginalResponse);
+        return { response: portfolioResponse };
+      }
+
       // 5. Intent Detection: Portfolio Snapshot (PRIORITY 5)
-      const isPortfolio = /portfolio|my holdings|check.*portfolio/i.test(userQuery);
+      const isPortfolio = /analy[sz]e.*portfolio|review.*holdings|portfolio snapshot|my holdings|check.*portfolio/i.test(userQuery);
       if (isPortfolio) {
         const chatId = input.chatId || "DEFAULT";
         const response = await getPortfolioSnapshot(chatId);
@@ -574,7 +607,6 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       // 4. Live Data Snippet (Ticker Extraction)
       const tickerMatch = userQuery.match(/\b[A-Z]{2,10}(\.NS)?\b/);
       const isLikelyTicker = tickerMatch && !/^(HI|HEY|WHY|WHAT|HELP|DO|CAN|THE|AND|THIS|THAT|YOUR|WORK|WITH|FROM|INTO|ONTO)\b/i.test(tickerMatch[0]);
-      const userMessage = userQuery || "";
       const requiresLivePricing =
         /portfolio|invest|allocation|shares|stock price|price of|buy|₹|\d+\s*(rs|rupees)?/i
           .test(userMessage || "");
@@ -613,40 +645,6 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
           const stockData = await executeTool("getStockPrice", { ticker });
           verifiedMarketData[ticker] = stockData;
         }
-      }
-
-      const portfolioIntent =
-        /(portfolio|invest|allocation|allocate|build.*portfolio)/i
-          .test(userMessage || "");
-      console.log("PORTFOLIO INTENT:", portfolioIntent);
-      if (portfolioIntent) {
-        console.log("BUILD PORTFOLIO TOOL CALLED");
-        const portfolioData =
-          await executeTool("buildPortfolio", {
-            totalAmount: 20000,
-            allocations: [
-              { ticker: "HDFCBANK", percentage: 40 },
-              { ticker: "INFY", percentage: 30 },
-              { ticker: "TATACONSUM", percentage: 15 },
-              { ticker: "ICICIPRULI", percentage: 15 }
-            ]
-          });
-
-        const verifiedPortfolioPrompt = `
-VERIFIED LIVE PORTFOLIO DATA
-${JSON.stringify(portfolioData, null, 2)}
-Rules:
-- Use ONLY these prices and share counts
-- Do NOT invent numbers
-- Do NOT approximate
-- Explain allocations and risks only
-`.trim();
-
-        const portfolioPrompt = `${FINSIGHT_PERSONA}\n\n${verifiedPortfolioPrompt}\n\nUser Question: ${userQuery}`.trim();
-        const portfolioOriginalResponse = await generateTieredAnalysis(portfolioPrompt, isPro);
-        let portfolioResponse = isPro ? cleanOutput(portfolioOriginalResponse) : portfolioOriginalResponse;
-        portfolioResponse = validateResponse(portfolioResponse, portfolioOriginalResponse);
-        return { response: portfolioResponse };
       }
 
       // 5. Final Intent Check (Safety Guard)
