@@ -147,6 +147,13 @@ export const TOOLS = {
           0
         );
 
+      results.forEach(r => {
+        r.actual_percentage =
+          totalDeployed > 0
+            ? ((r.actual_cost / totalDeployed) * 100).toFixed(1)
+            : 0;
+      });
+
       return {
         total_budget: totalAmount,
         total_deployed: totalDeployed,

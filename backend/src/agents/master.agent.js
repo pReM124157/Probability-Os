@@ -514,7 +514,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
             ? "Weak momentum and capital protection priority."
             : "Position remains stable within current risk limits.";
           holdingReviews.push({
-            symbol: h.symbol,
+            symbol: normalizedTicker,
             qty,
             avg,
             livePrice,
@@ -545,35 +545,45 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
 
         const currentLines = holdingReviews.length
           ? holdingReviews.map((h) =>
-              `${h.action === "REDUCE" ? "❌ Reduce" : "⚠️ Hold"} ${h.symbol}\n` +
-              `Reason: ${h.reason}\n` +
-              `Live Price: ₹${h.livePrice || "Unavailable"} | Qty: ${h.qty} | PnL: ${h.pnlPct.toFixed(1)}%`
+              `${h.action === "REDUCE" ? "🔴" : "🟢"} ${h.symbol}\n` +
+              `• Status: ${h.action}\n` +
+              `• Live Price: ₹${h.livePrice || "Unavailable"}\n` +
+              `• Quantity: ${h.qty}\n` +
+              `• PnL: ${h.pnlPct >= 0 ? "+" : ""}${h.pnlPct.toFixed(1)}%\n` +
+              `• Insight:\n${h.reason}`
             ).join("\n")
           : "No existing holdings found for this account.";
 
         const newLines = positions.length
           ? positions.map((p) =>
-              `${p.ticker}\n` +
-              `Live Price: ₹${p.live_price}\n` +
-              `Shares: ${p.shares}\n` +
-              `Allocation: ₹${Number(p.actual_cost || 0).toFixed(2)}`
+              `📈 ${p.ticker}\n` +
+              `• Live Price: ₹${Number(p.live_price || 0).toFixed(2)}\n` +
+              `• Suggested Shares: ${p.shares}\n` +
+              `• Capital Allocation: ₹${Number(p.actual_cost || 0).toFixed(2)}\n` +
+              `• Portfolio Weight: ${p.actual_percentage || 0}%\n` +
+              `• Thesis:\nPrice-action aligned allocation with deterministic position sizing.`
             ).join("\n")
           : "No deployable positions generated.";
 
-        const finalView = `FINAL PORTFOLIO VIEW
-Current Holdings Count: ${holdingReviews.length}
-New Deployment: ₹${deployed.toFixed(2)} of ₹${Number(totalAmount).toFixed(2)}
-Undeployed Cash: ₹${undeployed.toFixed(2)}
-Risk Level: ${holdingReviews.some((h) => h.action === "REDUCE") ? "Moderate" : "Balanced"}
-Expected Stability: ${holdingReviews.some((h) => h.action === "REDUCE") ? "Improved with selective trims" : "Stable"}`;
-
-        const response = `CURRENT HOLDINGS REVIEW
+        const response = `🏛 FINSIGHT — PORTFOLIO REBALANCE REPORT
+━━━━━━━━━━━━━━━━━━
+📦 CURRENT PORTFOLIO
 ${currentLines}
-━━━━━━━━━━━━━━━
-CAPITAL REALLOCATION PLAN
+━━━━━━━━━━━━━━━━━━
+💰 CAPITAL REALLOCATION STRATEGY
 ${newLines}
-━━━━━━━━━━━━━━━
-${finalView}`;
+━━━━━━━━━━━━━━━━━━
+📊 FINAL PORTFOLIO SUMMARY
+• Existing Holdings: ${holdingReviews.length}
+• Fresh Capital Added: ₹${Number(totalAmount).toFixed(2)}
+• Capital Deployed: ₹${deployed.toFixed(2)}
+• Remaining Cash: ₹${undeployed.toFixed(2)}
+📌 Risk Profile: ${holdingReviews.some((h) => h.action === "REDUCE") ? "MODERATE" : "BALANCED"}
+📌 Diversification: ${positions.length >= 3 ? "IMPROVED" : "STABLE"}
+📌 Sector Balance: ${holdingReviews.some((h) => h.action === "REDUCE") ? "HEALTHIER" : "BALANCED"}
+📌 Expected Stability: ${holdingReviews.some((h) => h.action === "REDUCE") ? "STRONGER" : "STABLE"}
+━━━━━━━━━━━━━━━━━━
+⚠ Educational only. Not financial advice.`;
 
         return { response };
       }
