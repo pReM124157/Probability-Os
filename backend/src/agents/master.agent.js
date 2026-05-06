@@ -573,6 +573,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       // 4. Live Data Snippet (Ticker Extraction)
       const tickerMatch = userQuery.match(/\b[A-Z]{2,10}(\.NS)?\b/);
       const isLikelyTicker = tickerMatch && !/^(HI|HEY|WHY|WHAT|HELP|DO|CAN|THE|AND|THIS|THAT|YOUR|WORK|WITH|FROM|INTO|ONTO)\b/i.test(tickerMatch[0]);
+      const requiresLivePricing =
+        /portfolio|invest|allocation|shares|stock price|price of|buy|₹|\d+\s*(rs|rupees)?/i.test(userQuery);
+      const extractTickers = (query) => {
+        const blocked = new Set(["HI", "HEY", "WHY", "WHAT", "HELP", "DO", "CAN", "THE", "AND", "THIS", "THAT", "YOUR", "WORK", "WITH", "FROM", "INTO", "ONTO"]);
+        const matches = String(query || "").toUpperCase().match(/\b[A-Z]{2,10}(?:\.NS)?\b/g) || [];
+        return [...new Set(matches.map((t) => t.split(".")[0]).filter((t) => !blocked.has(t)))];
+      };
       
       let liveDataSnippet = "";
       if (isLikelyTicker) {
@@ -586,10 +593,8 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       const isPortfolioConversation = /portfolio|my holdings|holdings|my stocks/i.test(userQuery);
-      const tickers = new Set();
-      if (isLikelyTicker) {
-        tickers.add(tickerMatch[0].split(".")[0].toUpperCase());
-      }
+      const tickers = new Set(extractTickers(userQuery));
+      if (isLikelyTicker) tickers.add(tickerMatch[0].split(".")[0].toUpperCase());
       if (isPortfolioConversation && input?.chatId) {
         try {
           const holdings = await getPortfolio(String(input.chatId));
@@ -599,13 +604,16 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         } catch (err) {}
       }
 
-      const livePrices = {};
+      const marketData = {};
       for (const ticker of tickers) {
         const data = await getLiveMarketData(ticker);
-        livePrices[ticker] = data?.currentPrice || data?.price || null;
+        marketData[ticker] = {
+          price: data?.price || data?.currentPrice || null,
+          source: "Yahoo Finance"
+        };
       }
-      const livePricesSnippet = Object.keys(livePrices).length
-        ? `Live prices:\n${Object.entries(livePrices).map(([t, p]) => `${t}: ₹${p ?? 'Unavailable'}`).join('\n')}`
+      const livePricesSnippet = Object.keys(marketData).length
+        ? `Yahoo Finance Live Prices:\n${Object.entries(marketData).map(([ticker, d]) => `${ticker}: ₹${d.price ?? "Unavailable"}`).join('\n')}`
         : "";
 
       // 5. Final Intent Check (Safety Guard)
@@ -615,7 +623,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       // 6. LLM Call (tiered by subscription)
-      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\n${livePricesSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.\nDo NOT generate or assume stock prices yourself.\nOnly use live API prices provided in the input data.\nIf live prices are unavailable, explicitly say:\n"Live price temporarily unavailable."`.trim();
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\n${livePricesSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.\nYou are NOT allowed to invent or estimate stock prices.\nUse ONLY the provided Yahoo Finance live prices.\nIf a live price is unavailable, explicitly say:\n"Live Yahoo Finance price unavailable."\nDo NOT use words like:\n- approximately\n- around\n- estimated\n- assumed`.trim();
       let originalResponse = await generateTieredAnalysis(masterPrompt, isPro);
       let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
@@ -623,11 +631,14 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         .split("\n")
         .filter((line) => !/\b\d+\s+shares?\b/i.test(line))
         .join("\n");
-      if (Object.keys(livePrices).length) {
-        response = response.replace(/₹\d+(,\d{3})*(\.\d+)?/g, "");
-        response += "\n\n📊 Live Prices\n";
-        for (const [ticker, price] of Object.entries(livePrices)) {
-          response += `• ${ticker}: ₹${price ?? "Unavailable"}\n`;
+      if (requiresLivePricing) {
+        response = response.replace(
+          /₹\s?\d+(,\d{3})*(\.\d+)?(\s*per share)?(\s*\(approx\.?\))?/gi,
+          ""
+        );
+        response += "\n\n📊 Yahoo Finance Live Prices\n";
+        for (const [ticker, d] of Object.entries(marketData)) {
+          response += `• ${ticker}: ₹${d.price ?? "Unavailable"}\n`;
         }
       }
       
