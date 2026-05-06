@@ -493,9 +493,15 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         const holdingReviews = [];
         let currentTotal = 0;
         const sectorExposure = {};
+        const tickerMap = {
+          HDFC: "HDFCBANK",
+          ICICI: "ICICIBANK",
+          INFOSYS: "INFY"
+        };
 
         for (const h of currentPortfolio) {
-          const live = await executeTool("getStockPrice", { ticker: h.symbol });
+          const normalizedTicker = tickerMap[h.symbol] || h.symbol;
+          const live = await executeTool("getStockPrice", { ticker: normalizedTicker });
           const livePrice = Number(live?.price || 0);
           const qty = Number(h.quantity || 0);
           const avg = Number(h.avgPrice || 0);
@@ -564,7 +570,7 @@ Expected Stability: ${holdingReviews.some((h) => h.action === "REDUCE") ? "Impro
         const response = `CURRENT HOLDINGS REVIEW
 ${currentLines}
 ━━━━━━━━━━━━━━━
-NEW ₹${Number(totalAmount).toFixed(0)} DEPLOYMENT
+CAPITAL REALLOCATION PLAN
 ${newLines}
 ━━━━━━━━━━━━━━━
 ${finalView}`;
