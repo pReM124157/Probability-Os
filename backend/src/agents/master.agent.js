@@ -26,6 +26,7 @@ import {
 import { generateInvestmentAnalysis, generateTieredAnalysis } from "../services/claude.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
+import { executeTool } from "../tools/registry.js";
 
 // --- Global Cache for Market Updates ---
 let marketCache = {
@@ -573,8 +574,10 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       // 4. Live Data Snippet (Ticker Extraction)
       const tickerMatch = userQuery.match(/\b[A-Z]{2,10}(\.NS)?\b/);
       const isLikelyTicker = tickerMatch && !/^(HI|HEY|WHY|WHAT|HELP|DO|CAN|THE|AND|THIS|THAT|YOUR|WORK|WITH|FROM|INTO|ONTO)\b/i.test(tickerMatch[0]);
+      const userMessage = userQuery || "";
       const requiresLivePricing =
-        /portfolio|invest|allocation|shares|stock price|price of|buy|₹|\d+\s*(rs|rupees)?/i.test(userQuery);
+        /portfolio|invest|allocation|shares|stock price|price of|buy|₹|\d+\s*(rs|rupees)?/i
+          .test(userMessage || "");
       const extractTickers = (query) => {
         const blocked = new Set(["HI", "HEY", "WHY", "WHAT", "HELP", "DO", "CAN", "THE", "AND", "THIS", "THAT", "YOUR", "WORK", "WITH", "FROM", "INTO", "ONTO"]);
         const matches = String(query || "").toUpperCase().match(/\b[A-Z]{2,10}(?:\.NS)?\b/g) || [];
@@ -604,17 +607,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         } catch (err) {}
       }
 
-      const marketData = {};
-      for (const ticker of tickers) {
-        const data = await getLiveMarketData(ticker);
-        marketData[ticker] = {
-          price: data?.price || data?.currentPrice || null,
-          source: "Yahoo Finance"
-        };
+      let verifiedMarketData = {};
+      if (requiresLivePricing && tickers.size > 0) {
+        for (const ticker of tickers) {
+          const stockData = await executeTool("getStockPrice", { ticker });
+          verifiedMarketData[ticker] = stockData;
+        }
       }
-      const livePricesSnippet = Object.keys(marketData).length
-        ? `Yahoo Finance Live Prices:\n${Object.entries(marketData).map(([ticker, d]) => `${ticker}: ₹${d.price ?? "Unavailable"}`).join('\n')}`
-        : "";
 
       // 5. Final Intent Check (Safety Guard)
       const hasExplicitIntent = /analyze|market|nifty|sensex|stock/i.test(userQuery);
@@ -623,7 +622,28 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       // 6. LLM Call (tiered by subscription)
-      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\n${livePricesSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.\nYou are NOT allowed to invent or estimate stock prices.\nUse ONLY the provided Yahoo Finance live prices.\nIf a live price is unavailable, explicitly say:\n"Live Yahoo Finance price unavailable."\nDo NOT use words like:\n- approximately\n- around\n- estimated\n- assumed`.trim();
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\n${
+        Object.keys(verifiedMarketData).length > 0
+          ? `
+VERIFIED YAHOO FINANCE DATA
+(Use ONLY these values)
+${Object.entries(verifiedMarketData)
+  .map(([ticker, d]) =>
+    `${ticker}:
+Price = ₹${d.price}
+Change = ${d.change}
+Change % = ${d.changePercent}
+Source = ${d.source}`
+  )
+  .join('\n\n')}
+CRITICAL RULES:
+- NEVER invent stock prices
+- NEVER approximate prices
+- NEVER use memory-based prices
+- Use ONLY verified values above
+`
+          : ''
+      }\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.\nDo NOT use words:\n- approximately\n- approx\n- around\n- estimated`.trim();
       let originalResponse = await generateTieredAnalysis(masterPrompt, isPro);
       let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
@@ -633,12 +653,12 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         .join("\n");
       if (requiresLivePricing) {
         response = response.replace(
-          /₹\s?\d+(,\d{3})*(\.\d+)?(\s*per share)?(\s*\(approx\.?\))?/gi,
+          /₹\s?\d+(,\d{3})*(\.\d+)?\s*(approx|approximately|around|estimated)/gi,
           ""
         );
-        response += "\n\n📊 Yahoo Finance Live Prices\n";
-        for (const [ticker, d] of Object.entries(marketData)) {
-          response += `• ${ticker}: ₹${d.price ?? "Unavailable"}\n`;
+        response += "\n\n📊 VERIFIED LIVE PRICES\n";
+        for (const [ticker, d] of Object.entries(verifiedMarketData)) {
+          response += `• ${ticker}: ₹${d.price}\n`;
         }
       }
       
