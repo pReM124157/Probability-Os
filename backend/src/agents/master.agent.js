@@ -485,32 +485,91 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         /(build|create|make).*(portfolio)|portfolio.*₹|₹.*portfolio/i.test(userMessage);
       if (buildPortfolioIntent) {
         console.log("BUILD PORTFOLIO TOOL CALLED");
-        const portfolioData =
-          await executeTool("buildPortfolio", {
-            totalAmount: 20000,
-            allocations: [
-              { ticker: "HDFCBANK", percentage: 40 },
-              { ticker: "INFY", percentage: 30 },
-              { ticker: "TATACONSUM", percentage: 15 },
-              { ticker: "ICICIPRULI", percentage: 15 }
-            ]
+        const amountMatch = userMessage.match(/(?:₹|rs\.?\s?|inr\s?)([\d,]+(?:\.\d+)?)/i) || userMessage.match(/\b([\d,]{4,}(?:\.\d+)?)\b/);
+        const totalAmount = amountMatch ? (Number(String(amountMatch[1]).replace(/,/g, "")) || 20000) : 20000;
+        const chatId = input.chatId || "DEFAULT";
+
+        const currentPortfolio = await getPortfolio(String(chatId));
+        const holdingReviews = [];
+        let currentTotal = 0;
+        const sectorExposure = {};
+
+        for (const h of currentPortfolio) {
+          const live = await executeTool("getStockPrice", { ticker: h.symbol });
+          const livePrice = Number(live?.price || 0);
+          const qty = Number(h.quantity || 0);
+          const avg = Number(h.avgPrice || 0);
+          const invested = qty * avg;
+          const currentValue = livePrice > 0 ? qty * livePrice : invested;
+          currentTotal += currentValue;
+          const pnlPct = invested > 0 ? ((currentValue - invested) / invested) * 100 : 0;
+          const action = pnlPct < -5 ? "REDUCE" : "HOLD";
+          const reason = action === "REDUCE"
+            ? "Weak momentum and capital protection priority."
+            : "Position remains stable within current risk limits.";
+          holdingReviews.push({
+            symbol: h.symbol,
+            qty,
+            avg,
+            livePrice,
+            invested,
+            currentValue,
+            pnlPct,
+            action,
+            reason
           });
+        }
 
-        const verifiedPortfolioPrompt = `
-VERIFIED LIVE PORTFOLIO DATA
-${JSON.stringify(portfolioData, null, 2)}
-Rules:
-- Use ONLY these prices and share counts
-- Do NOT invent numbers
-- Do NOT approximate
-- Explain allocations and risks only
-`.trim();
+        const portfolioData = await executeTool("buildPortfolio", {
+          totalAmount,
+          allocations: [
+            { ticker: "HDFCBANK", percentage: 40 },
+            { ticker: "INFY", percentage: 30 },
+            { ticker: "TATACONSUM", percentage: 15 },
+            { ticker: "ICICIPRULI", percentage: 15 }
+          ]
+        });
 
-        const portfolioPrompt = `${FINSIGHT_PERSONA}\n\n${verifiedPortfolioPrompt}\n\nUser Question: ${userQuery}`.trim();
-        const portfolioOriginalResponse = await generateTieredAnalysis(portfolioPrompt, isPro);
-        let portfolioResponse = isPro ? cleanOutput(portfolioOriginalResponse) : portfolioOriginalResponse;
-        portfolioResponse = validateResponse(portfolioResponse, portfolioOriginalResponse);
-        return { response: portfolioResponse };
+        const positions = Array.isArray(portfolioData?.positions) ? portfolioData.positions : [];
+        let deployed = 0;
+        for (const p of positions) {
+          deployed += Number(p.actual_cost || 0);
+        }
+        const undeployed = Math.max(0, Number(totalAmount) - deployed);
+
+        const currentLines = holdingReviews.length
+          ? holdingReviews.map((h) =>
+              `${h.action === "REDUCE" ? "❌ Reduce" : "⚠️ Hold"} ${h.symbol}\n` +
+              `Reason: ${h.reason}\n` +
+              `Live Price: ₹${h.livePrice || "Unavailable"} | Qty: ${h.qty} | PnL: ${h.pnlPct.toFixed(1)}%`
+            ).join("\n")
+          : "No existing holdings found for this account.";
+
+        const newLines = positions.length
+          ? positions.map((p) =>
+              `${p.ticker}\n` +
+              `Live Price: ₹${p.live_price}\n` +
+              `Shares: ${p.shares}\n` +
+              `Allocation: ₹${Number(p.actual_cost || 0).toFixed(2)}`
+            ).join("\n")
+          : "No deployable positions generated.";
+
+        const finalView = `FINAL PORTFOLIO VIEW
+Current Holdings Count: ${holdingReviews.length}
+New Deployment: ₹${deployed.toFixed(2)} of ₹${Number(totalAmount).toFixed(2)}
+Undeployed Cash: ₹${undeployed.toFixed(2)}
+Risk Level: ${holdingReviews.some((h) => h.action === "REDUCE") ? "Moderate" : "Balanced"}
+Expected Stability: ${holdingReviews.some((h) => h.action === "REDUCE") ? "Improved with selective trims" : "Stable"}`;
+
+        const response = `CURRENT HOLDINGS REVIEW
+${currentLines}
+━━━━━━━━━━━━━━━
+NEW ₹${Number(totalAmount).toFixed(0)} DEPLOYMENT
+${newLines}
+━━━━━━━━━━━━━━━
+${finalView}`;
+
+        return { response };
       }
 
       // 6. Intent Detection: Portfolio Snapshot (PRIORITY 6)
