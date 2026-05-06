@@ -585,6 +585,29 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
           } catch (err) {}
       }
 
+      const isPortfolioConversation = /portfolio|my holdings|holdings|my stocks/i.test(userQuery);
+      const tickers = new Set();
+      if (isLikelyTicker) {
+        tickers.add(tickerMatch[0].split(".")[0].toUpperCase());
+      }
+      if (isPortfolioConversation && input?.chatId) {
+        try {
+          const holdings = await getPortfolio(String(input.chatId));
+          holdings.forEach((h) => {
+            if (h?.symbol) tickers.add(String(h.symbol).split(".")[0].toUpperCase());
+          });
+        } catch (err) {}
+      }
+
+      const livePrices = {};
+      for (const ticker of tickers) {
+        const data = await getLiveMarketData(ticker);
+        livePrices[ticker] = data?.currentPrice || data?.price || null;
+      }
+      const livePricesSnippet = Object.keys(livePrices).length
+        ? `Live prices:\n${Object.entries(livePrices).map(([t, p]) => `${t}: ₹${p ?? 'Unavailable'}`).join('\n')}`
+        : "";
+
       // 5. Final Intent Check (Safety Guard)
       const hasExplicitIntent = /analyze|market|nifty|sensex|stock/i.test(userQuery);
       if (!isLikelyTicker && !hasExplicitIntent) {
@@ -592,7 +615,7 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       }
 
       // 6. LLM Call (tiered by subscription)
-      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.`.trim();
+      const masterPrompt = `${FINSIGHT_PERSONA}\n\n${liveDataSnippet}\n\n${livePricesSnippet}\n\nUser Question: ${userQuery}\n\nINSTRUCTION: ${isPro ? '6-8 lines max. Include entry zones, stop loss, targets if relevant.' : '3 sentences max. General overview only.'} Trader tone. If providing market data, end with a "What matters:" line. Only suggest allocation % and rationale. Do NOT calculate share quantities.\nDo NOT generate or assume stock prices yourself.\nOnly use live API prices provided in the input data.\nIf live prices are unavailable, explicitly say:\n"Live price temporarily unavailable."`.trim();
       let originalResponse = await generateTieredAnalysis(masterPrompt, isPro);
       let response = isPro ? cleanOutput(originalResponse) : originalResponse;
       response = validateResponse(response, originalResponse);
@@ -600,6 +623,13 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
         .split("\n")
         .filter((line) => !/\b\d+\s+shares?\b/i.test(line))
         .join("\n");
+      if (Object.keys(livePrices).length) {
+        response = response.replace(/₹\d+(,\d{3})*(\.\d+)?/g, "");
+        response += "\n\n📊 Live Prices\n";
+        for (const [ticker, price] of Object.entries(livePrices)) {
+          response += `• ${ticker}: ₹${price ?? "Unavailable"}\n`;
+        }
+      }
       
       // Telegram safe limit
       if (response.length > 4000) {
@@ -827,37 +857,86 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
       marketNote = marketNote ? `${marketNote}\n⚠ Limited data source — confidence reduced` : "⚠ Limited data source";
     }
 
-    // PHASE 3.6: Professional Reasoning Construction
-    let professionalReasoning = "";
-    if (!liveMarketData.isMarketOpen) {
-      professionalReasoning += `Market is closed, so this is based on the last available data. Act only after confirmation on open.\n\n`;
+    // PHASE 3.6: Decision-Reason Consistency Synthesis
+    const rsi = Number.isFinite(Number(technical?.rsi)) ? Number(technical.rsi) : "N/A";
+    const sma50 = Number(technical?.sma50 || 0);
+    const currentPrice = Number(technical?.currentPrice || liveMarketData?.currentPrice || 0);
+    const priceVsMA50 = sma50 > 0 && currentPrice > 0
+      ? `${currentPrice >= sma50 ? "ABOVE" : "BELOW"} (${(((currentPrice - sma50) / sma50) * 100).toFixed(2)}%)`
+      : "N/A";
+    const volumeRatio = Number(liveMarketData?.averageVolume) > 0
+      ? (Number(liveMarketData?.volume || 0) / Number(liveMarketData.averageVolume)).toFixed(2)
+      : "N/A";
+    const trend = technical?.trend || "UNKNOWN";
+    const directionalBias =
+      decision.finalDecision === "BUY"
+        ? "bullish"
+        : decision.finalDecision === "SELL"
+        ? "bearish"
+        : "neutral";
+
+    const reasoningPrompt = `
+Write a ${directionalBias} explanation for ${ticker}.
+Decision: ${decision.finalDecision}
+Rules:
+- If decision is SELL:
+  use bearish language only.
+- If decision is BUY:
+  use bullish language only.
+- If decision is HOLD:
+  use neutral/cautious language only.
+Reference actual indicators:
+- RSI: ${rsi}
+- Price vs MA50: ${priceVsMA50}
+- Volume Ratio: ${volumeRatio}
+- Trend: ${trend}
+Do NOT contradict the decision.
+Do NOT use generic templates.
+Each stock must have a UNIQUE explanation.
+Do not reuse wording from previous stocks.
+Use at least 2 ticker-specific metrics.
+`.trim();
+
+    let professionalReasoning = "Mixed technical signals detected. Momentum and structure are not aligned strongly enough for a directional conviction.";
+    try {
+      professionalReasoning = await generateInvestmentAnalysis(reasoningPrompt);
+    } catch (err) {}
+
+    function validateReasonConsistency(decisionValue, reason) {
+      const bullishTerms = [
+        "bullish",
+        "strong relative strength",
+        "above support",
+        "uptrend"
+      ];
+      const bearishTerms = [
+        "bearish",
+        "weakness",
+        "downtrend",
+        "selling pressure"
+      ];
+      const lower = String(reason || "").toLowerCase();
+      const bullish = bullishTerms.some((t) => lower.includes(t));
+      const bearish = bearishTerms.some((t) => lower.includes(t));
+      if (decisionValue === "SELL" && bullish) {
+        return false;
+      }
+      if (decisionValue === "BUY" && bearish) {
+        return false;
+      }
+      return true;
     }
 
-    const roeVal = Number(stockData.ReturnOnEquityTTM || 0) * 100;
-    const marginVal = Number(stockData.ProfitMargin || 0) * 100;
-    const pbVal = Number(stockData.PriceToBookRatio || 0);
-    const deVal = Number(stockData.DebtToEquityRatio || 0);
-
-    const roe = formatMetric(
-      Number.isFinite(roeVal) && roeVal !== 0 ? roeVal : null,
-      (v) => Number(v).toFixed(1) + "%"
-    );
-    const margin = smartFallback("metric", marginVal ? marginVal.toFixed(0) : "");
-    const pb = smartFallback("metric", pbVal ? pbVal.toFixed(2) : "");
-    const de = smartFallback("metric", deVal ? deVal.toFixed(2) : "");
-    const debtNote = interpretDebt(Number.isFinite(deVal) && deVal > 0 ? Number(deVal.toFixed(2)) : null);
-    const debtDisplay = deVal > 0
-      ? `${de}${debtNote ? ` ${debtNote}` : ""}`
-      : "Data unavailable — check manually";
-
-    professionalReasoning += `Fundamentally, the company shows ${roeVal > 20 ? 'strong' : 'moderate'} profitability (ROE: ${roe}) and ${marginVal > 10 ? 'stable' : 'pressured'} margins (~${margin}%). `;
-    professionalReasoning += `However, ${pbVal > 5 ? 'elevated' : 'reasonable'} valuation (PB ~${pb}) and ${deVal > 2 ? 'high' : 'managed'} leverage (Debt/Equity: ${debtDisplay}) introduce structural risk.\n\n`;
-    
-    professionalReasoning += `Technically, price action indicates ${technical.trend === 'BEARISH' ? 'weakness' : 'consolidation'} with ${technical.rsi > 60 ? 'overbought' : 'breakdown'} signals near key levels. `;
-    professionalReasoning += `Combined with fundamental factors, this supports a ${entryTiming.strategy.includes('AVOID') ? 'cautious or trimming' : 'selective'} approach, resulting in a ${decision.finalDecision || 'HOLD'} verdict.\n`;
+    let finalDecisionValue = decision.finalDecision || "HOLD";
+    if (!validateReasonConsistency(finalDecisionValue, professionalReasoning)) {
+      finalDecisionValue = "HOLD";
+      professionalReasoning =
+        "Mixed technical signals detected. Momentum and structure are not aligned strongly enough for a directional conviction.";
+    }
 
     const finalDecision = {
       ...decision,
+      finalDecision: finalDecisionValue,
       finalConfidenceScore: adjustedConfidence,
       reason: professionalReasoning
     };
