@@ -469,6 +469,17 @@ export async function masterAgent(input) {
         return { response };
       }
 
+      // 5. Persona & Helpers (Analyst / Chat Hybrid)
+      const FINSIGHT_PERSONA = `
+- Speak like a sharp trader, not a bot
+- No AI filler (I understand, I believe, Certainly)
+- No long paragraphs; use short, natural sentences
+- Focus on signals and data, not explanations
+- Be conversational but precise
+- Max 4–5 lines
+Tone: A sharp trader texting insights. Professional, fast, non-AI.
+`.trim();
+
       const userMessage = userQuery || "";
       const buildPortfolioIntent =
         /(build|create|make).*(portfolio)|portfolio.*₹|₹.*portfolio/i.test(userMessage);
@@ -502,24 +513,13 @@ Rules:
         return { response: portfolioResponse };
       }
 
-      // 5. Intent Detection: Portfolio Snapshot (PRIORITY 5)
+      // 6. Intent Detection: Portfolio Snapshot (PRIORITY 6)
       const isPortfolio = /analy[sz]e.*portfolio|review.*holdings|portfolio snapshot|my holdings|check.*portfolio/i.test(userQuery);
       if (isPortfolio) {
         const chatId = input.chatId || "DEFAULT";
         const response = await getPortfolioSnapshot(chatId);
         return { response };
       }
-
-      // 6. Persona & Helpers (Analyst / Chat Hybrid)
-      const FINSIGHT_PERSONA = `
-- Speak like a sharp trader, not a bot
-- No AI filler (I understand, I believe, Certainly)
-- No long paragraphs; use short, natural sentences
-- Focus on signals and data, not explanations
-- Be conversational but precise
-- Max 4–5 lines
-Tone: A sharp trader texting insights. Professional, fast, non-AI.
-`.trim();
 
       const ensureWhatMatters = (text) => {
         if (!text.includes("What matters:")) {
