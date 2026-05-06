@@ -284,6 +284,8 @@ async function performAnalysis(chatId, symbol, footer = "") {
 
   const result = await runAnalysisSafe(symbol, async (sym) => {
     const stockData = await getCompanyOverview(sym);
+    console.log("MASTER AGENT CALLED");
+    console.log("MESSAGE:", sym);
     const data = await masterAgent(stockData);
     // ✅ Allow fallback to pass through
     if (!data) {
