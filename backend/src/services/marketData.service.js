@@ -205,6 +205,19 @@ export async function getCompanyOverview(symbol) {
             const tempResult = await retry(() => yahooFinance.quoteSummary(sym, {
                 modules: ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile", "calendarEvents"]
             }), 2, 500);
+            const responseKeys = tempResult ? Object.keys(tempResult) : [];
+            console.log(`[OVERVIEW DEBUG] symbol=${sym} keys=${responseKeys.join(",") || "none"}`);
+            console.log(
+              `[OVERVIEW DEBUG] symbol=${sym} modules=${JSON.stringify({
+                hasPrice: !!tempResult?.price,
+                hasSummaryDetail: !!tempResult?.summaryDetail,
+                hasFinancialData: !!tempResult?.financialData,
+                hasDefaultKeyStatistics: !!tempResult?.defaultKeyStatistics,
+                hasAssetProfile: !!tempResult?.assetProfile,
+                hasCalendarEvents: !!tempResult?.calendarEvents
+              })}`
+            );
+            console.log("OVERVIEW RESPONSE:", safeString(JSON.stringify(tempResult, null, 2)));
             if (tempResult && tempResult.assetProfile) {
                 result = tempResult;
                 fetchSymbol = sym;
@@ -212,6 +225,9 @@ export async function getCompanyOverview(symbol) {
             }
         } catch (e) {
             console.warn(`[RETRY FAIL] Overview fetch failed for ${sym}:`, e.message);
+            if (e?.result) {
+              console.warn("OVERVIEW ERROR RESULT:", safeString(JSON.stringify(e.result, null, 2)));
+            }
         }
     }
 
@@ -246,6 +262,18 @@ export async function getCompanyOverview(symbol) {
     const summary = result.summaryDetail || {};
     const financials = result.financialData || {};
     const stats = result.defaultKeyStatistics || {};
+    console.log(
+      `[OVERVIEW EXTRACT] symbol=${fetchSymbol} values=${JSON.stringify({
+        trailingPE: summary.trailingPE ?? null,
+        returnOnEquity: financials.returnOnEquity ?? null,
+        profitMargins: financials.profitMargins ?? null,
+        debtToEquity: financials.debtToEquity ?? null,
+        revenueGrowth: financials.revenueGrowth ?? null,
+        earningsGrowth: financials.earningsGrowth ?? null,
+        priceToBook: stats.priceToBook ?? null,
+        beta: stats.beta ?? null
+      })}`
+    );
     
     const fundamentals = {
       pe: summary.trailingPE ?? null,
