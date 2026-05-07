@@ -64,6 +64,31 @@ async function withTimeout(promise, ms = 5000) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
+function toPositiveNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+function resolveBestPrice(quote = {}) {
+  const priceCandidates = [
+    ["postMarketPrice", quote?.postMarketPrice],
+    ["preMarketPrice", quote?.preMarketPrice],
+    ["regularMarketPrice", quote?.regularMarketPrice],
+    ["currentPrice", quote?.currentPrice],
+    ["regularMarketPreviousClose", quote?.regularMarketPreviousClose],
+    ["previousClose", quote?.previousClose]
+  ];
+
+  for (const [field, rawValue] of priceCandidates) {
+    const value = toPositiveNumber(rawValue);
+    if (value > 0) {
+      return { field, value };
+    }
+  }
+
+  return { field: null, value: 0 };
+}
+
 function normalizeSymbol(symbol) {
   if (!symbol || typeof symbol !== "string") return "";
   return symbol
@@ -470,16 +495,24 @@ async function alphaFetch(symbol) {
 export async function getLiveMarketData(symbol) {
   const startTime = Date.now();
   const upperSymbol = normalizeSymbol(symbol);
-  
-  // 1. CHECK CACHE (Institutional Guard)
-  const cached = getCached(`LIVE_${upperSymbol}`);
-  if (cached) {
-    const age = Math.floor((Date.now() - cached.timestamp) / 1000);
-    console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
-    return { ...cached, dataAge: age, dataConfidence: "CACHED" };
-  }
 
   try {
+    const marketStatus = await getMarketStatusIST();
+
+    // 1. CHECK CACHE (Institutional Guard)
+    const cached = getCached(`LIVE_${upperSymbol}`);
+    if (cached) {
+      const age = Math.floor((Date.now() - cached.timestamp) / 1000);
+      const shouldBypassCache = marketStatus.isPreMarket || marketStatus.isPostMarket;
+      if (!shouldBypassCache) {
+        console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
+        return { ...cached, dataAge: age, dataConfidence: "CACHED" };
+      }
+      console.log(
+        `[CACHE] bypass symbol=${upperSymbol} age=${age}s reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
+      );
+    }
+
     const symbolsToTry = upperSymbol.includes(".")
         ? [upperSymbol]
         : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
@@ -487,10 +520,9 @@ export async function getLiveMarketData(symbol) {
     let result = null;
     let fetchSymbol = "";
     let priceSource = "FAILED";
+    let priceField = "UNKNOWN";
     let dataConfidence = "LIVE_VERIFIED";
     let completeness = "FULL";
-
-    const marketStatus = await getMarketStatusIST();
 
     // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
     const yahooAvailable = true; // Date.now() >= yahooCooldownUntil; // allow fallback even if tripped
@@ -499,10 +531,12 @@ export async function getLiveMarketData(symbol) {
           try {
               console.log(`[DATA] attempt=yahoo symbol=${sym}`);
               const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), 3500);
-              if (tempResult && (tempResult.regularMarketPrice || tempResult.currentPrice)) {
+              const resolvedYahooPrice = resolveBestPrice(tempResult);
+              if (tempResult && resolvedYahooPrice.value > 0) {
                   result = tempResult;
                   fetchSymbol = sym;
                   priceSource = "YAHOO";
+                  priceField = resolvedYahooPrice.field || "UNKNOWN";
                   reportYahooStatus(true);
                   break;
               }
@@ -532,14 +566,30 @@ export async function getLiveMarketData(symbol) {
     }
 
     const fetchDuration = Date.now() - startTime;
-    let currentPrice = result?.regularMarketPrice || result?.currentPrice || 0;
-    let previousClose = result?.regularMarketPreviousClose || result?.previousClose || 0;
+    const resolvedPrice = resolveBestPrice(result);
+    let currentPrice = resolvedPrice.value;
+    let previousClose = toPositiveNumber(result?.regularMarketPreviousClose) || toPositiveNumber(result?.previousClose) || 0;
     const latencyBlocked = fetchDuration > 2500;
+
+    console.log("PRICE FIELDS:", {
+      symbol: fetchSymbol || upperSymbol,
+      regularMarketPrice: result?.regularMarketPrice,
+      regularMarketPreviousClose: result?.regularMarketPreviousClose,
+      postMarketPrice: result?.postMarketPrice,
+      preMarketPrice: result?.preMarketPrice,
+      currentPrice: result?.currentPrice,
+      previousClose: result?.previousClose,
+      chosenPriceField: resolvedPrice.field,
+      chosenPrice: resolvedPrice.value
+    });
 
     if (!currentPrice && previousClose) {
         currentPrice = previousClose;
-        priceSource = "PREVIOUS_CLOSE";
+        priceField = "regularMarketPreviousClose";
+        if (priceSource === "FAILED") priceSource = "PREVIOUS_CLOSE";
     }
+
+    if (resolvedPrice.field) priceField = resolvedPrice.field;
 
     if (!currentPrice || currentPrice === 0) {
         console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
@@ -566,6 +616,7 @@ export async function getLiveMarketData(symbol) {
         isMarketOpen: marketStatus.isMarketOpen,
         marketStatus,
         priceSource,
+        priceField,
         dataConfidence,
         completeness,
         latencyBlocked,

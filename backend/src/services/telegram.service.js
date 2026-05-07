@@ -164,6 +164,18 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const preMarket = safeObject(result.preMarket);
   const nextSessionPlan = safeObject(result.nextSessionPlan);
   const news = safeObject(result.news);
+  const priceField = safeString(result.priceField || "");
+
+  let marketStatusLabel = "Closed (Last Close Data)";
+  if (priceField === "postMarketPrice") {
+    marketStatusLabel = "Closed (Post-Market Live Data)";
+  } else if (priceField === "preMarketPrice") {
+    marketStatusLabel = "Pre-Market (Live Discovery)";
+  } else if (result.isMarketOpen) {
+    marketStatusLabel = "Open (Live Data)";
+  } else if (priceField === "regularMarketPrice" || priceField === "currentPrice") {
+    marketStatusLabel = "Closed (Latest Regular Session Price)";
+  }
 
   const price = Number(result.currentPrice || entryTiming.currentPrice || 0);
   const priceChange = Number(technical.priceChangePercent || technical.changePercent || 0);
@@ -174,7 +186,7 @@ function formatAnalysis(res, symbol, stockData = {}) {
     confidence: Number(result.confidence || result?.decision?.finalConfidenceScore || 0),
     asset: safeString(symbol || "UNKNOWN"),
     currentPrice: price,
-    marketStatus: result.isMarketOpen ? "Open (Live Data)" : "Closed (Last Close Data)",
+    marketStatus: marketStatusLabel,
     trend: safeString(technical.trend || "Neutral"),
     support: smartFallback("support", technical.supportLevel, { price }),
     resistance: smartFallback("resistance", technical.resistanceLevel, { price }),
