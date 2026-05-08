@@ -1,4 +1,3 @@
-import axios from 'axios';
 import YahooFinance from "yahoo-finance2";
 import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
@@ -24,6 +23,8 @@ let yahooFailureCount = 0;
 let yahooCooldownUntil = 0;
 const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
+const HTTP_PROVIDER_TIMEOUT_MS = 5000;
+const YAHOO_TIMEOUT_MS = 3500;
 
 function getCached(key) {
   const entry = dataCache.get(key);
@@ -64,6 +65,50 @@ async function withTimeout(promise, ms = 5000) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = HTTP_PROVIDER_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}${body ? `: ${safeSubstring(body, 180)}` : ""}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function safeErrorCause(error) {
+  if (!error?.cause) return null;
+  if (typeof error.cause === "string") return error.cause;
+  return {
+    message: error.cause.message || null,
+    code: error.cause.code || null,
+    name: error.cause.name || null
+  };
+}
+
+function logProviderError(provider, context = {}, error) {
+  console.error(`${provider.toUpperCase()} FETCH ERROR`, {
+    ...context,
+    message: error?.message || "Unknown error",
+    name: error?.name || null,
+    code: error?.code || null,
+    stack: error?.stack || null,
+    cause: safeErrorCause(error),
+    responseStatus: error?.response?.status || null,
+    responseData: error?.response?.data ? safeSubstring(JSON.stringify(error.response.data), 300) : null
+  });
+}
+
 function toPositiveNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : 0;
@@ -96,6 +141,125 @@ function normalizeSymbol(symbol) {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, ""); // Remove spaces
+}
+
+function buildSymbolVariants(symbol) {
+  const upperSymbol = normalizeSymbol(symbol);
+  if (!upperSymbol) return [];
+  return upperSymbol.includes(".")
+    ? [upperSymbol]
+    : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
+}
+
+function toBaseTicker(symbol) {
+  return normalizeSymbol(symbol).replace(/\.NS$|\.BO$/i, "");
+}
+
+function toAlphaSymbol(symbol) {
+  return normalizeSymbol(symbol).replace(/\.NS$/i, ".NSE").replace(/\.BO$/i, ".BSE");
+}
+
+function createFallbackOverview(symbol, extra = {}) {
+  const upperSymbol = normalizeSymbol(symbol);
+  return {
+    Symbol: upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`,
+    symbol: upperSymbol,
+    Name: upperSymbol + " (Fallback)",
+    price: 100,
+    change: 0,
+    changePercent: 0,
+    volume: 0,
+    marketCap: 0,
+    peRatio: 0,
+    PERatio: 0,
+    Sector: "Fallback",
+    source: "fallback",
+    status: "FALLBACK_SAFE",
+    ...extra
+  };
+}
+
+function createFallbackLiveData(symbol, extra = {}) {
+  const upperSymbol = normalizeSymbol(symbol);
+  return {
+    symbol: upperSymbol,
+    price: 100,
+    change: 0,
+    changePercent: 0,
+    volume: 0,
+    marketCap: 0,
+    peRatio: 0,
+    source: "fallback",
+    status: "FALLBACK_SAFE",
+    ...extra
+  };
+}
+
+function normalizeAlphaOverviewPayload(payload = {}, symbol) {
+  if (!payload || !payload.Symbol) return null;
+
+  return {
+    Symbol: payload.Symbol,
+    symbol: toBaseTicker(payload.Symbol),
+    Name: payload.Name || payload.Symbol,
+    "P/E Ratio": payload.PERatio || "-",
+    "ROE": payload.ReturnOnEquityTTM || "-",
+    "Profit Margin": payload.ProfitMargin || "-",
+    "Debt/Equity": payload.DebtToEquityRatio || payload.DebtToEquity || "-",
+    "Revenue Growth (YoY)": payload.QuarterlyRevenueGrowthYOY || "-",
+    "Earnings Growth (YoY)": payload.QuarterlyEarningsGrowthYOY || "-",
+    PERatio: payload.PERatio || 0,
+    ReturnOnEquityTTM: payload.ReturnOnEquityTTM || "-",
+    ProfitMargin: payload.ProfitMargin || "-",
+    DebtToEquityRatio: payload.DebtToEquityRatio || payload.DebtToEquity || "-",
+    QuarterlyRevenueGrowthYOY: payload.QuarterlyRevenueGrowthYOY || "-",
+    QuarterlyEarningsGrowthYOY: payload.QuarterlyEarningsGrowthYOY || "-",
+    MarketCapitalization: payload.MarketCapitalization || null,
+    PriceToBookRatio: payload.PriceToBookRatio || null,
+    Beta: payload.Beta || null,
+    Sector: payload.Sector || null,
+    Industry: payload.Industry || null,
+    BusinessSummary: payload.Description || null,
+    EarningsDate: payload.LatestQuarter || null,
+    source: "alpha_vantage",
+    status: "success",
+    originalSymbol: symbol
+  };
+}
+
+function normalizeFinnhubOverviewPayload({ profile = {}, metrics = {} } = {}, symbol) {
+  const name = profile.name || profile.ticker;
+  const sector = profile.finnhubIndustry || null;
+
+  if (!name && !sector && Object.keys(metrics || {}).length === 0) return null;
+
+  return {
+    Symbol: profile.ticker || normalizeSymbol(symbol),
+    symbol: toBaseTicker(profile.ticker || symbol),
+    Name: name || normalizeSymbol(symbol),
+    "P/E Ratio": metrics.peNormalizedAnnual || metrics.peTTM || "-",
+    "ROE": metrics.roeTTM != null ? `${Number(metrics.roeTTM).toFixed(2)}%` : "-",
+    "Profit Margin": metrics.netMarginTTM != null ? `${Number(metrics.netMarginTTM).toFixed(2)}%` : "-",
+    "Debt/Equity": metrics.totalDebtToEquityQuarterly || metrics.totalDebtToEquityAnnual || "-",
+    "Revenue Growth (YoY)": metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || "-",
+    "Earnings Growth (YoY)": metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || "-",
+    PERatio: metrics.peNormalizedAnnual || metrics.peTTM || 0,
+    ReturnOnEquityTTM: metrics.roeTTM != null ? `${Number(metrics.roeTTM).toFixed(2)}%` : "-",
+    ProfitMargin: metrics.netMarginTTM != null ? `${Number(metrics.netMarginTTM).toFixed(2)}%` : "-",
+    DebtToEquityRatio: metrics.totalDebtToEquityQuarterly || metrics.totalDebtToEquityAnnual || "-",
+    QuarterlyRevenueGrowthYOY: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || "-",
+    QuarterlyEarningsGrowthYOY: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || "-",
+    MarketCapitalization: profile.marketCapitalization || null,
+    PriceToBookRatio: metrics.pbAnnual || metrics.pbQuarterly || null,
+    Beta: metrics.beta || null,
+    Sector: sector,
+    Industry: sector,
+    BusinessSummary: null,
+    EarningsDate: null,
+    source: "finnhub",
+    status: "success",
+    originalSymbol: symbol
+  };
 }
 
 export async function checkSymbolExists(symbol) {
@@ -216,10 +380,7 @@ const indianStocks = [
 export async function getCompanyOverview(symbol) {
   try {
     const upperSymbol = normalizeSymbol(symbol);
-
-    const symbolsToTry = upperSymbol.includes(".")
-      ? [upperSymbol]
-      : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
+    const symbolsToTry = buildSymbolVariants(upperSymbol);
 
     let result = null;
     let fetchSymbol = "";
@@ -227,9 +388,9 @@ export async function getCompanyOverview(symbol) {
     for (const sym of symbolsToTry) {
         try {
             console.log(`FETCH ATTEMPT (Overview): ${sym}`);
-            const tempResult = await retry(() => yahooFinance.quoteSummary(sym, {
+            const tempResult = await withTimeout(retry(() => yahooFinance.quoteSummary(sym, {
                 modules: ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile", "calendarEvents"]
-            }), 2, 500);
+            }), 2, 500), YAHOO_TIMEOUT_MS);
             const responseKeys = tempResult ? Object.keys(tempResult) : [];
             console.log(`[OVERVIEW DEBUG] symbol=${sym} keys=${responseKeys.join(",") || "none"}`);
             console.log(
@@ -250,6 +411,7 @@ export async function getCompanyOverview(symbol) {
             }
         } catch (e) {
             console.warn(`[RETRY FAIL] Overview fetch failed for ${sym}:`, e.message);
+            logProviderError("yahoo", { stage: "overview", symbol: sym }, e);
             if (e?.result) {
               console.warn("OVERVIEW ERROR RESULT:", safeString(JSON.stringify(e.result, null, 2)));
             }
@@ -257,22 +419,22 @@ export async function getCompanyOverview(symbol) {
     }
 
     if (!result) {
+        console.warn(`[FALLBACK] Yahoo overview unavailable for ${upperSymbol}. Trying provider chain.`);
+
+        const alphaOverview = await alphaOverviewFetch(upperSymbol);
+        if (alphaOverview) {
+          console.log(`[OVERVIEW] source=alpha symbol=${upperSymbol} status=success`);
+          return alphaOverview;
+        }
+
+        const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
+        if (finnhubOverview) {
+          console.log(`[OVERVIEW] source=finnhub symbol=${upperSymbol} status=success`);
+          return finnhubOverview;
+        }
+
         console.warn(`[FALLBACK] Data unavailable for ${upperSymbol}`);
-        return {
-          Symbol: upperSymbol,
-          symbol: upperSymbol,
-          Name: upperSymbol + " (Fallback)",
-          price: 100,
-          change: 0,
-          changePercent: 0,
-          volume: 0,
-          marketCap: 0,
-          peRatio: 0,
-          PERatio: 0,
-          Sector: "Fallback",
-          source: "fallback",
-          status: "FALLBACK_SAFE"
-        };
+        return createFallbackOverview(upperSymbol);
     }
 
     console.log("FETCH SUCCESS (Overview):", fetchSymbol);
@@ -359,24 +521,18 @@ export async function getCompanyOverview(symbol) {
     console.error(`SYMBOL: ${symbol}`);
     console.error(`ERROR: ${error.message}`);
     console.error(`STACK: ${error.stack}`);
+    logProviderError("yahoo", { stage: "overview-critical", symbol }, error);
     
     // Return at least the symbol to prevent downstream "UNKNOWN" errors
     const upperSymbol = safeString(symbol).toUpperCase().replace(/\s+/g, "");
-    return {
-      Symbol: upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`,
-      symbol: upperSymbol,
-      Name: upperSymbol + " (Fallback)",
-      price: 100,
-      change: 0,
-      changePercent: 0,
-      volume: 0,
-      marketCap: 0,
-      peRatio: 0,
-      PERatio: 0,
-      Sector: "Fallback",
-      source: "fallback",
-      status: "FALLBACK_SAFE"
-    };
+
+    const alphaOverview = await alphaOverviewFetch(upperSymbol);
+    if (alphaOverview) return alphaOverview;
+
+    const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
+    if (finnhubOverview) return finnhubOverview;
+
+    return createFallbackOverview(upperSymbol);
   }
 }
 
@@ -466,30 +622,147 @@ async function retry(fn, retries = 3, initialDelay = 500) {
     }
 }
 
-async function alphaFetch(symbol) {
+async function alphaQuoteFetch(symbol) {
   try {
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
     if (!apiKey) return null;
     
-    const avSymbol = symbol.replace(".NS", ".NSE").replace(".BO", ".BSE");
+    const avSymbol = toAlphaSymbol(symbol);
     const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${avSymbol}&apikey=${apiKey}`;
-    
-    const response = await axios.get(url, { timeout: 3000 });
-    const quote = response.data["Global Quote"];
+
+    const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+    const quote = payload["Global Quote"];
     
     if (!quote || !quote["05. price"]) return null;
     
     return {
       symbol: symbol,
       regularMarketPrice: parseFloat(quote["05. price"]),
-      regularMarketChangePercent: parseFloat(quote["10. change percent"].replace("%", "")),
+      regularMarketChangePercent: parseFloat(String(quote["10. change percent"] || "0").replace("%", "")),
       regularMarketPreviousClose: parseFloat(quote["08. previous close"]),
       source: "FALLBACK"
     };
   } catch (err) {
-    console.warn(`[FALLBACK FAIL] ${symbol}: ${err.message}`);
+    logProviderError("alpha", { stage: "quote", symbol }, err);
     return null;
   }
+}
+
+async function alphaOverviewFetch(symbol) {
+  try {
+    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) return null;
+
+    const baseSymbol = toBaseTicker(symbol);
+    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${baseSymbol}&apikey=${apiKey}`;
+    const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+    if (!payload || !payload.Symbol) return null;
+    return normalizeAlphaOverviewPayload(payload, symbol);
+  } catch (err) {
+    logProviderError("alpha", { stage: "overview", symbol }, err);
+    return null;
+  }
+}
+
+async function twelveDataQuoteFetch(symbol) {
+  try {
+    const apiKey = process.env.TWELVEDATA_API_KEY;
+    if (!apiKey) return null;
+
+    const baseSymbol = toBaseTicker(symbol);
+    const attempts = [
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(baseSymbol)}&exchange=NSE&interval=1day&apikey=${apiKey}`,
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(baseSymbol)}&exchange=BSE&interval=1day&apikey=${apiKey}`,
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(baseSymbol)}&interval=1day&apikey=${apiKey}`
+    ];
+
+    for (const url of attempts) {
+      try {
+        const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+        if (payload?.status === "error") continue;
+        const close = Number(payload?.close);
+        if (Number.isFinite(close) && close > 0) {
+          return {
+            symbol,
+            regularMarketPrice: close,
+            regularMarketChangePercent: Number(payload?.percent_change || 0),
+            regularMarketChange: Number(payload?.change || 0),
+            regularMarketPreviousClose: Number(payload?.previous_close || 0),
+            source: "FALLBACK"
+          };
+        }
+      } catch (err) {
+        logProviderError("twelvedata", { stage: "quote-attempt", symbol, url }, err);
+      }
+    }
+  } catch (err) {
+    logProviderError("twelvedata", { stage: "quote", symbol }, err);
+  }
+  return null;
+}
+
+async function finnhubQuoteFetch(symbol) {
+  try {
+    const apiKey = process.env.FINNHUB_API_KEY;
+    if (!apiKey) return null;
+
+    const baseSymbol = toBaseTicker(symbol);
+    const attempts = [`NSE:${baseSymbol}`, `BSE:${baseSymbol}`, baseSymbol];
+
+    for (const candidate of attempts) {
+      try {
+        const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`;
+        const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+        const price = Number(payload?.c || 0);
+        if (Number.isFinite(price) && price > 0) {
+          return {
+            symbol: candidate,
+            regularMarketPrice: price,
+            regularMarketChangePercent: Number(payload?.dp || 0),
+            regularMarketChange: Number(payload?.d || 0),
+            regularMarketPreviousClose: Number(payload?.pc || 0),
+            source: "FALLBACK"
+          };
+        }
+      } catch (err) {
+        logProviderError("finnhub", { stage: "quote-attempt", symbol: candidate }, err);
+      }
+    }
+  } catch (err) {
+    logProviderError("finnhub", { stage: "quote", symbol }, err);
+  }
+  return null;
+}
+
+async function finnhubOverviewFetch(symbol) {
+  try {
+    const apiKey = process.env.FINNHUB_API_KEY;
+    if (!apiKey) return null;
+
+    const baseSymbol = toBaseTicker(symbol);
+    const attempts = [`NSE:${baseSymbol}`, `BSE:${baseSymbol}`, baseSymbol];
+
+    for (const candidate of attempts) {
+      try {
+        const [profile, basics] = await Promise.all([
+          fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS),
+          fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(candidate)}&metric=all&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS)
+        ]);
+
+        const normalized = normalizeFinnhubOverviewPayload({
+          profile,
+          metrics: basics?.metric || {}
+        }, candidate);
+
+        if (normalized) return normalized;
+      } catch (err) {
+        logProviderError("finnhub", { stage: "overview-attempt", symbol: candidate }, err);
+      }
+    }
+  } catch (err) {
+    logProviderError("finnhub", { stage: "overview", symbol }, err);
+  }
+  return null;
 }
 
 export async function getLiveMarketData(symbol) {
@@ -513,9 +786,7 @@ export async function getLiveMarketData(symbol) {
       );
     }
 
-    const symbolsToTry = upperSymbol.includes(".")
-        ? [upperSymbol]
-        : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
+    const symbolsToTry = buildSymbolVariants(upperSymbol);
 
     let result = null;
     let fetchSymbol = "";
@@ -525,12 +796,12 @@ export async function getLiveMarketData(symbol) {
     let completeness = "FULL";
 
     // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
-    const yahooAvailable = true; // Date.now() >= yahooCooldownUntil; // allow fallback even if tripped
+    const yahooAvailable = Date.now() >= yahooCooldownUntil;
     if (yahooAvailable) {
       for (const sym of symbolsToTry) {
           try {
               console.log(`[DATA] attempt=yahoo symbol=${sym}`);
-              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), 3500);
+              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), YAHOO_TIMEOUT_MS);
               const resolvedYahooPrice = resolveBestPrice(tempResult);
               if (tempResult && resolvedYahooPrice.value > 0) {
                   result = tempResult;
@@ -542,6 +813,7 @@ export async function getLiveMarketData(symbol) {
               }
           } catch (e) {
               console.warn(`[DATA] source=yahoo symbol=${sym} status=fail error="${e.message}"`);
+              logProviderError("yahoo", { stage: "quote", symbol: sym }, e);
           }
           await new Promise(r => setTimeout(r, 300));
       }
@@ -551,10 +823,10 @@ export async function getLiveMarketData(symbol) {
 
     if (!result) reportYahooStatus(false);
 
-    // 3. FALLBACK FETCH (Alpha Vantage)
+    // 3. FALLBACK FETCH (Alpha Vantage -> Twelve Data -> Finnhub)
     if (!result) {
       console.log(`[DATA] attempt=alpha symbol=${upperSymbol}`);
-      result = await alphaFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
+      result = await alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
       if (result) {
         priceSource = "ALPHA_VANTAGE";
         dataConfidence = "DEGRADED_SOURCE";
@@ -562,6 +834,30 @@ export async function getLiveMarketData(symbol) {
         fetchSymbol = result.symbol;
         dataMetrics.alphaSuccess++;
         console.log(`[DATA] source=alpha symbol=${upperSymbol} status=fallback`);
+      }
+    }
+
+    if (!result) {
+      console.log(`[DATA] attempt=twelvedata symbol=${upperSymbol}`);
+      result = await twelveDataQuoteFetch(upperSymbol);
+      if (result) {
+        priceSource = "TWELVEDATA";
+        dataConfidence = "DEGRADED_SOURCE";
+        completeness = "PARTIAL";
+        fetchSymbol = result.symbol;
+        console.log(`[DATA] source=twelvedata symbol=${upperSymbol} status=fallback`);
+      }
+    }
+
+    if (!result) {
+      console.log(`[DATA] attempt=finnhub symbol=${upperSymbol}`);
+      result = await finnhubQuoteFetch(upperSymbol);
+      if (result) {
+        priceSource = "FINNHUB";
+        dataConfidence = "DEGRADED_SOURCE";
+        completeness = "PARTIAL";
+        fetchSymbol = result.symbol;
+        console.log(`[DATA] source=finnhub symbol=${upperSymbol} status=fallback`);
       }
     }
 
@@ -593,17 +889,7 @@ export async function getLiveMarketData(symbol) {
 
     if (!currentPrice || currentPrice === 0) {
         console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
-        return {
-          symbol: upperSymbol,
-          price: 100,
-          change: 0,
-          changePercent: 0,
-          volume: 0,
-          marketCap: 0,
-          peRatio: 0,
-          source: "fallback",
-          status: "FALLBACK_SAFE"
-        };
+        return createFallbackLiveData(upperSymbol);
     }
 
     const finalData = {
@@ -634,17 +920,8 @@ export async function getLiveMarketData(symbol) {
 
   } catch (error) {
     console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
-    return {
-      symbol: upperSymbol,
-      price: 100,
-      change: 0,
-      changePercent: 0,
-      volume: 0,
-      marketCap: 0,
-      peRatio: 0,
-      source: "fallback",
-      status: "FALLBACK_SAFE"
-    };
+    logProviderError("market-data", { stage: "critical", symbol }, error);
+    return createFallbackLiveData(upperSymbol);
   }
 }
 
