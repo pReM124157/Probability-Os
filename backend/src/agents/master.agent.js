@@ -363,6 +363,24 @@ function buildDeterministicDecisionReason({
   return `${ticker} has RSI at ${rsi.toFixed(0)} and is ${priceVsMA50 >= 0 ? "trading above" : "trading below"} the 50DMA by ${Math.abs(priceVsMA50).toFixed(1)}%. Volume is ${volumeRatio.toFixed(2)}x average, relative strength is ${safeString(relStrength?.status || "neutral vs index").toLowerCase()}, and sector bias is ${sectorBias.toLowerCase().replace(/_/g, " ")}. ${valuationText}; ROE is ${roe.toFixed(1)}% and revenue growth is ${revenueGrowth.toFixed(1)}%. ${directionText} Weighted conviction is ${weightedConfidence.toFixed(1)}/10.`;
 }
 
+function buildVerifiedAnalysisFailure(ticker, details = {}) {
+  return {
+    status: "VERIFIED_ANALYSIS_UNAVAILABLE",
+    error: true,
+    blockExecution: true,
+    ticker,
+    invalidFields: details.invalidFields || [],
+    message:
+      `⚠ Unable to generate verified institutional analysis for ${ticker} right now.\n` +
+      `Core market or financial data could not be validated.\n` +
+      `Possible causes:\n` +
+      `• Yahoo Finance temporary issue\n` +
+      `• API timeout\n` +
+      `• Exchange data delay\n` +
+      `Please retry in a few moments.`
+  };
+}
+
 /**
  * Generates a fresh market update with full intelligence pipeline.
  */
@@ -619,8 +637,9 @@ What matters: ${whatMatters}
   }
 }
 
-export async function masterAgent(input) {
+export async function masterAgent(input, options = {}) {
   try {
+    const strictValidation = options?.strictValidation === true;
     // Check if it's a conversation mode request
     if (input && input.mode === "conversation") {
       const { userQuery, isPro = false } = input;
@@ -1090,6 +1109,36 @@ CRITICAL RULES:
     // PHASE 1: Data Fetch & Integrity Guard
     console.log(`[Phase 1] Fetching live market data for ${ticker}...`);
     const liveMarketData = await getLiveMarketData(ticker);
+
+    const invalidFields = [];
+    const livePrice = Number(liveMarketData?.currentPrice || liveMarketData?.price || 0);
+    const peRatio = Number.parseFloat(String(stockData?.PERatio ?? "").replace(/[^0-9.-]/g, ""));
+    const roeValue = Number.parseFloat(String(stockData?.ReturnOnEquityTTM ?? "").replace(/[^0-9.-]/g, ""));
+    const sectorName = safeString(stockData?.Sector || "");
+
+    if (
+      !liveMarketData ||
+      !livePrice ||
+      livePrice === 100 ||
+      liveMarketData?.source === "fallback" ||
+      liveMarketData?.status === "FALLBACK_SAFE"
+    ) {
+      invalidFields.push("price");
+    }
+    if (!Number.isFinite(peRatio) || peRatio <= 0) {
+      invalidFields.push("peRatio");
+    }
+    if (!Number.isFinite(roeValue)) {
+      invalidFields.push("roe");
+    }
+    if (!sectorName || sectorName.toLowerCase() === "fallback") {
+      invalidFields.push("sector");
+    }
+
+    if (strictValidation && invalidFields.length > 0) {
+      console.warn(`[STRICT VALIDATION] ${ticker}: blocking verified report due to ${invalidFields.join(", ")}`);
+      return buildVerifiedAnalysisFailure(ticker, { invalidFields });
+    }
 
     // FINAL GLOBAL GUARD: Data Integrity Check
     if (

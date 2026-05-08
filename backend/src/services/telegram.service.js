@@ -151,8 +151,25 @@ function smartFallback(label, data, context = {}) {
   }
 }
 
+function isVerifiedAnalysisUnavailable(result) {
+  return safeString(result?.status) === "VERIFIED_ANALYSIS_UNAVAILABLE" || result?.blockExecution === true;
+}
+
+function clampPublicConfidence(value, floor = 3) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return floor;
+  return Math.max(Math.round(numeric), floor);
+}
+
 function formatAnalysis(res, symbol, stockData = {}) {
   const result = safeObject(res);
+  if (isVerifiedAnalysisUnavailable(result)) {
+    return safeString(
+      result.message ||
+      `⚠ Unable to generate verified institutional analysis for ${symbol} right now.\nCore market or financial data could not be validated.\nPlease retry in a few moments.`
+    );
+  }
+
   const entryTiming = safeObject(result.entryTiming);
   const technical = safeObject(result.technical);
   const valuation = safeObject(result.valuation);
@@ -182,8 +199,8 @@ function formatAnalysis(res, symbol, stockData = {}) {
 
   const normalized = {
     verdict: safeString(result.direction || result.action || result?.decision?.finalDecision || "HOLD"),
-    rating: Number(result?.decision?.finalConfidenceScore || result.confidence || 5),
-    confidence: Number(result.confidence || result?.decision?.finalConfidenceScore || 0),
+    rating: clampPublicConfidence(result?.decision?.finalConfidenceScore || result.confidence || 5),
+    confidence: clampPublicConfidence(result.confidence || result?.decision?.finalConfidenceScore || 0),
     asset: safeString(symbol || "UNKNOWN"),
     currentPrice: price,
     marketStatus: marketStatusLabel,
@@ -298,14 +315,11 @@ async function performAnalysis(chatId, symbol, footer = "") {
     const stockData = await getCompanyOverview(sym);
     console.log("MASTER AGENT CALLED");
     console.log("MESSAGE:", sym);
-    const data = await masterAgent(stockData);
-    // ✅ Allow fallback to pass through
+    const data = await masterAgent(stockData, { strictValidation: true });
     if (!data) {
       console.log("[GLOBAL GUARD] No data at all for", sym);
       throw new Error("DATA_UNAVAILABLE");
     }
-    // ❌ REMOVE blocking on DATA_UNAVAILABLE
-    // Fallback data should continue to analysis
     return formatAnalysis(data, sym, stockData);
   });
 
@@ -626,10 +640,11 @@ bot.on("text", async (ctx) => {
       try {
         const stockData = await getCompanyOverview(ticker);
         const result = await masterAgent(stockData);
+        const quickConfidence = clampPublicConfidence(result.decision?.finalConfidenceScore || 0);
         const msg =
           `⚡ *QUICK VERDICT — ${ticker}*\n\n` +
           `📊 Verdict: ${result.decision?.finalDecision || "HOLD"}\n` +
-          `🎯 Confidence: ${result.decision?.finalConfidenceScore || 0}/10\n` +
+          `🎯 Confidence: ${quickConfidence}/10\n` +
           `⚠ Risk Level: ${result.risk?.riskLevel || "MEDIUM"}\n\n` +
           `📝 Summary:\n${result.decision?.reason || "No summary available"}`;
         await send(msg, { parse_mode: "Markdown" });
@@ -650,8 +665,8 @@ bot.on("text", async (ctx) => {
       try {
         const [s1, s2] = await Promise.all([getCompanyOverview(t1), getCompanyOverview(t2)]);
         const [r1, r2] = await Promise.all([masterAgent(s1), masterAgent(s2)]);
-        const sc1 = r1.decision?.finalConfidenceScore || 0;
-        const sc2 = r2.decision?.finalConfidenceScore || 0;
+        const sc1 = clampPublicConfidence(r1.decision?.finalConfidenceScore || 0);
+        const sc2 = clampPublicConfidence(r2.decision?.finalConfidenceScore || 0);
         const winner = sc1 >= sc2 ? t1 : t2;
         const msg =
           `⚖ *STOCK COMPARISON*\n\n` +

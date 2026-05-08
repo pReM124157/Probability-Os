@@ -5,14 +5,16 @@ import axios from 'axios';
 
 interface AnalysisData {
   stock: string;
+  unavailable?: boolean;
+  message?: string;
   decision: {
     finalAction: string;
-    confidenceScore: number;
+    confidenceScore: number | null;
     reasoning: string;
   };
   risk: {
     riskLevel: string;
-    riskScore: number;
+    riskScore: number | null;
     majorRisks: any;
   };
   learning: {
@@ -30,7 +32,7 @@ interface AnalysisData {
     stockFundamentals: string;
   };
   portfolio: {
-    healthScore: number;
+    healthScore: number | null;
     dominantSector: string;
   }
 }
@@ -70,7 +72,7 @@ export default function Home() {
       },
       {
         title: 'Risk Agent',
-        content: `Risk Level: ${analysis.risk?.riskLevel || 'N/A'}\nScore: ${analysis.risk?.riskScore || 0}/10\nDetails: ${typeof analysis.risk?.majorRisks === 'string' ? analysis.risk.majorRisks : JSON.stringify(analysis.risk?.majorRisks)}`,
+        content: `Risk Level: ${analysis.risk?.riskLevel || 'N/A'}\nScore: ${analysis.risk?.riskScore ?? 'N/A'}${analysis.risk?.riskScore != null ? '/10' : ''}\nDetails: ${typeof analysis.risk?.majorRisks === 'string' ? analysis.risk.majorRisks : JSON.stringify(analysis.risk?.majorRisks)}`,
       },
       {
         title: 'Learning Agent',
@@ -82,7 +84,7 @@ export default function Home() {
       },
       {
         title: 'Portfolio Agent',
-        content: `Health: ${analysis.portfolio?.healthScore || 0}/10\nSector: ${analysis.portfolio?.dominantSector || 'N/A'}`,
+        content: `Health: ${analysis.portfolio?.healthScore ?? 'N/A'}${analysis.portfolio?.healthScore != null ? '/10' : ''}\nSector: ${analysis.portfolio?.dominantSector || 'N/A'}`,
       },
     ]
     : [];
@@ -144,90 +146,103 @@ export default function Home() {
       {/* Analysis Results */}
       {analysis && !loading && (
         <>
-          <div className="card mb-10 text-center">
-            <h2 className="text-sm uppercase tracking-widest opacity-60 mb-2">
-              Final Investment Verdict
-            </h2>
-
-            <div className={`text-5xl font-black p-8 rounded-3xl mb-8 inline-block ${
-              (analysis.decision?.finalAction || '').includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
-              (analysis.decision?.finalAction || '').includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
-            }`}>
-              {analysis.decision?.finalAction || 'N/A'}
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
-              <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
-                <p className="text-xs uppercase opacity-60 mb-1">Confidence Score</p>
-                <p className="text-2xl font-bold">{analysis.decision?.confidenceScore || 0}/10</p>
-              </div>
-              <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
-                <p className="text-xs uppercase opacity-60 mb-1">Risk Level</p>
-                <p className="text-2xl font-bold">{analysis.risk.riskLevel}</p>
-              </div>
-              <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
-                <p className="text-xs uppercase opacity-60 mb-1">Learning Boost</p>
-                <p className="text-2xl font-bold">+{analysis.learning?.confidenceBoost || 0}</p>
-              </div>
-              <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
-                <p className="text-xs uppercase opacity-60 mb-1">Performance Score</p>
-                <p className="text-2xl font-bold">+{analysis.performance.performanceScore}</p>
-              </div>
-            </div>
-
-            <div className="mt-10 p-6 bg-white/5 rounded-2xl border border-white/10 text-left">
-              <p className="text-lg opacity-90 leading-relaxed">
-                <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision?.reasoning || 'No reasoning provided.'}
+          {analysis.unavailable ? (
+            <div className="card mb-10 border border-yellow-500/30 bg-yellow-500/10">
+              <h2 className="text-sm uppercase tracking-widest text-yellow-300 mb-3">
+                Verified Analysis Unavailable
+              </h2>
+              <p className="whitespace-pre-wrap text-lg leading-relaxed text-yellow-50">
+                {analysis.message || analysis.decision?.reasoning || 'Verified institutional analysis is temporarily unavailable.'}
               </p>
-              <div className="mt-6 flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-                <span className="text-blue-400 font-bold">Recommended Action:</span>
-                <span className="text-white font-medium italic">
-                  {analysis.decision?.finalAction === "STRONG BUY"
-                    ? "Accumulate aggressively"
-                    : analysis.decision?.finalAction === "BUY"
-                      ? "Accumulate gradually"
-                      : analysis.decision?.finalAction === "SELL"
-                        ? "Reduce exposure"
-                        : "Monitor closely"}
-                </span>
-              </div>
             </div>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
-            {agentCards.map((agent, index) => (
-              <div key={index} className="card hover:border-white/30 transition-all cursor-default">
-                <h2 className="text-xl font-semibold mb-4 border-b border-white/10 pb-2">
-                  {agent.title}
+          ) : (
+            <>
+              <div className="card mb-10 text-center">
+                <h2 className="text-sm uppercase tracking-widest opacity-60 mb-2">
+                  Final Investment Verdict
                 </h2>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed opacity-80">{agent.content}</p>
-              </div>
-            ))}
-          </div>
 
-          <div className="card">
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-              <span className="p-2 bg-blue-500 rounded-lg text-xs">AI</span>
-              Comprehensive Analysis Report
-            </h2>
+                <div className={`text-5xl font-black p-8 rounded-3xl mb-8 inline-block ${
+                  (analysis.decision?.finalAction || '').includes('BUY') ? 'bg-green-900/30 text-green-400 border border-green-500/30' : 
+                  (analysis.decision?.finalAction || '').includes('SELL') ? 'bg-red-900/30 text-red-400 border border-red-500/30' : 'bg-gray-800 text-gray-300 border border-gray-700'
+                }`}>
+                  {analysis.decision?.finalAction || 'N/A'}
+                </div>
 
-            <div className="space-y-6">
-              <div className="flex items-center gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
-                <span className="text-sm opacity-60">Company:</span>
-                <span className="text-xl font-bold text-white">{analysis.stock}</span>
-                <span className="ml-auto px-3 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded-full border border-green-500/30">LATEST REPORT</span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
+                  <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                    <p className="text-xs uppercase opacity-60 mb-1">Confidence Score</p>
+                    <p className="text-2xl font-bold">{analysis.decision?.confidenceScore ?? 'N/A'}{analysis.decision?.confidenceScore != null ? '/10' : ''}</p>
+                  </div>
+                  <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                    <p className="text-xs uppercase opacity-60 mb-1">Risk Level</p>
+                    <p className="text-2xl font-bold">{analysis.risk.riskLevel}</p>
+                  </div>
+                  <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                    <p className="text-xs uppercase opacity-60 mb-1">Learning Boost</p>
+                    <p className="text-2xl font-bold">+{analysis.learning?.confidenceBoost || 0}</p>
+                  </div>
+                  <div className="p-5 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                    <p className="text-xs uppercase opacity-60 mb-1">Performance Score</p>
+                    <p className="text-2xl font-bold">+{analysis.performance.performanceScore}</p>
+                  </div>
+                </div>
+
+                <div className="mt-10 p-6 bg-white/5 rounded-2xl border border-white/10 text-left">
+                  <p className="text-lg opacity-90 leading-relaxed">
+                    <span className="font-bold text-white">AI Reasoning:</span> {analysis.decision?.reasoning || 'No reasoning provided.'}
+                  </p>
+                  <div className="mt-6 flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                    <span className="text-blue-400 font-bold">Recommended Action:</span>
+                    <span className="text-white font-medium italic">
+                      {analysis.decision?.finalAction === "STRONG BUY"
+                        ? "Accumulate aggressively"
+                        : analysis.decision?.finalAction === "BUY"
+                          ? "Accumulate gradually"
+                          : analysis.decision?.finalAction === "SELL"
+                            ? "Reduce exposure"
+                            : "Monitor closely"}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <div className="whitespace-pre-wrap leading-relaxed text-gray-300 bg-black/20 p-6 rounded-2xl border border-white/5">
-                {analysis.analysis?.stockFundamentals || "Detailed analysis content provided by agents above."}
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
+                {agentCards.map((agent, index) => (
+                  <div key={index} className="card hover:border-white/30 transition-all cursor-default">
+                    <h2 className="text-xl font-semibold mb-4 border-b border-white/10 pb-2">
+                      {agent.title}
+                    </h2>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed opacity-80">{agent.content}</p>
+                  </div>
+                ))}
               </div>
 
-              <div className="p-6 bg-yellow-500/5 border border-yellow-500/10 rounded-2xl">
-                <h3 className="text-yellow-500 font-bold mb-2">🔄 Rebalancing Advice</h3>
-                <p className="opacity-80 italic">{analysis.rebalancing?.rebalancingAdvice || "No rebalancing needed at this time."}</p>
+              <div className="card">
+                <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
+                  <span className="p-2 bg-blue-500 rounded-lg text-xs">AI</span>
+                  Comprehensive Analysis Report
+                </h2>
+
+                <div className="space-y-6">
+                  <div className="flex items-center gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
+                    <span className="text-sm opacity-60">Company:</span>
+                    <span className="text-xl font-bold text-white">{analysis.stock}</span>
+                    <span className="ml-auto px-3 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded-full border border-green-500/30">LATEST REPORT</span>
+                  </div>
+
+                  <div className="whitespace-pre-wrap leading-relaxed text-gray-300 bg-black/20 p-6 rounded-2xl border border-white/5">
+                    {analysis.analysis?.stockFundamentals || "Detailed analysis content provided by agents above."}
+                  </div>
+
+                  <div className="p-6 bg-yellow-500/5 border border-yellow-500/10 rounded-2xl">
+                    <h3 className="text-yellow-500 font-bold mb-2">🔄 Rebalancing Advice</h3>
+                    <p className="opacity-80 italic">{analysis.rebalancing?.rebalancingAdvice || "No rebalancing needed at this time."}</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </>
+          )}
         </>
       )}
     </main>

@@ -107,7 +107,43 @@ app.post("/api/analyze", async (req, res) => {
       });
     }
     const companyData = await getCompanyOverview(symbol);
-    const multiAgentAnalysis = await masterAgent(companyData);
+    const multiAgentAnalysis = await masterAgent(companyData, { strictValidation: true });
+    if (multiAgentAnalysis?.status === "VERIFIED_ANALYSIS_UNAVAILABLE") {
+      return res.json({
+        success: true,
+        stock: symbol,
+        unavailable: true,
+        message: multiAgentAnalysis.message,
+        decision: {
+          finalAction: "UNAVAILABLE",
+          confidenceScore: null,
+          reasoning: multiAgentAnalysis.message
+        },
+        risk: {
+          riskLevel: "N/A",
+          riskScore: null,
+          majorRisks: []
+        },
+        learning: {
+          confidenceBoost: 0,
+          learningInsight: "Analysis blocked until verified market and fundamental data is available."
+        },
+        performance: {
+          performanceScore: 0,
+          performanceInsight: "No performance validation because verified analysis was not generated."
+        },
+        rebalancing: {
+          rebalancingAdvice: "Retry after market and company data sources recover."
+        },
+        portfolio: {
+          healthScore: null,
+          dominantSector: "N/A"
+        },
+        analysis: {
+          stockFundamentals: multiAgentAnalysis.message
+        }
+      });
+    }
     return res.json({
       success: true,
       stock: symbol,
