@@ -81,7 +81,7 @@ export const generateTieredAnalysis = async (userPrompt, isPro) => {
     } catch (err2) {
       return isPro
         ? handleFinalFallback(userPrompt)
-        : "Market data is currently being processed.\n\n💎 For full analysis with entry zones, targets & stop loss → /subscribe (₹299/month)";
+        : "Market data is currently being processed.\n\n💎 For full analysis with entry zones, targets & stop loss → /subscribe (₹599/month)";
     }
   }
 };

@@ -9,7 +9,7 @@ const razorpay = new Razorpay({
 export async function createPaymentLink(chatId) {
   try {
     const link = await razorpay.paymentLink.create({
-      amount: 29900, // ₹299
+      amount: 59900, // ₹599
       currency: "INR",
       description: "FinSight Pro",
       customer: {

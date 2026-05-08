@@ -421,7 +421,7 @@ bot.command('status', async (ctx) => {
     return ctx.reply(
       `🆓 *Free Plan*\n\n` +
       `You don't have an active Pro subscription.\n\n` +
-      `👉 Type /subscribe to unlock FinSight Pro for ₹299/month.`,
+      `👉 Type /subscribe to unlock FinSight Pro for ₹599/month.`,
       { parse_mode: 'Markdown' }
     );
   }
