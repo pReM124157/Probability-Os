@@ -11,7 +11,7 @@ export async function technicalAgent(symbol) {
 
     const period2 = new Date();
     const period1 = new Date();
-    period1.setDate(period2.getDate() - 100);
+    period1.setDate(period2.getDate() - 320);
 
     const queryOptions = {
       period1: period1.toISOString().split('T')[0],
@@ -53,7 +53,13 @@ export async function technicalAgent(symbol) {
       };
     }
 
-    const prices = history.map(h => h.close).filter(p => p != null);
+    const candles = history.filter(
+      (h) =>
+        h?.close != null &&
+        h?.high != null &&
+        h?.low != null
+    );
+    const prices = candles.map((h) => h.close).filter((p) => p != null);
     const latestPrice = prices[prices.length - 1];
     
     if (!latestPrice || latestPrice === 0) {
@@ -67,6 +73,9 @@ export async function technicalAgent(symbol) {
     const sma50 = prices.length >= 50 
       ? prices.slice(-50).reduce((a, b) => a + b, 0) / 50 
       : sma20;
+    const sma200 = prices.length >= 200
+      ? prices.slice(-200).reduce((a, b) => a + b, 0) / 200
+      : sma50;
 
     // RSI Calculation (14 periods)
     let gains = 0;
@@ -80,6 +89,42 @@ export async function technicalAgent(symbol) {
     const avgLoss = losses / 14;
     const rs = avgGain / (avgLoss || 1);
     const rsi = 100 - (100 / (1 + rs));
+
+    // ATR and structure levels
+    let atr = 0;
+    if (candles.length >= 15) {
+      const trs = [];
+      for (let i = 1; i < candles.length; i++) {
+        const current = candles[i];
+        const previousClose = candles[i - 1].close;
+        const trueRange = Math.max(
+          current.high - current.low,
+          Math.abs(current.high - previousClose),
+          Math.abs(current.low - previousClose)
+        );
+        trs.push(trueRange);
+      }
+      const atrWindow = trs.slice(-14);
+      atr =
+        atrWindow.reduce((sum, value) => sum + value, 0) /
+        Math.max(atrWindow.length, 1);
+    }
+
+    const recentWindow = candles.slice(-20);
+    const support =
+      recentWindow.length > 0
+        ? Math.min(...recentWindow.map((candle) => candle.low))
+        : latestPrice * 0.97;
+    const resistance =
+      recentWindow.length > 0
+        ? Math.max(...recentWindow.map((candle) => candle.high))
+        : latestPrice * 1.03;
+
+    const recentVolume = Number(candles[candles.length - 1]?.volume || 0);
+    const avgVolume20 =
+      recentWindow.reduce((sum, candle) => sum + Number(candle.volume || 0), 0) /
+      Math.max(recentWindow.length, 1);
+    const volumeRatio = avgVolume20 > 0 ? recentVolume / avgVolume20 : 1;
 
     // Momentum Scoring (1-10)
     let score = 5;
@@ -95,6 +140,8 @@ export async function technicalAgent(symbol) {
     
     // Trend strength
     if (sma20 > sma50) score += 1; // Golden cross or bullish alignment
+    if (latestPrice > sma200) score += 1;
+    if (volumeRatio > 1.5) score += 1;
 
     score = Math.min(Math.max(score, 1), 10);
 
@@ -103,9 +150,19 @@ export async function technicalAgent(symbol) {
       rsi: Math.round(rsi),
       sma20: Number(sma20.toFixed(2)),
       sma50: Number(sma50.toFixed(2)),
+      sma200: Number(sma200.toFixed(2)),
+      atr: Number(atr.toFixed(2)),
+      support: Number(support.toFixed(2)),
+      resistance: Number(resistance.toFixed(2)),
+      recentVolume,
+      averageVolume20: Math.round(avgVolume20),
+      volumeRatio: Number(volumeRatio.toFixed(2)),
       currentPrice,
       trend: latestPrice > sma20 ? "BULLISH" : "BEARISH",
-      momentumStrength: score >= 8 ? "STRONG" : score >= 6 ? "MODERATE" : "WEAK"
+      momentumStrength: score >= 8 ? "STRONG" : score >= 6 ? "MODERATE" : "WEAK",
+      volatility: atr > latestPrice * 0.03 ? "HIGH" : atr > latestPrice * 0.015 ? "MEDIUM" : "LOW",
+      priceAboveMA200: latestPrice > sma200,
+      isVolumeSpike: volumeRatio > 1.5
     };
   } catch (error) {
     console.error("Technical Agent Error:", error.message);

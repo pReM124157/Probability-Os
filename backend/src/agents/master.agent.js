@@ -23,7 +23,7 @@ import {
   calculatePositionSize as calcPositionIntelligence
 } from "../services/intelligence.service.js";
 
-import { generateInvestmentAnalysis, generateTieredAnalysis } from "../services/claude.service.js";
+import { generateTieredAnalysis } from "../services/claude.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
 import { executeTool } from "../tools/registry.js";
@@ -137,6 +137,230 @@ function interpretDebt(debtToEquity) {
     return `⚠️ High leverage — D/E of ${debtToEquity}, monitor debt servicing`;
   }
   return "";
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function toNumber(value) {
+  if (value === null || value === undefined || value === "" || value === "-") {
+    return 0;
+  }
+  const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeSectorKey(sector) {
+  const upper = safeString(sector).trim().toUpperCase();
+  const aliases = {
+    TECHNOLOGY: "IT",
+    "INFORMATION TECHNOLOGY": "IT",
+    BANKS: "FINANCIAL_SERVICES",
+    "FINANCIAL SERVICES": "FINANCIAL_SERVICES",
+    FINANCIAL: "FINANCIAL_SERVICES",
+    INSURANCE: "FINANCIAL_SERVICES",
+    OILGAS: "ENERGY",
+    "OIL & GAS": "ENERGY",
+    OIL: "ENERGY",
+    AUTOMOBILES: "AUTO",
+    AUTOMOBILE: "AUTO",
+    AUTO: "AUTO",
+    HEALTHCARE: "PHARMA",
+    PHARMACEUTICALS: "PHARMA"
+  };
+  return aliases[upper] || upper.replace(/[^A-Z]/g, "_");
+}
+
+function scoreFromBands(value, bands, defaultScore = 5) {
+  for (const band of bands) {
+    if (band.test(value)) return band.score;
+  }
+  return defaultScore;
+}
+
+function computeFundamentalScore(stockData) {
+  const pe = toNumber(stockData?.PERatio);
+  const roe = toNumber(stockData?.ReturnOnEquityTTM);
+  const revenueGrowth = toNumber(stockData?.QuarterlyRevenueGrowthYOY);
+  const profitMargin = toNumber(stockData?.ProfitMargin);
+  const debtToEquity = toNumber(stockData?.DebtToEquityRatio);
+
+  const peScore = pe <= 0
+    ? 5
+    : scoreFromBands(pe, [
+        { test: (v) => v <= 15, score: 9 },
+        { test: (v) => v <= 22, score: 8 },
+        { test: (v) => v <= 30, score: 6 },
+        { test: (v) => v <= 40, score: 4 },
+        { test: () => true, score: 2 }
+      ]);
+  const roeScore = scoreFromBands(roe, [
+    { test: (v) => v >= 22, score: 10 },
+    { test: (v) => v >= 18, score: 8 },
+    { test: (v) => v >= 12, score: 6 },
+    { test: (v) => v >= 8, score: 4 },
+    { test: () => true, score: 2 }
+  ]);
+  const growthScore = scoreFromBands(revenueGrowth, [
+    { test: (v) => v >= 18, score: 10 },
+    { test: (v) => v >= 12, score: 8 },
+    { test: (v) => v >= 6, score: 6 },
+    { test: (v) => v >= 0, score: 4 },
+    { test: () => true, score: 2 }
+  ]);
+  const marginScore = scoreFromBands(profitMargin, [
+    { test: (v) => v >= 20, score: 9 },
+    { test: (v) => v >= 12, score: 7 },
+    { test: (v) => v >= 6, score: 5 },
+    { test: (v) => v >= 0, score: 3 },
+    { test: () => true, score: 2 }
+  ]);
+  const leverageScore = scoreFromBands(debtToEquity, [
+    { test: (v) => v === 0, score: 5 },
+    { test: (v) => v <= 0.5, score: 9 },
+    { test: (v) => v <= 1.0, score: 7 },
+    { test: (v) => v <= 2.0, score: 5 },
+    { test: (v) => v <= 3.0, score: 3 },
+    { test: () => true, score: 1 }
+  ]);
+
+  return Number((((peScore + roeScore + growthScore + marginScore + leverageScore) / 5)).toFixed(1));
+}
+
+function computeWeightedConfidence({
+  technical,
+  liveMarketData,
+  stockData,
+  relStrength,
+  sectorData,
+  valuationScore
+}) {
+  const rsi = toNumber(technical?.rsi);
+  const sma20 = toNumber(technical?.sma20);
+  const sma50 = toNumber(technical?.sma50);
+  const sma200 = toNumber(technical?.sma200);
+  const currentPrice = toNumber(technical?.currentPrice || liveMarketData?.currentPrice);
+  const priceVsMA50 = sma50 > 0 ? ((currentPrice - sma50) / sma50) * 100 : 0;
+  const volumeRatio = toNumber(technical?.volumeRatio) || 1;
+  const fundamentals = computeFundamentalScore(stockData);
+
+  const rsiScore = scoreFromBands(rsi, [
+    { test: (v) => v >= 52 && v <= 66, score: 9 },
+    { test: (v) => v >= 45 && v < 52, score: 7 },
+    { test: (v) => v > 66 && v <= 72, score: 6 },
+    { test: (v) => v >= 35 && v < 45, score: 5 },
+    { test: () => true, score: 3 }
+  ]);
+
+  let trendScore = 4;
+  if (currentPrice > sma20) trendScore += 2;
+  if (currentPrice > sma50) trendScore += 2;
+  if (currentPrice > sma200) trendScore += 2;
+  if (sma20 > sma50) trendScore += 1;
+  if (technical?.trend === "BEARISH") trendScore -= 2;
+  trendScore = clamp(trendScore, 1, 10);
+
+  const volumeScore = scoreFromBands(volumeRatio, [
+    { test: (v) => v >= 2.0, score: 10 },
+    { test: (v) => v >= 1.5, score: 8 },
+    { test: (v) => v >= 1.1, score: 6 },
+    { test: (v) => v >= 0.8, score: 5 },
+    { test: () => true, score: 3 }
+  ]);
+
+  const relStrengthScore =
+    relStrength?.strength === "STRONG"
+      ? 9
+      : relStrength?.strength === "MODERATE"
+      ? 7
+      : relStrength?.strength === "NEUTRAL"
+      ? 5
+      : 3;
+
+  const sectorScore =
+    sectorData?.bias === "STRONG_BULLISH"
+      ? 9
+      : sectorData?.bias === "BULLISH"
+      ? 7
+      : sectorData?.bias === "NEUTRAL"
+      ? 5
+      : 3;
+
+  const valuationBlend = valuationScore > 0
+    ? ((fundamentals * 0.7) + (valuationScore * 0.3))
+    : fundamentals;
+
+  const rawScore =
+    (rsiScore * 0.15) +
+    (trendScore * 0.20) +
+    (volumeScore * 0.15) +
+    (relStrengthScore * 0.15) +
+    (valuationBlend * 0.20) +
+    (sectorScore * 0.15);
+
+  return {
+    score: Number(clamp(rawScore, 1, 10).toFixed(1)),
+    components: {
+      rsiScore,
+      trendScore,
+      volumeScore,
+      relStrengthScore,
+      valuationBlend: Number(valuationBlend.toFixed(1)),
+      sectorScore,
+      fundamentals,
+      priceVsMA50: Number(priceVsMA50.toFixed(1)),
+      volumeRatio: Number(volumeRatio.toFixed(2))
+    }
+  };
+}
+
+function deriveDecisionFromConfidence(score, technical, riskLevel) {
+  const trend = technical?.trend || "UNKNOWN";
+  const rsi = toNumber(technical?.rsi);
+
+  if (score >= 7.2 && trend === "BULLISH" && rsi >= 48 && riskLevel !== "HIGH") {
+    return "BUY";
+  }
+  if (score <= 4.2 && (trend === "BEARISH" || rsi >= 74 || riskLevel === "HIGH")) {
+    return "SELL";
+  }
+  return "HOLD";
+}
+
+function buildDeterministicDecisionReason({
+  ticker,
+  decisionValue,
+  technical,
+  liveMarketData,
+  stockData,
+  relStrength,
+  sectorData,
+  weightedConfidence
+}) {
+  const currentPrice = toNumber(technical?.currentPrice || liveMarketData?.currentPrice);
+  const sma50 = toNumber(technical?.sma50);
+  const priceVsMA50 = sma50 > 0 ? ((currentPrice - sma50) / sma50) * 100 : 0;
+  const volumeRatio = toNumber(technical?.volumeRatio) || 1;
+  const rsi = toNumber(technical?.rsi);
+  const pe = toNumber(stockData?.PERatio);
+  const roe = toNumber(stockData?.ReturnOnEquityTTM);
+  const revenueGrowth = toNumber(stockData?.QuarterlyRevenueGrowthYOY);
+  const sectorBias = sectorData?.bias || "NEUTRAL";
+  const directionText =
+    decisionValue === "BUY"
+      ? "Momentum and structure justify a constructive bias."
+      : decisionValue === "SELL"
+      ? "Structure is not supportive enough to justify risk."
+      : "Signal quality is mixed, so patience is warranted.";
+  const valuationText =
+    pe > 0
+      ? pe <= 20
+        ? `Valuation is still reasonable at ${pe.toFixed(1)}x earnings`
+        : `Valuation is fuller at ${pe.toFixed(1)}x earnings`
+      : "Valuation data is limited";
+
+  return `${ticker} has RSI at ${rsi.toFixed(0)} and is ${priceVsMA50 >= 0 ? "trading above" : "trading below"} the 50DMA by ${Math.abs(priceVsMA50).toFixed(1)}%. Volume is ${volumeRatio.toFixed(2)}x average, relative strength is ${safeString(relStrength?.status || "neutral vs index").toLowerCase()}, and sector bias is ${sectorBias.toLowerCase().replace(/_/g, " ")}. ${valuationText}; ROE is ${roe.toFixed(1)}% and revenue growth is ${revenueGrowth.toFixed(1)}%. ${directionText} Weighted conviction is ${weightedConfidence.toFixed(1)}/10.`;
 }
 
 /**
@@ -956,41 +1180,34 @@ CRITICAL RULES:
 
     // PHASE 3: Confidence Alignment & Learning Feedback
     const learningBoost = await getLearningBoost(ticker);
-    
-    // Adjusting confidence based on execution readiness and historical feedback
-    let adjustedConfidence = (decision.finalConfidenceScore || 5) + learningBoost;
-    
-    // PARTIAL DATA GUARD: Downgrade confidence if key metrics are missing
-    const hasMissingFundamentals = !stockData.ReturnOnEquityTTM || !stockData.DebtToEquityRatio || !stockData.QuarterlyRevenueGrowthYOY;
-    if (hasMissingFundamentals) {
-      console.log(`[PARTIAL DATA] Missing key fundamental metrics for ${ticker}. Capping confidence.`);
-      adjustedConfidence = Math.min(adjustedConfidence, 4);
-    }
 
-    if (entryTiming.strategy === "CAUTIOUS ENTRY") {
-      adjustedConfidence = Math.min(adjustedConfidence, 6);
-    } else if (entryTiming.strategy === "AVOID ENTRY") {
-      adjustedConfidence = Math.min(adjustedConfidence, 4);
-    } else if (entryTiming.strategy === "STRONG ENTRY") {
-      adjustedConfidence = Math.min(adjustedConfidence, 10);
-    }
-    
     // PHASE 2.7: Intelligence Layer (Decision Edge)
     const indices = await getIndianIndices();
     const niftyChange = indices.nifty.change || 0;
     const relStrength = calculateRelativeStrength(liveMarketData.change, niftyChange);
     
     const sectorMap = getSectorMomentum();
-    const sectorData = sectorMap[stockData.Sector?.toUpperCase()] || { strength: 0, bias: "NEUTRAL" };
+    const sectorData = sectorMap[normalizeSectorKey(stockData.Sector)] || { strength: 0, bias: "NEUTRAL" };
     
     const intelligenceSignals = generateSignals({
       roe: parseFloat(stockData.ReturnOnEquityTTM) || 0,
       revenueGrowth: parseFloat(stockData.QuarterlyRevenueGrowthYOY) || 0,
-      pe: parseFloat(stockData.TrailingPE) || 0,
+      pe: parseFloat(stockData.PERatio) || 0,
       priceAboveMA200: technical.priceAboveMA200 || false,
       volumeSpike: technical.isVolumeSpike || false
     });
 
+    const weightedSignals = computeWeightedConfidence({
+      technical,
+      liveMarketData,
+      stockData,
+      relStrength,
+      sectorData,
+      valuationScore: valuation.score || 0
+    });
+
+    let adjustedConfidence = weightedSignals.score + learningBoost;
+    
     // --- MARKET STATE CONTEXT ---
     const isLive = liveMarketData.priceSource === "LIVE" && !liveMarketData.latencyBlocked;
     const marketStatus = liveMarketData.marketStatus || {};
@@ -1005,12 +1222,24 @@ CRITICAL RULES:
       marketNote = "🌙 Post-market (closed for today)";
     }
     
-    // Adjust confidence based on intelligence signals
-    if (relStrength.strength === "STRONG") adjustedConfidence += 1;
-    if (sectorData.bias === "STRONG_BULLISH") adjustedConfidence += 1;
-    if (intelligenceSignals.length > 0) adjustedConfidence += 1;
+    if (intelligenceSignals.length > 0) adjustedConfidence += 0.4;
+
+    // PARTIAL DATA GUARD: Downgrade confidence if key metrics are missing
+    const hasMissingFundamentals = !stockData.ReturnOnEquityTTM || !stockData.DebtToEquityRatio || !stockData.QuarterlyRevenueGrowthYOY;
+    if (hasMissingFundamentals) {
+      console.log(`[PARTIAL DATA] Missing key fundamental metrics for ${ticker}. Reducing confidence.`);
+      adjustedConfidence -= 1.0;
+    }
+
+    if (entryTiming.strategy === "CAUTIOUS ENTRY") {
+      adjustedConfidence -= 0.4;
+    } else if (entryTiming.strategy === "AVOID ENTRY") {
+      adjustedConfidence -= 1.5;
+    } else if (entryTiming.strategy === "STRONG ENTRY") {
+      adjustedConfidence += 0.4;
+    }
     
-    adjustedConfidence = Math.max(1, Math.min(10, adjustedConfidence));
+    adjustedConfidence = clamp(adjustedConfidence, 1, 10);
     
     if (marketStatus.isPreMarket) {
       marketNote = "⏳ Pre-market (opens soon)";
@@ -1021,11 +1250,11 @@ CRITICAL RULES:
     // CRITICAL: Adjust confidence if data is degraded but ALLOW analysis
     if (!isLive) {
       console.log(`[DEGRADED MODE] ${ticker}. Source: ${liveMarketData.priceSource}. Proceeding with caution.`);
-      adjustedConfidence = Math.min(adjustedConfidence, 6); // Cap confidence at 6 for stale data
+      adjustedConfidence = Math.min(adjustedConfidence, 6.2);
     }
 
     // Ensure score stays within 1-10 range
-    adjustedConfidence = Math.min(Math.max(adjustedConfidence, 1), 10);
+    adjustedConfidence = clamp(adjustedConfidence, 1, 10);
 
     // PHASE 3.5: Pre-Market Intelligence (ROI Upgrade)
     let preMarket = null;
@@ -1044,82 +1273,22 @@ CRITICAL RULES:
       marketNote = marketNote ? `${marketNote}\n⚠ Limited data source — confidence reduced` : "⚠ Limited data source";
     }
 
-    // PHASE 3.6: Decision-Reason Consistency Synthesis
-    const rsi = Number.isFinite(Number(technical?.rsi)) ? Number(technical.rsi) : "N/A";
-    const sma50 = Number(technical?.sma50 || 0);
-    const currentPrice = Number(technical?.currentPrice || liveMarketData?.currentPrice || 0);
-    const priceVsMA50 = sma50 > 0 && currentPrice > 0
-      ? `${currentPrice >= sma50 ? "ABOVE" : "BELOW"} (${(((currentPrice - sma50) / sma50) * 100).toFixed(2)}%)`
-      : "N/A";
-    const volumeRatio = Number(liveMarketData?.averageVolume) > 0
-      ? (Number(liveMarketData?.volume || 0) / Number(liveMarketData.averageVolume)).toFixed(2)
-      : "N/A";
-    const trend = technical?.trend || "UNKNOWN";
-    const directionalBias =
-      decision.finalDecision === "BUY"
-        ? "bullish"
-        : decision.finalDecision === "SELL"
-        ? "bearish"
-        : "neutral";
-
-    const reasoningPrompt = `
-Write a ${directionalBias} explanation for ${ticker}.
-Decision: ${decision.finalDecision}
-Rules:
-- If decision is SELL:
-  use bearish language only.
-- If decision is BUY:
-  use bullish language only.
-- If decision is HOLD:
-  use neutral/cautious language only.
-Reference actual indicators:
-- RSI: ${rsi}
-- Price vs MA50: ${priceVsMA50}
-- Volume Ratio: ${volumeRatio}
-- Trend: ${trend}
-Do NOT contradict the decision.
-Do NOT use generic templates.
-Each stock must have a UNIQUE explanation.
-Do not reuse wording from previous stocks.
-Use at least 2 ticker-specific metrics.
-`.trim();
-
-    let professionalReasoning = "Mixed technical signals detected. Momentum and structure are not aligned strongly enough for a directional conviction.";
-    try {
-      professionalReasoning = await generateInvestmentAnalysis(reasoningPrompt);
-    } catch (err) {}
-
-    function validateReasonConsistency(decisionValue, reason) {
-      const bullishTerms = [
-        "bullish",
-        "strong relative strength",
-        "above support",
-        "uptrend"
-      ];
-      const bearishTerms = [
-        "bearish",
-        "weakness",
-        "downtrend",
-        "selling pressure"
-      ];
-      const lower = String(reason || "").toLowerCase();
-      const bullish = bullishTerms.some((t) => lower.includes(t));
-      const bearish = bearishTerms.some((t) => lower.includes(t));
-      if (decisionValue === "SELL" && bullish) {
-        return false;
-      }
-      if (decisionValue === "BUY" && bearish) {
-        return false;
-      }
-      return true;
-    }
-
-    let finalDecisionValue = decision.finalDecision || "HOLD";
-    if (!validateReasonConsistency(finalDecisionValue, professionalReasoning)) {
-      finalDecisionValue = "HOLD";
-      professionalReasoning =
-        "Mixed technical signals detected. Momentum and structure are not aligned strongly enough for a directional conviction.";
-    }
+    // PHASE 3.6: Deterministic Decision Synthesis
+    let finalDecisionValue = deriveDecisionFromConfidence(
+      adjustedConfidence,
+      technical,
+      risk.riskLevel || "MEDIUM"
+    );
+    const professionalReasoning = buildDeterministicDecisionReason({
+      ticker,
+      decisionValue: finalDecisionValue,
+      technical,
+      liveMarketData,
+      stockData,
+      relStrength,
+      sectorData,
+      weightedConfidence: adjustedConfidence
+    });
 
     const finalDecision = {
       ...decision,

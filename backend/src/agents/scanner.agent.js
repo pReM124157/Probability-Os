@@ -1,6 +1,14 @@
 import { masterAgent } from "./master.agent.js";
 import { getCompanyOverview } from "../services/marketData.service.js";
 import YahooFinance from "yahoo-finance2";
+import { getMarketOverview } from "../scanner/marketOverview.js";
+import { buildTickerNewsIntel } from "../scanner/newsEngine.js";
+import { buildSectorRotation } from "../scanner/sectorRotation.js";
+import { buildInstitutionalFlows } from "../scanner/institutionalFlows.js";
+import { buildWatchlists } from "../scanner/watchlistEngine.js";
+import { buildRankedStock, rankAndDiversifyStocks } from "../scanner/stockRanker.js";
+import { formatMorningScannerReport } from "../scanner/scannerFormatter.js";
+import { normalizeSector } from "../scanner/convictionEngine.js";
 
 const yahooFinance = new YahooFinance();
 
@@ -76,66 +84,140 @@ async function getShortlistedStocks(limit = 10) {
     .slice(0, limit);
 }
 
+function adaptRankedStockToLegacyFormat(stock) {
+  return {
+    stock: stock.ticker,
+    sector: stock.sector,
+    decision: stock.decision,
+    confidenceScore: stock.convictionScore,
+    priorityLevel: stock.conviction,
+    allocation: "0%",
+    entrySignal: stock.conviction === "HIGH" ? "STRONG ENTRY" : stock.conviction === "MEDIUM" ? "CAUTIOUS ENTRY" : "AVOID ENTRY",
+    entryUrgency: stock.entryUrgency,
+    currentPrice: stock.currentPrice,
+    idealEntryZone: stock.idealEntryZone,
+    stopLoss: `₹${Math.round(stock.stopLoss)}`,
+    initialTarget: `₹${Math.round(stock.target1)}`,
+    rewardRiskRatio: stock.rr,
+    entryReasoning: stock.thesis,
+    finalExecutionAdvice:
+      stock.conviction === "HIGH"
+        ? `Focus on ${stock.idealEntryZone} with defined risk below ₹${Math.round(stock.stopLoss)}.`
+        : stock.conviction === "MEDIUM"
+        ? `Scale in selectively and respect volatility at current levels.`
+        : `Keep on watchlist only until setup quality improves.`,
+    decisionReasoning: stock.thesis,
+    recommendedAction:
+      stock.conviction === "HIGH"
+        ? "Build position gradually"
+        : stock.conviction === "MEDIUM"
+        ? "Start partial accumulation"
+        : "Monitor and wait",
+    newsSentiment: stock.newsSentiment,
+    catalysts: stock.catalysts,
+    investorType: stock.investorType
+  };
+}
+
+export async function runMorningScannerPipeline(limit = 5) {
+  console.log("🔍 Running Institutional Morning Intelligence Pipeline...");
+
+  const marketOverview = await getMarketOverview();
+  const shortlisted = await getShortlistedStocks(10);
+  console.log(`✅ Shortlisted: ${shortlisted.map((s) => s.symbol).join(", ")} (Count: ${shortlisted.length})`);
+
+  const rawCandidates = [];
+  const rankedCandidates = [];
+
+  for (const item of shortlisted) {
+    try {
+      console.log(`🧠 Deep Scanning: ${item.symbol}`);
+      const companyData = await getCompanyOverview(item.symbol);
+      const analysis = await masterAgent(companyData);
+      const newsIntel = await buildTickerNewsIntel({
+        ticker: item.symbol,
+        companyName: companyData?.Name
+      });
+
+      const rankedStock = buildRankedStock({
+        ticker: item.symbol,
+        companyData,
+        analysis,
+        newsIntel
+      });
+
+      rawCandidates.push({
+        ticker: item.symbol,
+        companyData,
+        analysis,
+        newsIntel
+      });
+      rankedCandidates.push(rankedStock);
+    } catch (error) {
+      console.log(`Deep scan failed for ${item.symbol}:`, error.message);
+    }
+  }
+
+  const sectorRotation = buildSectorRotation({
+    rankedStocks: rankedCandidates,
+    marketSectorSnapshot: marketOverview.sectors
+  });
+
+  const sectorBiasMap = new Map(
+    sectorRotation.map((sector) => [sector.sector, sector.bias])
+  );
+
+  const rescoredCandidates = rawCandidates.map((candidate) =>
+    buildRankedStock({
+      ticker: candidate.ticker,
+      companyData: candidate.companyData,
+      analysis: candidate.analysis,
+      newsIntel: candidate.newsIntel,
+      sectorBias: sectorBiasMap.get(normalizeSector(candidate.companyData?.Sector)) || "NEUTRAL"
+    })
+  );
+
+  const rankedStocks = rankAndDiversifyStocks(rescoredCandidates, {
+    limit,
+    maxPerSector: 2
+  });
+  const watchlists = buildWatchlists(rescoredCandidates);
+  const institutionalFlows = buildInstitutionalFlows({
+    marketOverview,
+    sectorRotation,
+    rankedStocks
+  });
+
+  const report = formatMorningScannerReport({
+    generatedAt: new Date().toISOString(),
+    marketOverview,
+    sectorRotation,
+    institutionalFlows,
+    rankedStocks,
+    watchlists
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    marketOverview,
+    sectorRotation,
+    institutionalFlows,
+    rankedStocks,
+    watchlists,
+    report
+  };
+}
+
 /**
  * Layer 2: Deep AI Analysis (Groq)
  * Runs full agentic analysis only on shortlisted candidates
  */
 export async function scannerAgent() {
   try {
-    console.log("🔍 Running 2-Layer Institutional Scanner...");
-    
-    // Step 1: Pre-filter (Layer 1)
-    const shortlisted = await getShortlistedStocks(10);
-    console.log(`✅ Shortlisted: ${shortlisted.map(s => s.symbol).join(", ")} (Count: ${shortlisted.length})`);
-
-    console.log("SHORTLISTED STOCKS:", shortlisted.length);
-
-    const results = [];
-
-    // Step 2: Deep Analysis (Layer 2)
-    for (const item of shortlisted) {
-      try {
-        console.log(`🧠 Deep Scanning: ${item.symbol}`);
-        const stockData = await getCompanyOverview(item.symbol);
-        const analysis = await masterAgent(stockData);
-
-        if (analysis) {
-          results.push({
-            stock: item.symbol,
-            decision: analysis?.decision?.finalDecision || "HOLD",
-            confidenceScore: analysis?.decision?.finalConfidenceScore || 0,
-            priorityLevel: analysis?.capital?.priorityLevel || "MEDIUM",
-            allocation: analysis?.capital?.suggestedAllocation || "0%",
-            entrySignal: analysis?.entryTiming?.strategy || "AVOID ENTRY",
-            entryUrgency: analysis?.entryTiming?.entryUrgency || "LOW",
-            currentPrice: analysis?.entryTiming?.currentPrice || item.price || 0,
-            idealEntryZone: analysis?.entryTiming?.idealEntryZone || "N/A",
-            stopLoss: analysis?.entryTiming?.stopLoss || "N/A",
-            initialTarget: analysis?.entryTiming?.initialTarget || "N/A",
-            rewardRiskRatio: analysis?.entryTiming?.rewardRiskRatio || "N/A",
-            entryReasoning: analysis?.entryTiming?.reasoning || "N/A",
-            finalExecutionAdvice: analysis?.entryTiming?.finalExecutionAdvice || "N/A",
-            decisionReasoning: analysis?.decision?.reason || "N/A",
-            recommendedAction: analysis?.rebalancing?.action || "N/A"
-          });
-        }
-      } catch (error) {
-        console.log(`Deep scan failed for ${item.symbol}:`, error.message);
-      }
-    }
-
-    console.log(`📊 Deep Scan Results: ${results.length} stocks processed`);
-
-    const sortedResults = results.sort(
-      (a, b) => b.confidenceScore - a.confidenceScore
-    );
-
-    // Apply confidence threshold (User requested reducing from 7 to 5)
-    const filteredResults = sortedResults.filter(r => r.confidenceScore >= 5);
-    console.log(`🎯 Filtered Results (Confidence >= 5): ${filteredResults.length}`);
-
-    console.log("FINAL SCANNER RESULTS:", filteredResults);
-    return filteredResults.slice(0, 5);
+    const morningPacket = await runMorningScannerPipeline(5);
+    const legacyResults = morningPacket.report.rankedStocks.map(adaptRankedStockToLegacyFormat);
+    console.log("FINAL SCANNER RESULTS:", legacyResults);
+    return legacyResults;
   } catch (error) {
     console.log("Scanner Agent Error:", error.message);
     return [];

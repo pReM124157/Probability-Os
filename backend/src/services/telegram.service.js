@@ -16,10 +16,9 @@ process.on("uncaughtException", (err) => {
 });
 
 import { getCompanyOverview, checkSymbolExists } from "./marketData.service.js";
-import { analyzePortfolio } from "../agents/portfolioAgent.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
-import { analyzePortfolioHealth } from "../agents/portfolioHealth.agent.js";
+import { buildPortfolioReview } from "../agents/portfolioReview.agent.js";
 import {
   addHolding,
   getPortfolio,
@@ -31,6 +30,7 @@ import supabase from "./supabase.service.js";
 import { handleUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
 import { formatIST } from "../utils/time.js";
+import { formatPortfolioReview } from "../core/portfolioFormatter.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
@@ -739,15 +739,8 @@ bot.on("text", async (ctx) => {
       try {
         const dbHoldings = await getPortfolio(chatId);
         if (!dbHoldings?.length) { await bot.telegram.sendMessage(chatId, `Your portfolio is empty.\nUse /add TICKER QTY PRICE to add holdings.`); return; }
-        const health = await analyzePortfolioHealth(dbHoldings);
-        const details = safeObject(health?.details);
-        const msg =
-          `🏥 PORTFOLIO HEALTH REPORT\n━━━━━━━━━━━━━━━━━━\n` +
-          `📊 Health Score: ${health.score}/10\n🏅 Status: ${health.status}\n⚠️ Risk Level: ${health.riskLevel}\n` +
-          `🌐 Diversification: ${health.diversification}\n⚖️ Concentration: ${health.concentrationRisk}\n\n` +
-          `🧠 Advice:\n${health.action}\n\n📈 Stats:\n• Holdings: ${details.stockCount || 0} Stocks\n` +
-          `• Max Weight: ${details.highestAllocation || "Balanced"}\n• Sectors: ${details.uniqueSectors || 0}\n\n` +
-          `Use /analyze <TICKER> for deep dive.\n━━━━━━━━━━━━━━━━━━\n⚠️ Educational purposes only.`;
+        const review = await buildPortfolioReview(dbHoldings);
+        const msg = formatPortfolioReview(review);
         await bot.telegram.sendMessage(chatId, msg);
       } catch (err) {
         console.error("[PORTFOLIO ERROR]", err);
