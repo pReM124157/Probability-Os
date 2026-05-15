@@ -319,60 +319,59 @@ function normalizeFinnhubOverviewPayload({ profile = {}, metrics = {} } = {}, sy
   };
 }
 
+/**
+ * checkSymbolExists — Layer 2: Existence-only check.
+ *
+ * Determines whether a symbol exists as a real NSE entity by examining
+ * company overview/profile data ONLY.
+ *
+ * CONTRACT:
+ *  - NEVER requires a successful live price fetch.
+ *  - Returns true even when all price providers are down.
+ *  - A symbol is "non-existent" only when overview data is unavailable
+ *    from ALL providers AND returns FALLBACK_SAFE — i.e. totally unknown.
+ *
+ * @param {string} symbol
+ * @returns {Promise<boolean>}
+ */
 export async function checkSymbolExists(symbol) {
-  const result = await validateTickerAvailability(symbol);
-  return result.status === "VALID";
-}
-
-function hasVerifiedOverview(overview) {
-  if (!overview || typeof overview !== "object") return false;
-  const sector = String(overview.Sector || "").trim().toLowerCase();
-  const source = String(overview.source || "").trim().toLowerCase();
-  const name = String(overview.Name || "").trim().toLowerCase();
-
-  if (overview.status === "FALLBACK_SAFE") return false;
-  if (!sector || sector === "fallback") return false;
-  if (name.includes("(fallback)")) return false;
-  if (source === "fallback") return false;
-  return true;
-}
-
-export async function validateTickerAvailability(symbol) {
   try {
-    const live = await getLiveMarketData(symbol);
-    if (
-      live &&
-      Number(live.currentPrice || live.price || 0) > 0 &&
-      live.status !== "FALLBACK_SAFE"
-    ) {
-      return {
-        status: "VALID",
-        source: live.priceSource || "LIVE_MARKET_DATA"
-      };
-    }
-
     const overview = await getCompanyOverview(symbol);
-    if (hasVerifiedOverview(overview)) {
-      return {
-        status: "VALID",
-        source: overview.source || "COMPANY_OVERVIEW"
-      };
-    }
+    if (!overview || typeof overview !== "object") return false;
 
-    return {
-      status: "UNAVAILABLE",
-      reason: "MARKET_DATA_UNAVAILABLE",
-      source: live?.priceSource || overview?.source || "UNKNOWN"
-    };
+    // A symbol EXISTS if ANY real data is returned — not just fallback shells.
+    // Provider outage returns createFallbackOverview() with status=FALLBACK_SAFE.
+    // Real symbols return overview with Name, Sector, fundamentals, etc.
+    if (overview.status === "FALLBACK_SAFE") return false;
+    if (overview.source === "fallback") return false;
+    if (String(overview.Name || "").toLowerCase().includes("(fallback)")) return false;
+
+    return (
+      // Has a real company name
+      (overview.Name && overview.Name !== symbol) ||
+      // Has a real sector
+      (overview.Sector && overview.Sector.toLowerCase() !== "fallback") ||
+      // Has any fundamental data from a real provider
+      overview.BusinessSummary !== undefined ||
+      overview.MarketCapitalization !== undefined ||
+      overview.PERatio !== undefined
+    );
   } catch (err) {
-    console.warn("Symbol validation failed:", symbol, err.message);
-    return {
-      status: "UNAVAILABLE",
-      reason: "VALIDATION_ERROR",
-      message: err.message
-    };
+    console.warn(`[checkSymbolExists] Overview lookup error for ${symbol}:`, err.message);
+    // Error in the lookup machinery — we do NOT know if it's invalid.
+    // Treat as unknown rather than invalid to avoid false negatives.
+    return null; // null = UNKNOWN (not false = INVALID)
   }
 }
+
+// DELETED: validateTickerAvailability() — was the root cause of the regression.
+// It coupled live-price success with symbol existence, causing valid tickers
+// (TCS, RELIANCE) to appear as "UNAVAILABLE" during provider outages.
+// Use the strict layered contracts in core/tickerContracts.js instead:
+//   validateTickerSyntax()     — Layer 1: syntax/shape
+//   checkSymbolExistence()     — Layer 2: existence (no live price needed)
+//   checkMarketAvailability()  — Layer 3: provider health (separate concern)
+//   validateAnalysisReadiness() — Layer 4: data completeness
 
 /**
  * Fetches Nifty 50 and Sensex current quotes.

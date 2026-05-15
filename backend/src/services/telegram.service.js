@@ -15,7 +15,14 @@ process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
 
-import { validateTickerAvailability } from "./marketData.service.js";
+import {
+  validateTickerSyntax,
+  checkSymbolExistence,
+  checkMarketAvailability,
+  EXISTENCE_STATE,
+  MARKET_AVAILABILITY
+} from "../core/tickerContracts.js";
+import { getLiveMarketData, getCompanyOverview } from "./marketData.service.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
 import { buildPortfolioReview } from "../agents/portfolioReview.agent.js";
@@ -610,10 +617,12 @@ bot.on("text", async (ctx) => {
       .maybeSingle();
 
     const effectiveExpiry = user?.expires_at || user?.subscription_end || null;
+    // Add a 5-minute buffer to expiry checks to prevent race conditions
+    // where the webhook is renewing the user at the exact moment they message the bot.
     if (
       user?.plan === "PRO" &&
       effectiveExpiry &&
-      new Date(effectiveExpiry) < new Date()
+      new Date(effectiveExpiry).getTime() < Date.now() - (5 * 60 * 1000)
     ) {
       console.log("⚠️ Auto downgrade triggered:", chatId);
       await supabase
@@ -828,9 +837,13 @@ bot.on("text", async (ctx) => {
     // ── AWAITING_STOCK state ────────────────────────────────────────
     const pendingAnalyzeState = await consumeState("telegram_flow", chatId);
     if (pendingAnalyzeState?.state === "AWAITING_STOCK") {
-      const ticker = text.trim().toUpperCase();
-      if (!isValidSymbol(ticker)) { await send("Please enter a valid stock ticker like TCS, RELIANCE, INFY"); return; }
-      await performAnalysis(chatId, ticker, footer);
+      const rawTicker = text.trim().toUpperCase();
+      const syntaxCheck = validateTickerSyntax(rawTicker);
+      if (!syntaxCheck.valid) {
+        await send("Please enter a valid NSE ticker like TCS, RELIANCE, or INFY.");
+        return;
+      }
+      await performAnalysis(chatId, syntaxCheck.cleanTicker, footer);
       return;
     }
 
@@ -843,19 +856,51 @@ bot.on("text", async (ctx) => {
         await bot.telegram.sendMessage(chatId, "Please enter the stock ticker (e.g. TCS, RELIANCE)");
         return;
       }
-      if (!isValidSymbol(intent.symbol)) {
-        await send("⚠️ Please share a valid ticker like TCS or RELIANCE.");
-        return;
-      }
-      const validation = await validateTickerAvailability(intent.symbol);
-      if (validation.status !== "VALID") {
+
+      // ── LAYER 1: Syntax validation (regex only, zero I/O) ──────────────────
+      const syntaxResult = validateTickerSyntax(intent.symbol);
+      if (!syntaxResult.valid) {
         await send(
-          `⚠️ Market data for ${intent.symbol} is temporarily unavailable right now.\n` +
-          `Please retry in a few moments.`
+          `⚠️ *${intent.symbol}* is not a valid NSE ticker format.\n` +
+          `Please enter a ticker like *TCS*, *RELIANCE*, or *INFY*.`
         );
         return;
       }
-      await performAnalysis(chatId, intent.symbol, footer);
+
+      const cleanTicker = syntaxResult.cleanTicker;
+
+      // ── LAYER 2: Symbol existence (overview/registry, NO live price needed) ─
+      const existenceResult = await checkSymbolExistence(cleanTicker, { getCompanyOverview });
+
+      if (existenceResult.state === EXISTENCE_STATE.UNKNOWN) {
+        // Symbol not found in any provider registry. Truly invalid.
+        await send(
+          `❌ *${cleanTicker}* was not found in any market registry.\n` +
+          `Please double-check the NSE ticker symbol.`
+        );
+        return;
+      }
+
+      // If REGISTRY_ERROR — we cannot confirm non-existence, so allow through
+      // with a note. Do NOT block valid tickers due to registry lookup failures.
+
+      // ── LAYER 3: Market availability (provider health, separate from existence) ─
+      const availabilityResult = await checkMarketAvailability(cleanTicker, { getLiveMarketData });
+
+      if (availabilityResult.availability === MARKET_AVAILABILITY.PROVIDER_UNAVAILABLE) {
+        // Symbol EXISTS but market data is temporarily unavailable.
+        // NEVER show "invalid ticker" — that would be a semantic violation.
+        await send(
+          `⚠️ Market data for *${cleanTicker}* is temporarily unavailable.\n` +
+          `The symbol is valid — all data providers are currently unreachable.\n` +
+          `Please retry in a few minutes.`
+        );
+        return;
+      }
+
+      // ── LAYER 4 is enforced inside performAnalysis via validateAnalysisReadiness() ─
+      // Proceed to analysis — availability is LIVE or DEGRADED (acceptable).
+      await performAnalysis(chatId, cleanTicker, footer);
       return;
     }
 

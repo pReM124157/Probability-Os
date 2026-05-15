@@ -30,6 +30,10 @@ import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
 import { executeTool } from "../tools/registry.js";
 import { buildAnalysisContext } from "../core/analysisContext.js";
+import {
+  validateAnalysisReadiness,
+  ANALYSIS_READINESS
+} from "../core/tickerContracts.js";
 
 // --- Global Cache for Market Updates ---
 let marketCache = {
@@ -1069,55 +1073,39 @@ CRITICAL RULES:
     let allocation = 0;
     let capitalAction = "Blocked by execution layer";
 
-    // PHASE 1: Data Fetch & Integrity Guard
+    // PHASE 1: Data Fetch
     console.log(`[Phase 1] Fetching live market data for ${ticker}...`);
     const liveMarketData = await getLiveMarketData(ticker);
 
-    const invalidFields = [];
-    const livePrice = Number(liveMarketData?.currentPrice || liveMarketData?.price || 0);
-    const peRatio = Number.parseFloat(String(stockData?.PERatio ?? "").replace(/[^0-9.-]/g, ""));
-    const roeValue = Number.parseFloat(String(stockData?.ReturnOnEquityTTM ?? "").replace(/[^0-9.-]/g, ""));
-    const sectorName = safeString(stockData?.Sector || "");
+    // ── LAYER 4: Analysis Readiness (NOT a ticker validity check) ─────────────
+    // This determines whether there is enough data for analysis — it is
+    // entirely separate from Layer 2 (existence) and Layer 3 (availability).
+    // A BLOCKED state means analysis cannot proceed — NOT that the ticker is invalid.
+    const readiness = validateAnalysisReadiness({
+      liveData: liveMarketData,
+      overview: stockData
+    });
 
-    if (
-      !liveMarketData ||
-      !livePrice ||
-      livePrice === 100 ||
-      liveMarketData?.source === "fallback" ||
-      liveMarketData?.status === "FALLBACK_SAFE"
-    ) {
-      invalidFields.push("price");
-    }
-    if (!Number.isFinite(peRatio) || peRatio <= 0) {
-      invalidFields.push("peRatio");
-    }
-    if (!Number.isFinite(roeValue)) {
-      invalidFields.push("roe");
-    }
-    if (!sectorName || sectorName.toLowerCase() === "fallback") {
-      invalidFields.push("sector");
-    }
+    console.log(`[Phase 1] Readiness for ${ticker}: ${readiness.readiness}`, {
+      missingFields: readiness.missingFields,
+      livePrice: liveMarketData?.currentPrice,
+      priceSource: liveMarketData?.priceSource
+    });
 
-    if (strictValidation && invalidFields.length > 0) {
-      console.warn(`[STRICT VALIDATION] ${ticker}: blocking verified report due to ${invalidFields.join(", ")}`);
-      return buildVerifiedAnalysisFailure(ticker, { invalidFields });
+    if (readiness.readiness === ANALYSIS_READINESS.BLOCKED) {
+      // Price is unavailable from ALL providers — analysis cannot proceed.
+      // This is a DATA AVAILABILITY failure, NOT a ticker validity failure.
+      console.warn(
+        `[ANALYSIS BLOCKED] ${ticker}: insufficient data for analysis.`,
+        `Missing: ${readiness.missingFields.join(", ")}`
+      );
+      return buildVerifiedAnalysisFailure(ticker, { invalidFields: readiness.missingFields });
     }
 
-    // FINAL GLOBAL GUARD: Data Integrity Check
-    if (
-        !liveMarketData || 
-        !liveMarketData.currentPrice || 
-        liveMarketData.currentPrice === 0 || 
-        liveMarketData.error
-    ) {
-        console.warn(`[GLOBAL GUARD] Critical failure for ${ticker}. Aborting analysis.`);
-        return {
-            status: "DATA_UNAVAILABLE",
-            message: `⚠ Data Unavailable for ${ticker}`,
-            ticker,
-            blockExecution: true
-        };
-    }
+    // PARTIAL readiness: price exists but some fundamentals missing.
+    // Analysis proceeds with a confidence penalty applied below.
+    const isPartialData = readiness.readiness === ANALYSIS_READINESS.PARTIAL;
+
 
     console.log(`[Phase 1.5] Proceeding with full analysis for ${ticker}...`);
     const [risk, decision, technical, valuation] = await Promise.all([
@@ -1236,11 +1224,15 @@ CRITICAL RULES:
     
     if (intelligenceSignals.length > 0) adjustedConfidence += 0.4;
 
-    // PARTIAL DATA GUARD: Downgrade confidence if key metrics are missing
-    const hasMissingFundamentals = !stockData.ReturnOnEquityTTM || !stockData.DebtToEquityRatio || !stockData.QuarterlyRevenueGrowthYOY;
-    if (hasMissingFundamentals) {
-      console.log(`[PARTIAL DATA] Missing key fundamental metrics for ${ticker}. Reducing confidence.`);
+    // LAYER 4 PARTIAL DATA GUARD: Downgrade confidence if analysis readiness is PARTIAL.
+    // This uses the same isPartialData flag computed by validateAnalysisReadiness() above,
+    // ensuring a single source of truth for what "partial data" means.
+    if (isPartialData) {
+      console.log(`[PARTIAL DATA] ${ticker}: readiness=PARTIAL, missing=${readiness.missingFields.join(",")}. Reducing confidence.`);
       adjustedConfidence -= 1.0;
+      // Annotate market note so the user-facing report reflects degraded analysis
+      const partialNote = `⚠ Analysis generated with partial market data (missing: ${readiness.missingFields.join(", ")})`;
+      marketNote = marketNote ? `${marketNote}\n${partialNote}` : partialNote;
     }
 
     if (entryTiming.strategy === "CAUTIOUS ENTRY") {

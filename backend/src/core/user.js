@@ -19,7 +19,9 @@ export function isPro(user) {
 
   if (!hasEntitlementFlag) return false;
   if (status && !["active", "trialing", "grace"].includes(status)) return false;
-  if (expiry && new Date(expiry) <= new Date()) return false;
+  // Add a 5-minute grace buffer to prevent millisecond race conditions 
+  // during webhook renewal processing.
+  if (expiry && new Date(expiry).getTime() < Date.now() - (5 * 60 * 1000)) return false;
 
   return true;
 }
