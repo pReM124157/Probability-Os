@@ -212,7 +212,10 @@ function toBaseTicker(symbol) {
 }
 
 function toAlphaSymbol(symbol) {
-  return normalizeSymbol(symbol).replace(/\.NS$/i, ".NSE").replace(/\.BO$/i, ".BSE");
+  let base = toBaseTicker(symbol);
+  // Alpha Vantage uses .BSE for Indian equities.
+  // If the user inputs "TCS", base is "TCS", so we append ".BSE"
+  return `${base}.BSE`;
 }
 
 function createFallbackOverview(symbol, extra = {}) {
@@ -734,7 +737,10 @@ async function retry(fn, retries = 3, initialDelay = 500) {
 async function alphaQuoteFetch(symbol) {
   try {
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) {
+      console.warn("[FALLBACK] Alpha Vantage API key missing. Skipping provider.");
+      return null;
+    }
     
     const avSymbol = toAlphaSymbol(symbol);
     const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${avSymbol}&apikey=${apiKey}`;
@@ -762,10 +768,13 @@ async function alphaQuoteFetch(symbol) {
 async function alphaOverviewFetch(symbol) {
   try {
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) {
+      console.warn("[FALLBACK] Alpha Vantage API key missing. Skipping provider.");
+      return null;
+    }
 
-    const baseSymbol = toBaseTicker(symbol);
-    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${baseSymbol}&apikey=${apiKey}`;
+    const avSymbol = toAlphaSymbol(symbol);
+    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${avSymbol}&apikey=${apiKey}`;
     const payload = await withProviderGuard("alpha_vantage", async () =>
       fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
     );
@@ -780,7 +789,10 @@ async function alphaOverviewFetch(symbol) {
 async function twelveDataQuoteFetch(symbol) {
   try {
     const apiKey = process.env.TWELVEDATA_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) {
+      console.warn("[FALLBACK] TwelveData API key missing. Skipping provider.");
+      return null;
+    }
 
     const baseSymbol = toBaseTicker(symbol);
     const attempts = [
@@ -819,7 +831,10 @@ async function twelveDataQuoteFetch(symbol) {
 async function finnhubQuoteFetch(symbol) {
   try {
     const apiKey = process.env.FINNHUB_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) {
+      console.warn("[FALLBACK] Finnhub API key missing. Skipping provider.");
+      return null;
+    }
 
     const baseSymbol = toBaseTicker(symbol);
     const attempts = [`NSE:${baseSymbol}`, `BSE:${baseSymbol}`, baseSymbol];
@@ -854,7 +869,10 @@ async function finnhubQuoteFetch(symbol) {
 async function finnhubOverviewFetch(symbol) {
   try {
     const apiKey = process.env.FINNHUB_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) {
+      console.warn("[FALLBACK] Finnhub API key missing. Skipping provider.");
+      return null;
+    }
 
     const baseSymbol = toBaseTicker(symbol);
     const attempts = [`NSE:${baseSymbol}`, `BSE:${baseSymbol}`, baseSymbol];

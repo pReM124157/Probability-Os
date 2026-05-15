@@ -873,12 +873,12 @@ bot.on("text", async (ctx) => {
       const existenceResult = await checkSymbolExistence(cleanTicker, { getCompanyOverview });
 
       if (existenceResult.state === EXISTENCE_STATE.UNKNOWN) {
-        // Symbol not found in any provider registry. Truly invalid.
-        await send(
-          `❌ *${cleanTicker}* was not found in any market registry.\n` +
-          `Please double-check the NSE ticker symbol.`
-        );
-        return;
+        // We could not confirm existence (either due to provider outage or truly invalid).
+        // FAIL-OPEN: Let it proceed. Layer 3 and Layer 4 will catch it if there's no price.
+        console.warn(`[VALIDATION] Symbol ${cleanTicker} returned UNKNOWN existence. Allowing to proceed to Layer 3.`);
+      } else if (existenceResult.state === EXISTENCE_STATE.REGISTRY_ERROR) {
+        // System error during lookup. Fail open to prevent blocking.
+        console.warn(`[VALIDATION] Registry error for ${cleanTicker}. Allowing to proceed.`);
       }
 
       // If REGISTRY_ERROR — we cannot confirm non-existence, so allow through
