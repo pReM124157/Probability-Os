@@ -12,7 +12,7 @@ export function generateRebalanceAdvice(portfolio) {
   let biggestStock = null;
 
   for (const stock of portfolio) {
-    const sector = stock.sector || "Unknown";
+    const sector = stock.sector || "Sector unavailable";
 
     if (!sectorMap[sector]) {
       sectorMap[sector] = 0;

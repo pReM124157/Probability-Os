@@ -95,10 +95,14 @@ function canonicalSectorName(rawSector, symbol) {
     TELECOM: "TELECOM"
   };
 
-  if (aliases[normalized]) return aliases[normalized];
+  // If the provider returned a real sector that isn't "FALLBACK"
+  if (normalized && normalized !== "FALLBACK") {
+    return aliases[normalized] || normalized;
+  }
 
+  // Only use hardcoded fallbacks if the provider failed to give us a sector
   const fallback = SECTOR_FALLBACKS[normalizeTicker(symbol)];
-  return fallback || "UNCLASSIFIED";
+  return fallback || "Sector unavailable";
 }
 
 function scoreBand(value, bands, fallback = 5) {
@@ -403,7 +407,7 @@ export async function buildPortfolioReview(holdings = []) {
       })),
       sectorCount: sectors.length,
       stockCount: holdingsWithWeights.length,
-      topSector: topSector?.sector || "UNCLASSIFIED",
+      topSector: topSector?.sector || "Sector unavailable",
       topSectorWeight: Number((topSector?.weight || 0).toFixed(1)),
       topHolding: topHolding?.symbol || "NONE",
       topHoldingWeight: Number((topHolding?.weight || 0).toFixed(1)),
