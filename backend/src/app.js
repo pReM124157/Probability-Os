@@ -5,6 +5,8 @@ import { getCompanyOverview } from "./services/marketData.service.js";
 import { generateInvestmentAnalysis } from "./services/claude.service.js";
 import { masterAgent } from "./agents/master.agent.js";
 import webhookRouter from "./routes/webhook.js";
+import { buildAnalysisContext } from "./core/analysisContext.js";
+import { createTraceId, logError, logEvent } from "./services/telemetry.service.js";
 
 
 const app = express();
@@ -17,6 +19,28 @@ app.get("/", (req, res) => {
 app.use(cors({
   origin: "*"
 }));
+
+app.use((req, res, next) => {
+  const traceId = req.headers["x-trace-id"] || createTraceId("http");
+  req.traceId = traceId;
+  res.setHeader("x-trace-id", traceId);
+  const startedAt = Date.now();
+  logEvent("http.request.started", {
+    traceId,
+    method: req.method,
+    path: req.path
+  });
+  res.on("finish", () => {
+    logEvent("http.request.completed", {
+      traceId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt
+    });
+  });
+  next();
+});
 
 app.use('/webhook', webhookRouter);
 app.use(express.json());
@@ -99,6 +123,7 @@ app.get("/analyze-stock", async (req, res) => {
 });
 app.post("/api/analyze", async (req, res) => {
   try {
+    const traceId = req.traceId || createTraceId("http_analyze");
     const { symbol } = req.body;
     if (!symbol) {
       return res.status(400).json({
@@ -106,8 +131,13 @@ app.post("/api/analyze", async (req, res) => {
         message: "Stock symbol is required"
       });
     }
-    const companyData = await getCompanyOverview(symbol);
+    const { stockData: companyData } = await buildAnalysisContext(symbol);
     const multiAgentAnalysis = await masterAgent(companyData, { strictValidation: true });
+    logEvent("http.analyze.completed", {
+      traceId,
+      symbol,
+      unavailable: multiAgentAnalysis?.status === "VERIFIED_ANALYSIS_UNAVAILABLE"
+    });
     if (multiAgentAnalysis?.status === "VERIFIED_ANALYSIS_UNAVAILABLE") {
       return res.json({
         success: true,
@@ -177,7 +207,9 @@ app.post("/api/analyze", async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("Analysis Error:", error.message);
+    logError("http.analyze.error", error, {
+      traceId: req.traceId || null
+    });
     return res.status(500).json({
       success: false,
       message: "Failed to analyze stock"

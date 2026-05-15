@@ -1,14 +1,14 @@
 import Groq from "groq-sdk";
+import { appendChatMemory, getState } from "./distributedState.service.js";
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-const userMemory = new Map(); // temp memory
-
 export async function generateChatReply(chatId, message) {
   try {
-    const history = userMemory.get(chatId) || [];
+    const memory = await getState("chat_memory", chatId);
+    const history = Array.isArray(memory?.messages) ? memory.messages : [];
     const messages = [
       {
         role: "system",
@@ -57,9 +57,7 @@ Reply: (switch to serious analytical tone)
       : reply;
     reply = finalMessage;
 
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: reply });
-    userMemory.set(chatId, history.slice(-4));
+    await appendChatMemory(chatId, message, reply, 24 * 60 * 60, 4);
 
     return reply;
   } catch (err) {

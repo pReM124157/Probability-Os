@@ -1,6 +1,9 @@
 import YahooFinance from "yahoo-finance2";
 import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
+import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
+import { withProviderGuard } from "./providerHealth.service.js";
+import { logError, logMetric } from "./telemetry.service.js";
 
 const yahooFinance = new YahooFinance();
 // Global config removed to prevent startup crash
@@ -15,8 +18,13 @@ export const dataMetrics = {
 };
 
 const dataCache = new Map();
+const inflightRequests = new Map();
 const CACHE_TTL_HIGH = 5 * 60 * 1000; // 5 mins (Yahoo/Live)
 const CACHE_TTL_LOW = 60 * 1000;      // 1 min (Fallback/Degraded)
+const CACHE_GROUP_OVERVIEW = "company_overview";
+const CACHE_GROUP_LIVE = "live_market_data";
+const CACHE_GROUP_HISTORICAL = "historical_candles";
+const CACHE_GROUP_MARKET = "market_snapshots";
 
 // --- Circuit Breaker State ---
 let yahooFailureCount = 0;
@@ -41,6 +49,54 @@ function getCached(key) {
 
 function setCached(key, data, quality = "HIGH") {
   dataCache.set(key, { data, timestamp: Date.now(), quality });
+}
+
+function ttlSecondsForQuality(quality = "HIGH") {
+  return quality === "HIGH"
+    ? Math.floor(CACHE_TTL_HIGH / 1000)
+    : Math.floor(CACHE_TTL_LOW / 1000);
+}
+
+async function getHybridCache(cacheKey, quality = "HIGH") {
+  const local = getCached(cacheKey);
+  if (local) return local;
+
+  try {
+    const shared = await getSharedCache(cacheKey);
+    if (shared) {
+      setCached(cacheKey, shared, quality);
+      return shared;
+    }
+  } catch (error) {
+    logError("cache.shared.read_error", error, { cacheKey });
+  }
+
+  return null;
+}
+
+async function setHybridCache(cacheKey, cacheGroup, payload, quality = "HIGH") {
+  setCached(cacheKey, payload, quality);
+  try {
+    await setSharedCache(cacheKey, cacheGroup, payload, ttlSecondsForQuality(quality));
+  } catch (error) {
+    logError("cache.shared.write_error", error, { cacheKey, cacheGroup });
+  }
+}
+
+async function withRequestCoalescing(key, factory) {
+  const active = inflightRequests.get(key);
+  if (active) return active;
+
+  const promise = (async () => {
+    try {
+      return await factory();
+    } finally {
+      inflightRequests.delete(key);
+    }
+  })();
+
+  inflightRequests.set(key, promise);
+  return promise;
 }
 
 function reportYahooStatus(success) {
@@ -165,7 +221,7 @@ function createFallbackOverview(symbol, extra = {}) {
     Symbol: upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`,
     symbol: upperSymbol,
     Name: upperSymbol + " (Fallback)",
-    price: 100,
+    price: 0,
     change: 0,
     changePercent: 0,
     volume: 0,
@@ -183,7 +239,8 @@ function createFallbackLiveData(symbol, extra = {}) {
   const upperSymbol = normalizeSymbol(symbol);
   return {
     symbol: upperSymbol,
-    price: 100,
+    price: 0,
+    currentPrice: 0,
     change: 0,
     changePercent: 0,
     volume: 0,
@@ -264,32 +321,15 @@ function normalizeFinnhubOverviewPayload({ profile = {}, metrics = {} } = {}, sy
 
 export async function checkSymbolExists(symbol) {
   try {
-    const upper = normalizeSymbol(symbol);
-    if (!upper || upper.length < 3) return false;
-
-    // Direct check with .NS
-    const res = await yahooFinance.quote(upper + ".NS");
-    if (res && (res.regularMarketPrice || res.currentPrice)) return true;
-
-    // Fallback to .BO
-    const res2 = await yahooFinance.quote(upper + ".BO");
-    if (res2 && (res2.regularMarketPrice || res2.currentPrice)) return true;
-
-    return false;
+    const live = await getLiveMarketData(symbol);
+    return Boolean(
+      live &&
+      Number(live.currentPrice || live.price || 0) > 0 &&
+      live.status !== "FALLBACK_SAFE"
+    );
   } catch (err) {
-    console.log("API failed, allowing:", symbol);
-    return true; // 🔥 NEVER BLOCK USER
-  }
-}
-
-async function fetchWithRetry(fn, retries = 2) {
-  try {
-    return await fn();
-  } catch (e) {
-    if (retries === 0) throw e;
-    console.warn(`[RETRY] API call failed. Retries left: ${retries}. Error: ${e.message}`);
-    await new Promise(r => setTimeout(r, 500));
-    return fetchWithRetry(fn, retries - 1);
+    console.warn("Symbol validation failed:", symbol, err.message);
+    return false;
   }
 }
 
@@ -298,13 +338,19 @@ async function fetchWithRetry(fn, retries = 2) {
  */
 export async function getIndianIndices() {
   try {
+    const cacheKey = "MARKET_INDICES_IN";
+    const cached = await getHybridCache(cacheKey, "LOW");
+    if (cached) return cached;
+
     const symbols = ["^NSEI", "^BSESN"]; // Nifty 50 and Sensex
-    const results = await yahooFinance.quote(symbols);
+    const results = await getOrPopulateSharedCache(cacheKey, CACHE_GROUP_MARKET, ttlSecondsForQuality("LOW"), async () =>
+      withProviderGuard("yahoo", async () => yahooFinance.quote(symbols))
+    );
     
     const nifty = results.find(r => r.symbol === "^NSEI") || {};
     const sensex = results.find(r => r.symbol === "^BSESN") || {};
 
-    return {
+    const payload = {
       nifty: {
         price: nifty.regularMarketPrice,
         change: nifty.regularMarketChangePercent,
@@ -316,6 +362,8 @@ export async function getIndianIndices() {
         changeRaw: sensex.regularMarketChange
       }
     };
+    await setHybridCache(cacheKey, CACHE_GROUP_MARKET, payload, "LOW");
+    return payload;
   } catch (error) {
     console.warn("Failed to fetch indices:", error.message);
     return {
@@ -330,8 +378,16 @@ export async function getIndianIndices() {
  */
 export async function getIndianMarketNews() {
   try {
-    const result = await yahooFinance.search("India stock market", { newsCount: 5 });
-    return result.news.map(n => n.title);
+    const cacheKey = "MARKET_NEWS_IN";
+    const cached = await getHybridCache(cacheKey, "LOW");
+    if (cached) return cached;
+
+    const result = await getOrPopulateSharedCache(cacheKey, CACHE_GROUP_MARKET, ttlSecondsForQuality("LOW"), async () =>
+      withProviderGuard("yahoo", async () => yahooFinance.search("India stock market", { newsCount: 5 }))
+    );
+    const payload = result.news.map(n => n.title);
+    await setHybridCache(cacheKey, CACHE_GROUP_MARKET, payload, "LOW");
+    return payload;
   } catch (error) {
     console.warn("Failed to fetch news:", error.message);
     return ["No recent news available."];
@@ -342,201 +398,214 @@ export async function getIndianMarketNews() {
  */
 export async function getIndianSectors() {
   try {
+    const cacheKey = "MARKET_SECTORS_IN";
+    const cached = await getHybridCache(cacheKey, "LOW");
+    if (cached) return cached;
+
     const symbols = ["^NSEBANK", "^CNXIT"]; // Nifty Bank and Nifty IT
-    const results = await yahooFinance.quote(symbols);
+    const results = await getOrPopulateSharedCache(cacheKey, CACHE_GROUP_MARKET, ttlSecondsForQuality("LOW"), async () =>
+      withProviderGuard("yahoo", async () => yahooFinance.quote(symbols))
+    );
     
     const bank = results.find(r => r.symbol === "^NSEBANK") || {};
     const it = results.find(r => r.symbol === "^CNXIT") || {};
 
-    return {
+    const payload = {
       bank: bank.regularMarketChangePercent || 0,
       it: it.regularMarketChangePercent || 0
     };
+    await setHybridCache(cacheKey, CACHE_GROUP_MARKET, payload, "LOW");
+    return payload;
   } catch (error) {
     console.warn("Failed to fetch sectors:", error.message);
     return { bank: 0, it: 0 };
   }
 }
-
-
-const indianStocks = [
-  "TCS",
-  "INFY",
-  "RELIANCE",
-  "HDFCBANK",
-  "ICICIBANK",
-  "SBIN",
-  "ITC",
-  "LT",
-  "ASIANPAINT",
-  "SUNPHARMA",
-  "WIPRO",
-  "HCLTECH",
-  "TECHM",
-  "TATAMOTORS",
-  "BAJFINANCE"
-];
-
 export async function getCompanyOverview(symbol) {
-  try {
-    const upperSymbol = normalizeSymbol(symbol);
-    const symbolsToTry = buildSymbolVariants(upperSymbol);
+  const upperSymbol = normalizeSymbol(symbol);
+  if (!upperSymbol) return createFallbackOverview(symbol);
 
-    let result = null;
-    let fetchSymbol = "";
+  return withRequestCoalescing(`OVERVIEW_${upperSymbol}`, async () => {
+    const cacheKey = `OVERVIEW_${upperSymbol}`;
+    const cached = await getHybridCache(cacheKey, "HIGH");
+    if (cached) return cached;
 
-    for (const sym of symbolsToTry) {
-        try {
-            console.log(`FETCH ATTEMPT (Overview): ${sym}`);
-            const tempResult = await withTimeout(retry(() => yahooFinance.quoteSummary(sym, {
-                modules: ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile", "calendarEvents"]
-            }), 2, 500), YAHOO_TIMEOUT_MS);
-            const responseKeys = tempResult ? Object.keys(tempResult) : [];
-            console.log(`[OVERVIEW DEBUG] symbol=${sym} keys=${responseKeys.join(",") || "none"}`);
-            console.log(
-              `[OVERVIEW DEBUG] symbol=${sym} modules=${JSON.stringify({
-                hasPrice: !!tempResult?.price,
-                hasSummaryDetail: !!tempResult?.summaryDetail,
-                hasFinancialData: !!tempResult?.financialData,
-                hasDefaultKeyStatistics: !!tempResult?.defaultKeyStatistics,
-                hasAssetProfile: !!tempResult?.assetProfile,
-                hasCalendarEvents: !!tempResult?.calendarEvents
-              })}`
-            );
-            console.log("OVERVIEW RESPONSE:", safeString(JSON.stringify(tempResult, null, 2)));
-            if (tempResult && tempResult.assetProfile) {
-                result = tempResult;
-                fetchSymbol = sym;
-                break;
-            }
-        } catch (e) {
-            console.warn(`[RETRY FAIL] Overview fetch failed for ${sym}:`, e.message);
-            logProviderError("yahoo", { stage: "overview", symbol: sym }, e);
-            if (e?.result) {
-              console.warn("OVERVIEW ERROR RESULT:", safeString(JSON.stringify(e.result, null, 2)));
-            }
+    try {
+      const overview = await getOrPopulateSharedCache(
+        cacheKey,
+        CACHE_GROUP_OVERVIEW,
+        ttlSecondsForQuality("HIGH"),
+        async () => {
+          const symbolsToTry = buildSymbolVariants(upperSymbol);
+
+          let result = null;
+          let fetchSymbol = "";
+
+          for (const sym of symbolsToTry) {
+              try {
+                  console.log(`FETCH ATTEMPT (Overview): ${sym}`);
+                  const tempResult = await withProviderGuard("yahoo", async () =>
+                    withTimeout(retry(() => yahooFinance.quoteSummary(sym, {
+                      modules: ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile", "calendarEvents"]
+                    }), 2, 500), YAHOO_TIMEOUT_MS)
+                  );
+                  const responseKeys = tempResult ? Object.keys(tempResult) : [];
+                  console.log(`[OVERVIEW DEBUG] symbol=${sym} keys=${responseKeys.join(",") || "none"}`);
+                  console.log(
+                    `[OVERVIEW DEBUG] symbol=${sym} modules=${JSON.stringify({
+                      hasPrice: !!tempResult?.price,
+                      hasSummaryDetail: !!tempResult?.summaryDetail,
+                      hasFinancialData: !!tempResult?.financialData,
+                      hasDefaultKeyStatistics: !!tempResult?.defaultKeyStatistics,
+                      hasAssetProfile: !!tempResult?.assetProfile,
+                      hasCalendarEvents: !!tempResult?.calendarEvents
+                    })}`
+                  );
+                  console.log("OVERVIEW RESPONSE:", safeString(JSON.stringify(tempResult, null, 2)));
+                  if (tempResult && tempResult.assetProfile) {
+                      result = tempResult;
+                      fetchSymbol = sym;
+                      break;
+                  }
+              } catch (e) {
+                  console.warn(`[RETRY FAIL] Overview fetch failed for ${sym}:`, e.message);
+                  logProviderError("yahoo", { stage: "overview", symbol: sym }, e);
+                  if (e?.result) {
+                    console.warn("OVERVIEW ERROR RESULT:", safeString(JSON.stringify(e.result, null, 2)));
+                  }
+              }
+          }
+
+          if (!result) {
+              console.warn(`[FALLBACK] Yahoo overview unavailable for ${upperSymbol}. Trying provider chain.`);
+
+              const alphaOverview = await alphaOverviewFetch(upperSymbol);
+              if (alphaOverview) {
+                console.log(`[OVERVIEW] source=alpha symbol=${upperSymbol} status=success`);
+                return alphaOverview;
+              }
+
+              const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
+              if (finnhubOverview) {
+                console.log(`[OVERVIEW] source=finnhub symbol=${upperSymbol} status=success`);
+                return finnhubOverview;
+              }
+
+              console.warn(`[FALLBACK] Data unavailable for ${upperSymbol}`);
+              return createFallbackOverview(upperSymbol);
+          }
+
+          console.log("FETCH SUCCESS (Overview):", fetchSymbol);
+          const safeRaw = safeString(JSON.stringify(result));
+          console.log("RAW YAHOO SUMMARY RESULT:", safeSubstring(safeRaw, 500));
+
+          const {
+            assetProfile = {},
+            calendarEvents = {}
+          } = result;
+
+          const summary = result.summaryDetail || {};
+          const financials = result.financialData || {};
+          const stats = result.defaultKeyStatistics || {};
+          console.log(
+            `[OVERVIEW EXTRACT] symbol=${fetchSymbol} values=${JSON.stringify({
+              trailingPE: summary.trailingPE ?? null,
+              returnOnEquity: financials.returnOnEquity ?? null,
+              profitMargins: financials.profitMargins ?? null,
+              debtToEquity: financials.debtToEquity ?? null,
+              revenueGrowth: financials.revenueGrowth ?? null,
+              earningsGrowth: financials.earningsGrowth ?? null,
+              priceToBook: stats.priceToBook ?? null,
+              beta: stats.beta ?? null
+            })}`
+          );
+          
+          const fundamentals = {
+            pe: summary.trailingPE ?? null,
+            roe: financials.returnOnEquity ?? null,
+            profitMargin: financials.profitMargins ?? null,
+            debtToEquity: financials.debtToEquity ?? null,
+            revenueGrowth: financials.revenueGrowth ?? null,
+            earningsGrowth: financials.earningsGrowth ?? null
+          };
+
+          const format = (val, isPercent = false) => {
+            if (val === null || val === undefined) return "-";
+            return isPercent ? `${(val * 100).toFixed(2)}%` : val.toFixed(2);
+          };
+
+          const companyOverview = {
+            Symbol: fetchSymbol,
+            Name: assetProfile.longName || fetchSymbol,
+            
+            "P/E Ratio": format(fundamentals.pe),
+            "ROE": format(fundamentals.roe, true),
+            "Profit Margin": format(fundamentals.profitMargin, true),
+            "Debt/Equity": format(fundamentals.debtToEquity),
+            "Revenue Growth (YoY)": format(fundamentals.revenueGrowth, true),
+            "Earnings Growth (YoY)": format(fundamentals.earningsGrowth, true),
+
+            // Retain old keys for compatibility with telegram.service.js
+            PERatio: format(fundamentals.pe),
+            ReturnOnEquityTTM: format(fundamentals.roe, true),
+            ProfitMargin: format(fundamentals.profitMargin, true),
+            DebtToEquityRatio: format(fundamentals.debtToEquity),
+            QuarterlyRevenueGrowthYOY: format(fundamentals.revenueGrowth, true),
+            QuarterlyEarningsGrowthYOY: format(fundamentals.earningsGrowth, true),
+
+            MarketCapitalization: summary.marketCap ?? null,
+            PriceToBookRatio: stats.priceToBook ?? null,
+            Beta: stats.beta ?? null,
+            Sector: assetProfile.sector ?? null,
+            Industry: assetProfile.industry ?? null,
+            BusinessSummary: assetProfile.longBusinessSummary ?? null,
+            EarningsDate: calendarEvents?.earnings?.earningsDate?.[0] ?? null
+          };
+
+          console.log("FINAL OVERVIEW:", companyOverview);
+          console.log("DEBUG OVERVIEW FIELDS:", {
+              Symbol: companyOverview.Symbol,
+              PERatio: companyOverview.PERatio,
+              ROE: companyOverview.ReturnOnEquityTTM,
+              RevenueGrowth: companyOverview.QuarterlyRevenueGrowthYOY,
+              EarningsGrowth: companyOverview.QuarterlyEarningsGrowthYOY,
+              Sector: companyOverview.Sector
+          });
+
+          return companyOverview;
+        },
+        {
+          lockOwner: `overview:${upperSymbol}`
         }
+      );
+
+      const overviewQuality =
+        overview?.source === "alpha_vantage" ||
+        overview?.source === "finnhub" ||
+        overview?.status === "FALLBACK_SAFE"
+          ? "LOW"
+          : "HIGH";
+      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW, overview, overviewQuality);
+      return overview;
+    } catch (error) {
+      console.error("--- YAHOO OVERVIEW FAILURE ---");
+      console.error(`SYMBOL: ${symbol}`);
+      console.error(`ERROR: ${error.message}`);
+      console.error(`STACK: ${error.stack}`);
+      logProviderError("yahoo", { stage: "overview-critical", symbol }, error);
+
+      const alphaOverview = await alphaOverviewFetch(upperSymbol);
+      if (alphaOverview) return alphaOverview;
+
+      const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
+      if (finnhubOverview) return finnhubOverview;
+
+      const fallbackOverview = createFallbackOverview(upperSymbol);
+      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW, fallbackOverview, "LOW");
+      return fallbackOverview;
     }
-
-    if (!result) {
-        console.warn(`[FALLBACK] Yahoo overview unavailable for ${upperSymbol}. Trying provider chain.`);
-
-        const alphaOverview = await alphaOverviewFetch(upperSymbol);
-        if (alphaOverview) {
-          console.log(`[OVERVIEW] source=alpha symbol=${upperSymbol} status=success`);
-          return alphaOverview;
-        }
-
-        const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
-        if (finnhubOverview) {
-          console.log(`[OVERVIEW] source=finnhub symbol=${upperSymbol} status=success`);
-          return finnhubOverview;
-        }
-
-        console.warn(`[FALLBACK] Data unavailable for ${upperSymbol}`);
-        return createFallbackOverview(upperSymbol);
-    }
-
-    console.log("FETCH SUCCESS (Overview):", fetchSymbol);
-    const safeRaw = safeString(JSON.stringify(result));
-    console.log("RAW YAHOO SUMMARY RESULT:", safeSubstring(safeRaw, 500));
-
-    const {
-      assetProfile = {},
-      calendarEvents = {}
-    } = result;
-
-    const summary = result.summaryDetail || {};
-    const financials = result.financialData || {};
-    const stats = result.defaultKeyStatistics || {};
-    console.log(
-      `[OVERVIEW EXTRACT] symbol=${fetchSymbol} values=${JSON.stringify({
-        trailingPE: summary.trailingPE ?? null,
-        returnOnEquity: financials.returnOnEquity ?? null,
-        profitMargins: financials.profitMargins ?? null,
-        debtToEquity: financials.debtToEquity ?? null,
-        revenueGrowth: financials.revenueGrowth ?? null,
-        earningsGrowth: financials.earningsGrowth ?? null,
-        priceToBook: stats.priceToBook ?? null,
-        beta: stats.beta ?? null
-      })}`
-    );
-    
-    const fundamentals = {
-      pe: summary.trailingPE ?? null,
-      roe: financials.returnOnEquity ?? null,
-      profitMargin: financials.profitMargins ?? null,
-      debtToEquity: financials.debtToEquity ?? null,
-      revenueGrowth: financials.revenueGrowth ?? null,
-      earningsGrowth: financials.earningsGrowth ?? null
-    };
-
-    const format = (val, isPercent = false) => {
-      if (val === null || val === undefined) return "-";
-      return isPercent ? `${(val * 100).toFixed(2)}%` : val.toFixed(2);
-    };
-
-    const companyOverview = {
-      Symbol: fetchSymbol,
-      Name: assetProfile.longName || fetchSymbol,
-      
-      "P/E Ratio": format(fundamentals.pe),
-      "ROE": format(fundamentals.roe, true),
-      "Profit Margin": format(fundamentals.profitMargin, true),
-      "Debt/Equity": format(fundamentals.debtToEquity),
-      "Revenue Growth (YoY)": format(fundamentals.revenueGrowth, true),
-      "Earnings Growth (YoY)": format(fundamentals.earningsGrowth, true),
-
-      // Retain old keys for compatibility with telegram.service.js
-      PERatio: format(fundamentals.pe),
-      ReturnOnEquityTTM: format(fundamentals.roe, true),
-      ProfitMargin: format(fundamentals.profitMargin, true),
-      DebtToEquityRatio: format(fundamentals.debtToEquity),
-      QuarterlyRevenueGrowthYOY: format(fundamentals.revenueGrowth, true),
-      QuarterlyEarningsGrowthYOY: format(fundamentals.earningsGrowth, true),
-
-      MarketCapitalization: summary.marketCap ?? null,
-      PriceToBookRatio: stats.priceToBook ?? null,
-      Beta: stats.beta ?? null,
-      Sector: assetProfile.sector ?? null,
-      Industry: assetProfile.industry ?? null,
-      BusinessSummary: assetProfile.longBusinessSummary ?? null,
-      EarningsDate: calendarEvents?.earnings?.earningsDate?.[0] ?? null
-    };
-
-    console.log("FINAL OVERVIEW:", companyOverview);
-    console.log("DEBUG OVERVIEW FIELDS:", {
-        Symbol: companyOverview.Symbol,
-        PERatio: companyOverview.PERatio,
-        ROE: companyOverview.ReturnOnEquityTTM,
-        RevenueGrowth: companyOverview.QuarterlyRevenueGrowthYOY,
-        EarningsGrowth: companyOverview.QuarterlyEarningsGrowthYOY,
-        Sector: companyOverview.Sector
-    });
-
-    return companyOverview;
-
-  } catch (error) {
-    console.error("--- YAHOO OVERVIEW FAILURE ---");
-    console.error(`SYMBOL: ${symbol}`);
-    console.error(`ERROR: ${error.message}`);
-    console.error(`STACK: ${error.stack}`);
-    logProviderError("yahoo", { stage: "overview-critical", symbol }, error);
-    
-    // Return at least the symbol to prevent downstream "UNKNOWN" errors
-    const upperSymbol = safeString(symbol).toUpperCase().replace(/\s+/g, "");
-
-    const alphaOverview = await alphaOverviewFetch(upperSymbol);
-    if (alphaOverview) return alphaOverview;
-
-    const finnhubOverview = await finnhubOverviewFetch(upperSymbol);
-    if (finnhubOverview) return finnhubOverview;
-
-    return createFallbackOverview(upperSymbol);
-  }
+  });
 }
-
-const priceCache = new Map();
 
 async function getMarketStatusIST() {
     const now = new Date();
@@ -630,7 +699,9 @@ async function alphaQuoteFetch(symbol) {
     const avSymbol = toAlphaSymbol(symbol);
     const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${avSymbol}&apikey=${apiKey}`;
 
-    const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+    const payload = await withProviderGuard("alpha_vantage", async () =>
+      fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+    );
     const quote = payload["Global Quote"];
     
     if (!quote || !quote["05. price"]) return null;
@@ -655,7 +726,9 @@ async function alphaOverviewFetch(symbol) {
 
     const baseSymbol = toBaseTicker(symbol);
     const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${baseSymbol}&apikey=${apiKey}`;
-    const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+    const payload = await withProviderGuard("alpha_vantage", async () =>
+      fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+    );
     if (!payload || !payload.Symbol) return null;
     return normalizeAlphaOverviewPayload(payload, symbol);
   } catch (err) {
@@ -678,7 +751,9 @@ async function twelveDataQuoteFetch(symbol) {
 
     for (const url of attempts) {
       try {
-        const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+        const payload = await withProviderGuard("twelvedata", async () =>
+          fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+        );
         if (payload?.status === "error") continue;
         const close = Number(payload?.close);
         if (Number.isFinite(close) && close > 0) {
@@ -712,7 +787,9 @@ async function finnhubQuoteFetch(symbol) {
     for (const candidate of attempts) {
       try {
         const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`;
-        const payload = await fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS);
+        const payload = await withProviderGuard("finnhub", async () =>
+          fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+        );
         const price = Number(payload?.c || 0);
         if (Number.isFinite(price) && price > 0) {
           return {
@@ -745,8 +822,12 @@ async function finnhubOverviewFetch(symbol) {
     for (const candidate of attempts) {
       try {
         const [profile, basics] = await Promise.all([
-          fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS),
-          fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(candidate)}&metric=all&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS)
+          withProviderGuard("finnhub", async () =>
+            fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS)
+          ),
+          withProviderGuard("finnhub", async () =>
+            fetchJsonWithTimeout(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(candidate)}&metric=all&token=${apiKey}`, {}, HTTP_PROVIDER_TIMEOUT_MS)
+          )
         ]);
 
         const normalized = normalizeFinnhubOverviewPayload({
@@ -766,163 +847,240 @@ async function finnhubOverviewFetch(symbol) {
 }
 
 export async function getLiveMarketData(symbol) {
-  const startTime = Date.now();
   const upperSymbol = normalizeSymbol(symbol);
+  if (!upperSymbol) return createFallbackLiveData(symbol);
 
-  try {
-    const marketStatus = await getMarketStatusIST();
+  return withRequestCoalescing(`LIVE_${upperSymbol}`, async () => {
+    const startTime = Date.now();
+    const cacheKey = `LIVE_${upperSymbol}`;
 
-    // 1. CHECK CACHE (Institutional Guard)
-    const cached = getCached(`LIVE_${upperSymbol}`);
-    if (cached) {
-      const age = Math.floor((Date.now() - cached.timestamp) / 1000);
-      const shouldBypassCache = marketStatus.isPreMarket || marketStatus.isPostMarket;
-      if (!shouldBypassCache) {
-        console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
-        return { ...cached, dataAge: age, dataConfidence: "CACHED" };
+    try {
+      const marketStatus = await getMarketStatusIST();
+
+      // 1. CHECK CACHE (Institutional Guard)
+      const cached = await getHybridCache(cacheKey, "HIGH");
+      if (cached) {
+        const age = Math.floor((Date.now() - cached.timestamp) / 1000);
+        const shouldBypassCache = marketStatus.isPreMarket || marketStatus.isPostMarket;
+        if (!shouldBypassCache) {
+          console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
+          return { ...cached, dataAge: age, dataConfidence: "CACHED" };
+        }
+        console.log(
+          `[CACHE] bypass symbol=${upperSymbol} age=${age}s reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
+        );
       }
-      console.log(
-        `[CACHE] bypass symbol=${upperSymbol} age=${age}s reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
-      );
-    }
 
-    const symbolsToTry = buildSymbolVariants(upperSymbol);
+      const finalData = await getOrPopulateSharedCache(
+        cacheKey,
+        CACHE_GROUP_LIVE,
+        ttlSecondsForQuality("LOW"),
+        async () => {
+          const symbolsToTry = buildSymbolVariants(upperSymbol);
 
-    let result = null;
-    let fetchSymbol = "";
-    let priceSource = "FAILED";
-    let priceField = "UNKNOWN";
-    let dataConfidence = "LIVE_VERIFIED";
-    let completeness = "FULL";
+          let result = null;
+          let fetchSymbol = "";
+          let priceSource = "FAILED";
+          let priceField = "UNKNOWN";
+          let dataConfidence = "LIVE_VERIFIED";
+          let completeness = "FULL";
 
-    // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
-    const yahooAvailable = Date.now() >= yahooCooldownUntil;
-    if (yahooAvailable) {
-      for (const sym of symbolsToTry) {
-          try {
-              console.log(`[DATA] attempt=yahoo symbol=${sym}`);
-              const tempResult = await withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), YAHOO_TIMEOUT_MS);
-              const resolvedYahooPrice = resolveBestPrice(tempResult);
-              if (tempResult && resolvedYahooPrice.value > 0) {
-                  result = tempResult;
-                  fetchSymbol = sym;
-                  priceSource = "YAHOO";
-                  priceField = resolvedYahooPrice.field || "UNKNOWN";
-                  reportYahooStatus(true);
-                  break;
-              }
-          } catch (e) {
-              console.warn(`[DATA] source=yahoo symbol=${sym} status=fail error="${e.message}"`);
-              logProviderError("yahoo", { stage: "quote", symbol: sym }, e);
+          // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker
+          const yahooAvailable = Date.now() >= yahooCooldownUntil;
+          if (yahooAvailable) {
+            for (const sym of symbolsToTry) {
+                try {
+                    console.log(`[DATA] attempt=yahoo symbol=${sym}`);
+                    const tempResult = await withProviderGuard("yahoo", async () =>
+                      withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), YAHOO_TIMEOUT_MS)
+                    );
+                    const resolvedYahooPrice = resolveBestPrice(tempResult);
+                    if (tempResult && resolvedYahooPrice.value > 0) {
+                        result = tempResult;
+                        fetchSymbol = sym;
+                        priceSource = "YAHOO";
+                        priceField = resolvedYahooPrice.field || "UNKNOWN";
+                        reportYahooStatus(true);
+                        break;
+                    }
+                } catch (e) {
+                    console.warn(`[DATA] source=yahoo symbol=${sym} status=fail error="${e.message}"`);
+                    logProviderError("yahoo", { stage: "quote", symbol: sym }, e);
+                }
+                await new Promise(r => setTimeout(r, 300));
+            }
+          } else {
+            console.warn(`[CIRCUIT BREAKER] Skipping Yahoo for ${upperSymbol} (cooling down)`);
           }
-          await new Promise(r => setTimeout(r, 300));
-      }
-    } else {
-      console.warn(`[CIRCUIT BREAKER] Skipping Yahoo for ${upperSymbol} (cooling down)`);
+
+          if (!result) reportYahooStatus(false);
+
+          // 3. FALLBACK FETCH (Alpha Vantage -> Twelve Data -> Finnhub)
+          if (!result) {
+            console.log(`[DATA] attempt=alpha symbol=${upperSymbol}`);
+            result = await alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
+            if (result) {
+              priceSource = "ALPHA_VANTAGE";
+              dataConfidence = "DEGRADED_SOURCE";
+              completeness = "PARTIAL";
+              fetchSymbol = result.symbol;
+              dataMetrics.alphaSuccess++;
+              console.log(`[DATA] source=alpha symbol=${upperSymbol} status=fallback`);
+            }
+          }
+
+          if (!result) {
+            console.log(`[DATA] attempt=twelvedata symbol=${upperSymbol}`);
+            result = await twelveDataQuoteFetch(upperSymbol);
+            if (result) {
+              priceSource = "TWELVEDATA";
+              dataConfidence = "DEGRADED_SOURCE";
+              completeness = "PARTIAL";
+              fetchSymbol = result.symbol;
+              console.log(`[DATA] source=twelvedata symbol=${upperSymbol} status=fallback`);
+            }
+          }
+
+          if (!result) {
+            console.log(`[DATA] attempt=finnhub symbol=${upperSymbol}`);
+            result = await finnhubQuoteFetch(upperSymbol);
+            if (result) {
+              priceSource = "FINNHUB";
+              dataConfidence = "DEGRADED_SOURCE";
+              completeness = "PARTIAL";
+              fetchSymbol = result.symbol;
+              console.log(`[DATA] source=finnhub symbol=${upperSymbol} status=fallback`);
+            }
+          }
+
+          const fetchDuration = Date.now() - startTime;
+          const resolvedPrice = resolveBestPrice(result);
+          let currentPrice = resolvedPrice.value;
+          let previousClose = toPositiveNumber(result?.regularMarketPreviousClose) || toPositiveNumber(result?.previousClose) || 0;
+          const latencyBlocked = fetchDuration > 2500;
+
+          console.log("PRICE FIELDS:", {
+            symbol: fetchSymbol || upperSymbol,
+            regularMarketPrice: result?.regularMarketPrice,
+            regularMarketPreviousClose: result?.regularMarketPreviousClose,
+            postMarketPrice: result?.postMarketPrice,
+            preMarketPrice: result?.preMarketPrice,
+            currentPrice: result?.currentPrice,
+            previousClose: result?.previousClose,
+            chosenPriceField: resolvedPrice.field,
+            chosenPrice: resolvedPrice.value
+          });
+
+          if (!currentPrice && previousClose) {
+              currentPrice = previousClose;
+              priceField = "regularMarketPreviousClose";
+              if (priceSource === "FAILED") priceSource = "PREVIOUS_CLOSE";
+          }
+
+          if (resolvedPrice.field) priceField = resolvedPrice.field;
+
+          if (!currentPrice || currentPrice === 0) {
+              console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
+              return createFallbackLiveData(upperSymbol);
+          }
+
+          const finalData = {
+              symbol: fetchSymbol || upperSymbol,
+              price: currentPrice,
+              currentPrice: currentPrice,
+              previousClose: previousClose,
+              change: result?.regularMarketChangePercent || 0,
+              changeRaw: result?.regularMarketChange || 0,
+              isMarketOpen: marketStatus.isMarketOpen,
+              marketStatus,
+              priceSource,
+              priceField,
+              dataConfidence,
+              completeness,
+              latencyBlocked,
+              fetchDuration,
+              dataAge: 0,
+              timestamp: Date.now(),
+              status: "success"
+          };
+
+          logMetric("provider.market_data.latency_ms", fetchDuration, {
+            provider: priceSource,
+            symbol: upperSymbol
+          });
+          console.log(`[DATA] source=${priceSource.toLowerCase()} symbol=${upperSymbol} status=success latency=${fetchDuration}ms`);
+          return finalData;
+        },
+        {
+          lockOwner: `live:${upperSymbol}`,
+          fillLockTtlSeconds: 10
+        }
+      );
+
+      await setHybridCache(cacheKey, CACHE_GROUP_LIVE, finalData, finalData.priceSource === "YAHOO" ? "HIGH" : "LOW");
+      return finalData;
+
+    } catch (error) {
+      console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
+      logProviderError("market-data", { stage: "critical", symbol }, error);
+      const fallback = createFallbackLiveData(upperSymbol);
+      await setHybridCache(cacheKey, CACHE_GROUP_LIVE, fallback, "LOW");
+      return fallback;
     }
+  });
+}
 
-    if (!result) reportYahooStatus(false);
+export async function getHistoricalCandles(symbol, options = {}) {
+  const upperSymbol = normalizeSymbol(symbol);
+  if (!upperSymbol) return [];
 
-    // 3. FALLBACK FETCH (Alpha Vantage -> Twelve Data -> Finnhub)
-    if (!result) {
-      console.log(`[DATA] attempt=alpha symbol=${upperSymbol}`);
-      result = await alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
-      if (result) {
-        priceSource = "ALPHA_VANTAGE";
-        dataConfidence = "DEGRADED_SOURCE";
-        completeness = "PARTIAL";
-        fetchSymbol = result.symbol;
-        dataMetrics.alphaSuccess++;
-        console.log(`[DATA] source=alpha symbol=${upperSymbol} status=fallback`);
-      }
-    }
+  const days = Number(options.days || 320);
+  const interval = options.interval || "1d";
+  const cacheKey = `HISTORICAL_${upperSymbol}_${days}_${interval}`;
 
-    if (!result) {
-      console.log(`[DATA] attempt=twelvedata symbol=${upperSymbol}`);
-      result = await twelveDataQuoteFetch(upperSymbol);
-      if (result) {
-        priceSource = "TWELVEDATA";
-        dataConfidence = "DEGRADED_SOURCE";
-        completeness = "PARTIAL";
-        fetchSymbol = result.symbol;
-        console.log(`[DATA] source=twelvedata symbol=${upperSymbol} status=fallback`);
-      }
-    }
+  return withRequestCoalescing(cacheKey, async () => {
+    const cached = await getHybridCache(cacheKey, "HIGH");
+    if (cached) return Array.isArray(cached) ? cached : [];
 
-    if (!result) {
-      console.log(`[DATA] attempt=finnhub symbol=${upperSymbol}`);
-      result = await finnhubQuoteFetch(upperSymbol);
-      if (result) {
-        priceSource = "FINNHUB";
-        dataConfidence = "DEGRADED_SOURCE";
-        completeness = "PARTIAL";
-        fetchSymbol = result.symbol;
-        console.log(`[DATA] source=finnhub symbol=${upperSymbol} status=fallback`);
-      }
-    }
+    const period2 = new Date();
+    const period1 = new Date();
+    period1.setDate(period2.getDate() - days);
 
-    const fetchDuration = Date.now() - startTime;
-    const resolvedPrice = resolveBestPrice(result);
-    let currentPrice = resolvedPrice.value;
-    let previousClose = toPositiveNumber(result?.regularMarketPreviousClose) || toPositiveNumber(result?.previousClose) || 0;
-    const latencyBlocked = fetchDuration > 2500;
-
-    console.log("PRICE FIELDS:", {
-      symbol: fetchSymbol || upperSymbol,
-      regularMarketPrice: result?.regularMarketPrice,
-      regularMarketPreviousClose: result?.regularMarketPreviousClose,
-      postMarketPrice: result?.postMarketPrice,
-      preMarketPrice: result?.preMarketPrice,
-      currentPrice: result?.currentPrice,
-      previousClose: result?.previousClose,
-      chosenPriceField: resolvedPrice.field,
-      chosenPrice: resolvedPrice.value
-    });
-
-    if (!currentPrice && previousClose) {
-        currentPrice = previousClose;
-        priceField = "regularMarketPreviousClose";
-        if (priceSource === "FAILED") priceSource = "PREVIOUS_CLOSE";
-    }
-
-    if (resolvedPrice.field) priceField = resolvedPrice.field;
-
-    if (!currentPrice || currentPrice === 0) {
-        console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
-        return createFallbackLiveData(upperSymbol);
-    }
-
-    const finalData = {
-        symbol: fetchSymbol || upperSymbol,
-        price: currentPrice,
-        currentPrice: currentPrice,
-        previousClose: previousClose,
-        change: result?.regularMarketChangePercent || 0,
-        changeRaw: result?.regularMarketChange || 0,
-        isMarketOpen: marketStatus.isMarketOpen,
-        marketStatus,
-        priceSource,
-        priceField,
-        dataConfidence,
-        completeness,
-        latencyBlocked,
-        fetchDuration,
-        dataAge: 0,
-        timestamp: Date.now(),
-        status: "success"
+    const queryOptions = {
+      period1: period1.toISOString().split("T")[0],
+      period2: period2.toISOString().split("T")[0],
+      interval
     };
 
-    // 5. SELECTIVE CACHING
-    setCached(`LIVE_${upperSymbol}`, finalData, priceSource === "YAHOO" ? "HIGH" : "LOW");
-    
-    console.log(`[DATA] source=${priceSource.toLowerCase()} symbol=${upperSymbol} status=success latency=${fetchDuration}ms`);
-    return finalData;
+    const candles = await getOrPopulateSharedCache(
+      cacheKey,
+      CACHE_GROUP_HISTORICAL,
+      ttlSecondsForQuality("HIGH"),
+      async () => {
+        const symbolsToTry = buildSymbolVariants(upperSymbol);
+        for (const sym of symbolsToTry) {
+          try {
+            const tempHistory = await withProviderGuard("yahoo", async () =>
+              withTimeout(retry(() => yahooFinance.historical(sym, queryOptions), 1, 500), YAHOO_TIMEOUT_MS)
+            );
+            if (Array.isArray(tempHistory) && tempHistory.length >= 20) {
+              return tempHistory;
+            }
+          } catch (error) {
+            logProviderError("yahoo", { stage: "historical", symbol: sym }, error);
+          }
+        }
+        return [];
+      },
+      {
+        lockOwner: `historical:${upperSymbol}:${days}:${interval}`,
+        fillLockTtlSeconds: 15
+      }
+    );
 
-  } catch (error) {
-    console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
-    logProviderError("market-data", { stage: "critical", symbol }, error);
-    return createFallbackLiveData(upperSymbol);
-  }
+    await setHybridCache(cacheKey, CACHE_GROUP_HISTORICAL, candles, "HIGH");
+    return Array.isArray(candles) ? candles : [];
+  });
 }
 
 // --- Warm Cache Strategy (Institutional Boot) ---

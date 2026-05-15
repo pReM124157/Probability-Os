@@ -1,4 +1,4 @@
-import { Telegraf, Markup, session } from "telegraf";
+import { Telegraf, Markup } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { safeObject, safeString, safeSubstring } from "../core/safety.js";
 import { parseInput } from "../core/router.js";
@@ -15,7 +15,7 @@ process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
 
-import { getCompanyOverview, checkSymbolExists } from "./marketData.service.js";
+import { checkSymbolExists } from "./marketData.service.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
 import { buildPortfolioReview } from "../agents/portfolioReview.agent.js";
@@ -31,22 +31,39 @@ import { handleUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
 import { formatIST } from "../utils/time.js";
 import { formatPortfolioReview } from "../core/portfolioFormatter.js";
+import { buildAnalysisContext } from "../core/analysisContext.js";
+import {
+  claimEphemeralKey,
+  consumeState,
+  putState
+} from "./distributedState.service.js";
+import { createTraceId, logError, logEvent } from "./telemetry.service.js";
+import {
+  claimSchedulerLease,
+  getInstanceId,
+  releaseSchedulerLease,
+  renewSchedulerLease
+} from "./schedulerLease.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-bot.use(session());
-
-const userStates = new Map();
-
-// Rate Limiting (Institutional Safety)
-const lastCall = new Map();
 const THROTTLE_MS = 2000; // 2s cooldown
+const ANALYZE_STATE_TTL_SECONDS = 10 * 60;
+const CHAT_MEMORY_TTL_SECONDS = 24 * 60 * 60;
+const BOT_LEASE_NAME = "telegram_bot_polling";
+const BOT_LEASE_TTL_SECONDS = 120;
+const BOT_LEASE_HEARTBEAT_MS = 30000;
+const BOT_LEASE_RETRY_MS = 15000;
+const BOT_INSTANCE_ID = getInstanceId();
+let botStarted = false;
+let botSupervisorStarted = false;
+let botHeartbeatTimer = null;
+let botSupervisorTimer = null;
+let botLeaseOwner = false;
+let botLaunchInFlight = false;
 
-function canCall(userId) {
-  const now = Date.now();
-  const last = lastCall.get(userId) || 0;
-  if (now - last < THROTTLE_MS) return false;
-  lastCall.set(userId, now);
-  return true;
+async function canCall(userId) {
+  const ownerId = createTraceId(`throttle_${userId}`);
+  return claimEphemeralKey("telegram_throttle", userId, ownerId, Math.ceil(THROTTLE_MS / 1000));
 }
 
 
@@ -312,7 +329,7 @@ async function performAnalysis(chatId, symbol, footer = "") {
   console.log("[ANALYZE]", { symbol });
 
   const result = await runAnalysisSafe(symbol, async (sym) => {
-    const stockData = await getCompanyOverview(sym);
+    const { stockData } = await buildAnalysisContext(sym);
     console.log("MASTER AGENT CALLED");
     console.log("MESSAGE:", sym);
     const data = await masterAgent(stockData, { strictValidation: true });
@@ -546,7 +563,10 @@ bot.on("text", async (ctx) => {
   try {
     const chatId = ctx.chat.id.toString();
 
-    if (!canCall(ctx.chat.id)) return;
+    const traceId = createTraceId("tg");
+    logEvent("telegram.message.received", { traceId, chatId });
+
+    if (!(await canCall(ctx.chat.id))) return;
 
     const text = ctx.message.text?.trim() || "";
     if (!text) return;
@@ -554,14 +574,15 @@ bot.on("text", async (ctx) => {
     // ── Single DB fetch ─────────────────────────────────────────────
     let { data: user } = await supabase
       .from("subscribers")
-      .select("plan, is_pro, subscription_end")
+      .select("plan, is_pro, subscription_end, status, expires_at")
       .eq("telegram_chat_id", chatId)
       .maybeSingle();
 
+    const effectiveExpiry = user?.expires_at || user?.subscription_end || null;
     if (
       user?.plan === "PRO" &&
-      user?.subscription_end &&
-      new Date(user.subscription_end) < new Date()
+      effectiveExpiry &&
+      new Date(effectiveExpiry) < new Date()
     ) {
       console.log("⚠️ Auto downgrade triggered:", chatId);
       await supabase
@@ -569,6 +590,8 @@ bot.on("text", async (ctx) => {
         .update({
           plan: "FREE",
           is_pro: false,
+          status: "expired",
+          expires_at: null,
           subscription_end: null,
           free_usage_count: 0,
           usage_started_at: new Date()
@@ -592,6 +615,10 @@ bot.on("text", async (ctx) => {
     if (!proUser) {
       usage = await handleUsage(chatId);
       if (!usage.allowed) {
+        if (usage.reason === "USAGE_UNAVAILABLE") {
+          await ctx.reply("⚠️ Usage control is temporarily unavailable. Please try again shortly.");
+          return;
+        }
         const resetIST = new Date(usage.reset_time).toLocaleString("en-IN", {
           timeZone: "Asia/Kolkata",
           day: "numeric",
@@ -638,7 +665,7 @@ bot.on("text", async (ctx) => {
       if (!isValidSymbol(ticker)) { await send("Please enter a valid ticker like TCS, RELIANCE, INFY"); return; }
       await bot.telegram.sendMessage(chatId, `⚡ Quick scan: ${ticker}...`);
       try {
-        const stockData = await getCompanyOverview(ticker);
+        const { stockData } = await buildAnalysisContext(ticker);
         const result = await masterAgent(stockData);
         const quickConfidence = clampPublicConfidence(result.decision?.finalConfidenceScore || 0);
         const msg =
@@ -663,7 +690,10 @@ bot.on("text", async (ctx) => {
       const t2 = parts[2].trim().toUpperCase();
       await bot.telegram.sendMessage(chatId, `⚖ Comparing ${t1} vs ${t2}...`);
       try {
-        const [s1, s2] = await Promise.all([getCompanyOverview(t1), getCompanyOverview(t2)]);
+        const [{ stockData: s1 }, { stockData: s2 }] = await Promise.all([
+          buildAnalysisContext(t1),
+          buildAnalysisContext(t2)
+        ]);
         const [r1, r2] = await Promise.all([masterAgent(s1), masterAgent(s2)]);
         const sc1 = clampPublicConfidence(r1.decision?.finalConfidenceScore || 0);
         const sc2 = clampPublicConfidence(r2.decision?.finalConfidenceScore || 0);
@@ -765,8 +795,8 @@ bot.on("text", async (ctx) => {
     }
 
     // ── AWAITING_STOCK state ────────────────────────────────────────
-    if (userStates.get(chatId) === "AWAITING_STOCK") {
-      userStates.delete(chatId);
+    const pendingAnalyzeState = await consumeState("telegram_flow", chatId);
+    if (pendingAnalyzeState?.state === "AWAITING_STOCK") {
       const ticker = text.trim().toUpperCase();
       if (!isValidSymbol(ticker)) { await send("Please enter a valid stock ticker like TCS, RELIANCE, INFY"); return; }
       await performAnalysis(chatId, ticker, footer);
@@ -778,7 +808,7 @@ bot.on("text", async (ctx) => {
 
     if (intent.type === "analyze") {
       if (!intent.symbol) {
-        userStates.set(chatId, "AWAITING_STOCK");
+        await putState("telegram_flow", chatId, { state: "AWAITING_STOCK" }, ANALYZE_STATE_TTL_SECONDS);
         await bot.telegram.sendMessage(chatId, "Please enter the stock ticker (e.g. TCS, RELIANCE)");
         return;
       }
@@ -830,23 +860,109 @@ bot.on("text", async (ctx) => {
 // ─────────────────────────────────────────────
 
 export const startBot = () => {
-  if (global.botStarted) {
-    console.log("⚠️ Bot already initialized. Skipping...");
+  if (botSupervisorStarted) {
+    console.log("⚠️ Bot supervisor already initialized. Skipping...");
     return;
   }
-  global.botStarted = true;
+  botSupervisorStarted = true;
 
-  bot.launch().catch((err) => {
-    if (err.response && err.response.error_code === 409) {
-      console.log("⚠️ Telegram Bot already running (409 Conflict). Skipping launch.");
-    } else {
-      console.error("❌ Telegram Bot Launch Error:", err);
+  const ensureLease = async () => {
+    if (botLaunchInFlight) return;
+
+    try {
+      const claimed = await claimSchedulerLease(BOT_LEASE_NAME, BOT_LEASE_TTL_SECONDS);
+      if (!claimed) {
+        if (botLeaseOwner) {
+          logEvent("telegram.bot.lease.lost", { ownerId: BOT_INSTANCE_ID });
+          stopBot();
+        }
+        botLeaseOwner = false;
+        return;
+      }
+
+      if (!botLeaseOwner) {
+        logEvent("telegram.bot.lease.claimed", { ownerId: BOT_INSTANCE_ID });
+      }
+      botLeaseOwner = true;
+
+      if (!botStarted) {
+        botLaunchInFlight = true;
+        try {
+          await bot.launch();
+          botStarted = true;
+          logEvent("telegram.bot.started", { ownerId: BOT_INSTANCE_ID });
+        } catch (err) {
+          if (err.response && err.response.error_code === 409) {
+            logEvent("telegram.bot.conflict", { ownerId: BOT_INSTANCE_ID });
+          } else {
+            logError("telegram.bot.launch_error", err, { ownerId: BOT_INSTANCE_ID });
+          }
+        } finally {
+          botLaunchInFlight = false;
+        }
+      }
+
+      if (!botHeartbeatTimer) {
+        botHeartbeatTimer = setInterval(async () => {
+          try {
+            const renewed = await renewSchedulerLease(BOT_LEASE_NAME, BOT_LEASE_TTL_SECONDS);
+            if (!renewed) {
+              logEvent("telegram.bot.lease.renew_failed", { ownerId: BOT_INSTANCE_ID });
+              stopBot();
+              botLeaseOwner = false;
+            }
+          } catch (error) {
+            logError("telegram.bot.lease.heartbeat_error", error, { ownerId: BOT_INSTANCE_ID });
+            stopBot();
+            botLeaseOwner = false;
+          }
+        }, BOT_LEASE_HEARTBEAT_MS);
+      }
+    } catch (error) {
+      logError("telegram.bot.lease.claim_error", error, { ownerId: BOT_INSTANCE_ID });
     }
-  });
-  console.log("✅ Telegram Bot Started");
+  };
+
+  ensureLease();
+  botSupervisorTimer = setInterval(ensureLease, BOT_LEASE_RETRY_MS);
+  console.log("✅ Telegram Bot Supervisor Started");
 };
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+export const stopBot = () => {
+  if (botHeartbeatTimer) {
+    clearInterval(botHeartbeatTimer);
+    botHeartbeatTimer = null;
+  }
+
+  if (botStarted) {
+    bot.stop("LEASE_LOST");
+    botStarted = false;
+    logEvent("telegram.bot.stopped", { ownerId: BOT_INSTANCE_ID });
+  }
+};
+
+export const shutdownBotSupervisor = async () => {
+  if (botSupervisorTimer) {
+    clearInterval(botSupervisorTimer);
+    botSupervisorTimer = null;
+  }
+  botSupervisorStarted = false;
+  stopBot();
+  if (botLeaseOwner) {
+    try {
+      await releaseSchedulerLease(BOT_LEASE_NAME);
+    } catch (error) {
+      logError("telegram.bot.lease.release_error", error, { ownerId: BOT_INSTANCE_ID });
+    }
+  }
+  botLeaseOwner = false;
+};
+
+process.once("SIGINT", () => {
+  shutdownBotSupervisor().finally(() => bot.stop("SIGINT"));
+});
+process.once("SIGTERM", () => {
+  shutdownBotSupervisor().finally(() => bot.stop("SIGTERM"));
+});
 
 export default bot;

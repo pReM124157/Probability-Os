@@ -1,5 +1,7 @@
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
+import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
+import { logError } from "./telemetry.service.js";
 
 dotenv.config();
 
@@ -218,6 +220,19 @@ export const getInstitutionalAnalysis = async (data) => {
     }
   }
 
+  try {
+    const shared = await getSharedCache(`INSTITUTIONAL_ANALYSIS_${cacheKey}`);
+    if (shared) {
+      llmCache.set(cacheKey, {
+        data: shared,
+        timestamp: Date.now()
+      });
+      return shared;
+    }
+  } catch (error) {
+    logError("llm.shared_cache.read_error", error, { ticker });
+  }
+
   const prompt = `
 You are a hedge fund equity analyst. 
 Make strict, data-driven decisions using ONLY provided numbers. 
@@ -254,33 +269,51 @@ Reason: (2-line max, data-based)
 Recommended Action: (Short instruction)
 `.trim();
 
-  const response = await generateInvestmentAnalysis(prompt);
+  const result = await getOrPopulateSharedCache(
+    `INSTITUTIONAL_ANALYSIS_${cacheKey}`,
+    "institutional_analysis",
+    Math.floor(CACHE_DURATION / 1000),
+    async () => {
+      const response = await generateInvestmentAnalysis(prompt);
 
-  // Parse result
-  const decision = response.match(/Final Decision:\s*(.*)/i)?.[1] || "HOLD";
-  const confidence = parseInt(response.match(/Confidence Score:\s*(\d+)/i)?.[1]) || 5;
-  const risk = response.match(/Risk Level:\s*(.*)/i)?.[1] || "MEDIUM";
-  const priority = response.match(/Priority Level:\s*(.*)/i)?.[1] || "MEDIUM";
-  const rank = parseInt(response.match(/Rank Score:\s*(\d+)/i)?.[1]) || 5;
-  const allocation = response.match(/Suggested Allocation:\s*(.*)/i)?.[1] || "0%";
-  const reason = response.match(/Reason:\s*([\s\S]*?)(?=Recommended Action:|$)/i)?.[1]?.trim() || "No reason.";
-  const action = response.match(/Recommended Action:\s*([\s\S]*?)$/i)?.[1]?.trim() || "Monitor.";
+      // Parse result
+      const decision = response.match(/Final Decision:\s*(.*)/i)?.[1] || "HOLD";
+      const confidence = parseInt(response.match(/Confidence Score:\s*(\d+)/i)?.[1]) || 5;
+      const risk = response.match(/Risk Level:\s*(.*)/i)?.[1] || "MEDIUM";
+      const priority = response.match(/Priority Level:\s*(.*)/i)?.[1] || "MEDIUM";
+      const rank = parseInt(response.match(/Rank Score:\s*(\d+)/i)?.[1]) || 5;
+      const allocation = response.match(/Suggested Allocation:\s*(.*)/i)?.[1] || "0%";
+      const reason = response.match(/Reason:\s*([\s\S]*?)(?=Recommended Action:|$)/i)?.[1]?.trim() || "No reason.";
+      const action = response.match(/Recommended Action:\s*([\s\S]*?)$/i)?.[1]?.trim() || "Monitor.";
 
-  const result = {
-    finalDecision: decision.toUpperCase(),
-    finalConfidenceScore: confidence,
-    riskLevel: risk.toUpperCase(),
-    priorityLevel: priority.toUpperCase(),
-    rankScore: rank,
-    suggestedAllocation: allocation,
-    reason: reason,
-    recommendation: action
-  };
+      return {
+        finalDecision: decision.toUpperCase(),
+        finalConfidenceScore: confidence,
+        riskLevel: risk.toUpperCase(),
+        priorityLevel: priority.toUpperCase(),
+        rankScore: rank,
+        suggestedAllocation: allocation,
+        reason: reason,
+        recommendation: action
+      };
+    },
+    {
+      lockOwner: `llm:${ticker}`,
+      fillLockTtlSeconds: 30,
+      waitMs: 5000
+    }
+  );
 
   llmCache.set(cacheKey, {
     data: result,
     timestamp: Date.now()
   });
+
+  try {
+    await setSharedCache(`INSTITUTIONAL_ANALYSIS_${cacheKey}`, "institutional_analysis", result, Math.floor(CACHE_DURATION / 1000));
+  } catch (error) {
+    logError("llm.shared_cache.write_error", error, { ticker });
+  }
 
   return result;
 };

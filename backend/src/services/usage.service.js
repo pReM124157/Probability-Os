@@ -8,18 +8,20 @@ export async function handleUsage(chatId) {
     if (error) {
       console.error("USAGE RPC ERROR:", error);
       return {
-        allowed: true,
-        count: 1,
-        reset_time: null
+        allowed: false,
+        count: null,
+        reset_time: null,
+        reason: "USAGE_UNAVAILABLE"
       };
     }
     return data;
   } catch (err) {
     console.error("USAGE SYSTEM FAIL:", err);
     return {
-      allowed: true,
-      count: 1,
-      reset_time: null
+      allowed: false,
+      count: null,
+      reset_time: null,
+      reason: "USAGE_UNAVAILABLE"
     };
   }
 }

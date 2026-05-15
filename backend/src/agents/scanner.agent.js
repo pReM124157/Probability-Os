@@ -1,6 +1,4 @@
 import { masterAgent } from "./master.agent.js";
-import { getCompanyOverview } from "../services/marketData.service.js";
-import YahooFinance from "yahoo-finance2";
 import { getMarketOverview } from "../scanner/marketOverview.js";
 import { buildTickerNewsIntel } from "../scanner/newsEngine.js";
 import { buildSectorRotation } from "../scanner/sectorRotation.js";
@@ -9,8 +7,8 @@ import { buildWatchlists } from "../scanner/watchlistEngine.js";
 import { buildRankedStock, rankAndDiversifyStocks } from "../scanner/stockRanker.js";
 import { formatMorningScannerReport } from "../scanner/scannerFormatter.js";
 import { normalizeSector } from "../scanner/convictionEngine.js";
-
-const yahooFinance = new YahooFinance();
+import { buildAnalysisContext } from "../core/analysisContext.js";
+import { getHistoricalCandles, getLiveMarketData } from "../services/marketData.service.js";
 
 const STOCK_UNIVERSE = [
   "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
@@ -40,39 +38,57 @@ async function getShortlistedStocks(limit = 10) {
     
     await Promise.all(batch.map(async (symbol) => {
       try {
-        const fetchSymbol = symbol.includes(".") ? symbol : `${symbol}.NS`;
-        const quote = await yahooFinance.quote(fetchSymbol);
+        const [marketData, history] = await Promise.all([
+          getLiveMarketData(symbol),
+          getHistoricalCandles(symbol, { days: 260, interval: "1d" })
+        ]);
+        if (!Array.isArray(history) || history.length < 50 || !marketData?.currentPrice) return;
+
+        const prices = history.map((candle) => Number(candle?.close || 0)).filter((value) => value > 0);
+        const highs = history.map((candle) => Number(candle?.high || 0)).filter((value) => value > 0);
+        const volumes = history.map((candle) => Number(candle?.volume || 0)).filter((value) => value > 0);
+        if (!prices.length || !highs.length) return;
+
+        const currentPrice = Number(marketData.currentPrice || prices[prices.length - 1] || 0);
+        const fiftyTwoWeekHigh = Math.max(...highs);
+        const averageDailyVolume3Month = volumes.slice(-60).reduce((sum, value) => sum + value, 0) / Math.max(volumes.slice(-60).length, 1);
+        const regularMarketVolume = Number(history[history.length - 1]?.volume || 0);
+        const fiftyDayAverage = prices.slice(-50).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-50).length, 1);
+        const twoHundredDayAverage = prices.slice(-200).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-200).length, 1);
+        const previousClose = Number(marketData.previousClose || prices[prices.length - 2] || currentPrice);
+        const changePercent = previousClose > 0
+          ? ((currentPrice - previousClose) / previousClose) * 100
+          : Number(marketData.change || 0);
         
         let score = 0;
 
         // 1. Breakout Strength (Proximity to 52w High)
-        if (quote.fiftyTwoWeekHigh > 0) {
-          const proximity = quote.regularMarketPrice / quote.fiftyTwoWeekHigh;
+        if (fiftyTwoWeekHigh > 0) {
+          const proximity = currentPrice / fiftyTwoWeekHigh;
           if (proximity > 0.98) score += 25; // Imminent breakout
           else if (proximity > 0.95) score += 15;
         }
 
         // 2. Volume Strength (Relative to 3M Average)
-        if (quote.averageDailyVolume3Month > 0) {
-          const volRatio = quote.regularMarketVolume / quote.averageDailyVolume3Month;
+        if (averageDailyVolume3Month > 0) {
+          const volRatio = regularMarketVolume / averageDailyVolume3Month;
           if (volRatio > 2.0) score += 25;
           else if (volRatio > 1.5) score += 15;
         }
 
         // 3. Trend Strength (Moving Averages)
-        if (quote.fiftyDayAverage > 0 && quote.regularMarketPrice > quote.fiftyDayAverage) {
+        if (fiftyDayAverage > 0 && currentPrice > fiftyDayAverage) {
           score += 10;
         }
-        if (quote.twoHundredDayAverage > 0 && quote.regularMarketPrice > quote.twoHundredDayAverage) {
+        if (twoHundredDayAverage > 0 && currentPrice > twoHundredDayAverage) {
           score += 15;
         }
 
         // 4. Price Momentum (Day Change %)
-        const changePercent = quote.regularMarketChangePercent || 0;
         if (changePercent > 2) score += 15;
         else if (changePercent > 0) score += 5;
 
-        candidates.push({ symbol, score, price: quote.regularMarketPrice });
+        candidates.push({ symbol, score, price: currentPrice });
       } catch (err) {
         // Skip failed quotes
       }
@@ -132,7 +148,7 @@ export async function runMorningScannerPipeline(limit = 5) {
   for (const item of shortlisted) {
     try {
       console.log(`🧠 Deep Scanning: ${item.symbol}`);
-      const companyData = await getCompanyOverview(item.symbol);
+      const { stockData: companyData } = await buildAnalysisContext(item.symbol);
       const analysis = await masterAgent(companyData);
       const newsIntel = await buildTickerNewsIntel({
         ticker: item.symbol,

@@ -1,6 +1,8 @@
 import cron from "node-cron";
 import supabase from "../services/supabase.service.js";
 import { Telegraf } from "telegraf";
+import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
+import { logError, logEvent } from "../services/telemetry.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -9,14 +11,13 @@ export function startSpikeHook() {
 
   // Run at 14:00 IST (which is 08:30 UTC) every day, targeting the afternoon session
   cron.schedule("30 8 * * *", async () => {
-    // Only send this on random days (about 30% chance) to make it unpredictable
-    if (Math.random() > 0.3) {
-      console.log("Random Spike Hook skipped today to maintain unpredictability.");
-      return;
-    }
+    await runWithSchedulerLease("scheduler:random_spike_hook", async ({ traceId, assertLease }) => {
+      // Only send this on random days (about 30% chance) to make it unpredictable
+      if (Math.random() > 0.3) {
+        logEvent("scheduler.random_spike_hook.skipped", { traceId, reason: "random_gate" });
+        return;
+      }
 
-    console.log("Running scheduled random spike hook...");
-    try {
       const { data: users, error } = await supabase
         .from("subscribers")
         .select("telegram_chat_id");
@@ -33,18 +34,31 @@ Want a quick look?
 
       // Send to a random subset of users (50%) to keep it exclusive
       const selectedUsers = users.filter(() => Math.random() > 0.5);
+      logEvent("scheduler.random_spike_hook.recipients", {
+        traceId,
+        count: selectedUsers.length
+      });
 
       for (const user of selectedUsers) {
+        assertLease();
         if (user.telegram_chat_id) {
           try {
             await bot.telegram.sendMessage(user.telegram_chat_id, message);
           } catch (err) {
-            console.error("Failed to send spike hook to:", user.telegram_chat_id);
+            logError("scheduler.random_spike_hook.delivery_error", err, {
+              traceId,
+              chatId: user.telegram_chat_id
+            });
           }
         }
       }
-    } catch (err) {
-      console.error("Spike Hook Error:", err.message);
-    }
+      logEvent("scheduler.random_spike_hook.completed", { traceId });
+    }, {
+      ttlSeconds: 20 * 60
+    }).catch((err) => {
+      logError("scheduler.random_spike_hook.error", err);
+    });
+  }, {
+    timezone: "Asia/Kolkata"
   });
 }

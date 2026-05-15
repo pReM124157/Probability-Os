@@ -29,6 +29,7 @@ import { generateTieredAnalysis } from "../services/claude.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
 import { executeTool } from "../tools/registry.js";
+import { buildAnalysisContext } from "../core/analysisContext.js";
 
 // --- Global Cache for Market Updates ---
 let marketCache = {
@@ -44,6 +45,13 @@ let topOpsCache = {
   timestamp: 0
 };
 let isFetchingTopOps = false;
+
+const LIVE_PRICE_SOURCES = new Set([
+  "YAHOO",
+  "ALPHA_VANTAGE",
+  "TWELVEDATA",
+  "FINNHUB"
+]);
 
 function smartFallback(label, data, context = {}) {
   if (data !== undefined && data !== null && data !== "") return data;
@@ -143,6 +151,18 @@ function interpretDebt(debtToEquity) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hasLiveProviderPrice(liveMarketData = {}) {
+  return LIVE_PRICE_SOURCES.has(safeString(liveMarketData.priceSource).toUpperCase());
+}
+
+function isExecutableLivePrice(liveMarketData = {}) {
+  if (!hasLiveProviderPrice(liveMarketData)) return false;
+  if (liveMarketData.latencyBlocked) return false;
+  if (!liveMarketData.isMarketOpen) return false;
+  const nonLiveFields = new Set(["regularMarketPreviousClose", "previousClose"]);
+  return !nonLiveFields.has(liveMarketData.priceField);
 }
 
 function toNumber(value) {
@@ -1036,15 +1056,9 @@ CRITICAL RULES:
     }
 
     // Otherwise, treat as stock analysis request
-    const stockData = input || {};
+    const { ticker, stockData } = await buildAnalysisContext(input);
     const safeInput = safeString(JSON.stringify(stockData));
     console.log("MASTER AGENT INPUT:", safeSubstring(safeInput, 200));
-
-    const ticker = 
-      stockData.Symbol || 
-      stockData.ticker || 
-      stockData.symbol || 
-      "UNKNOWN";
 
     console.log("--- MASTER AGENT DEBUG ---");
     console.log("TICKER:", ticker);
@@ -1207,7 +1221,7 @@ CRITICAL RULES:
     let adjustedConfidence = weightedSignals.score + learningBoost;
     
     // --- MARKET STATE CONTEXT ---
-    const isLive = liveMarketData.priceSource === "LIVE" && !liveMarketData.latencyBlocked;
+    const isLive = isExecutableLivePrice(liveMarketData);
     const marketStatus = liveMarketData.marketStatus || {};
     
     let marketNote = isLive ? null : "⚠️ Market Closed";
@@ -1462,8 +1476,10 @@ CRITICAL RULES:
 
     // FINAL EXECUTION SAFETY CHECK
     // Fix 1: Block non-live or critical latency for execution
-    if (liveMarketData.priceSource !== "LIVE" || liveMarketData.latencyBlocked) {
-      const blockReason = liveMarketData.latencyBlocked ? "critical execution latency (>4s)" : `non-live data source (${liveMarketData.priceSource})`;
+    if (!isLive) {
+      const blockReason = liveMarketData.latencyBlocked
+        ? "critical execution latency (>4s)"
+        : `non-executable market state (${liveMarketData.priceSource}/${liveMarketData.priceField || "unknown"})`;
       console.log(`[EXECUTION BLOCK] Nullifying capital deployment for ${ticker} due to ${blockReason}.`);
       positionSizing.allocation = "0%";
       positionSizing.capitalAction = "Blocked by execution layer";
@@ -1475,7 +1491,7 @@ CRITICAL RULES:
 
     // PHASE 6: Forward Guidance (Next Session Plan)
     let nextSessionPlan = null;
-    if (liveMarketData.priceSource !== "LIVE") {
+    if (!isLive) {
       nextSessionPlan = {
         plan: entryStrategy === "WAIT" ? "Prepare breakout watch" : "Prepare entry",
         action: "Wait for confirmation before acting.",

@@ -8,7 +8,18 @@
  */
 export function isPro(user) {
   if (!user) return false;
-  if (user.is_pro === true) return true;
-  if (typeof user.plan === "string" && user.plan.toLowerCase() === "pro") return true;
-  return false;
+
+  const status = typeof user.status === "string"
+    ? user.status.toLowerCase()
+    : "";
+  const expiry = user.expires_at || user.subscription_end || null;
+  const hasEntitlementFlag =
+    user.is_pro === true ||
+    (typeof user.plan === "string" && user.plan.toLowerCase() === "pro");
+
+  if (!hasEntitlementFlag) return false;
+  if (status && !["active", "trialing", "grace"].includes(status)) return false;
+  if (expiry && new Date(expiry) <= new Date()) return false;
+
+  return true;
 }

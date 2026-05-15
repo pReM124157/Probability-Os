@@ -1,46 +1,13 @@
-import YahooFinance from "yahoo-finance2";
-
-const yahooFinance = new YahooFinance();
+import { getHistoricalCandles } from "../services/marketData.service.js";
 
 export async function technicalAgent(symbol) {
   try {
     const upperSymbol = symbol.toUpperCase().replace(/\s+/g, "");
-    const symbolsToTry = upperSymbol.includes(".")
-      ? [upperSymbol]
-      : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
-
-    const period2 = new Date();
-    const period1 = new Date();
-    period1.setDate(period2.getDate() - 320);
-
-    const queryOptions = {
-      period1: period1.toISOString().split('T')[0],
-      period2: period2.toISOString().split('T')[0],
-      interval: '1d'
-    };
-
-    let history = null;
-    let fetchSymbol = "";
-
-    for (const sym of symbolsToTry) {
-        try {
-            console.log(`FETCH ATTEMPT (Technical): ${sym}`);
-            const tempHistory = await yahooFinance.historical(sym, queryOptions);
-            if (tempHistory && tempHistory.length >= 20) {
-                history = tempHistory;
-                fetchSymbol = sym;
-                break;
-            }
-        } catch (e) {
-            console.warn(`[FAIL] technical historical for ${sym}: ${e.message}`);
-        }
-    }
+    const history = await getHistoricalCandles(upperSymbol, { days: 320, interval: "1d" });
 
     if (!history) {
-        throw new Error(`Failed to fetch historical data for ${upperSymbol} after trying: ${symbolsToTry.join(", ")}`);
+        throw new Error(`Failed to fetch historical data for ${upperSymbol}`);
     }
-
-    console.log("FETCH SUCCESS (Technical):", fetchSymbol);
     
     if (!history || !history.length || history.length < 20) {
       console.warn(`Insufficient history for ${symbol}`);
@@ -63,7 +30,7 @@ export async function technicalAgent(symbol) {
     const latestPrice = prices[prices.length - 1];
     
     if (!latestPrice || latestPrice === 0) {
-      throw new Error(`Invalid latest price (₹${latestPrice}) derived from history for ${fetchSymbol}`);
+      throw new Error(`Invalid latest price (₹${latestPrice}) derived from history for ${upperSymbol}`);
     }
 
     const currentPrice = latestPrice;

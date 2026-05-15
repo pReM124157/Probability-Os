@@ -25,7 +25,9 @@ export const TOOLS = {
         price: data?.price ?? null,
         change: data?.change ?? null,
         changePercent: data?.changePercent ?? null,
-        source: data?.source || 'yahoo'
+        source: data?.priceSource || 'UNKNOWN',
+        priceField: data?.priceField || null,
+        dataConfidence: data?.dataConfidence || null
       };
 
     } catch (err) {
@@ -47,7 +49,7 @@ export const TOOLS = {
         sector: data?.Sector ?? null,
         roe: data?.ReturnOnEquityTTM ?? null,
         profitMargin: data?.ProfitMargin ?? null,
-        debtToEquity: data?.DebtToEquity ?? null,
+        debtToEquity: data?.DebtToEquityRatio ?? null,
         revenueGrowth: data?.QuarterlyRevenueGrowthYOY ?? null,
         earningsGrowth: data?.QuarterlyEarningsGrowthYOY ?? null,
         source: data?.source || 'yahoo'
