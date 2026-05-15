@@ -320,16 +320,57 @@ function normalizeFinnhubOverviewPayload({ profile = {}, metrics = {} } = {}, sy
 }
 
 export async function checkSymbolExists(symbol) {
+  const result = await validateTickerAvailability(symbol);
+  return result.status === "VALID";
+}
+
+function hasVerifiedOverview(overview) {
+  if (!overview || typeof overview !== "object") return false;
+  const sector = String(overview.Sector || "").trim().toLowerCase();
+  const source = String(overview.source || "").trim().toLowerCase();
+  const name = String(overview.Name || "").trim().toLowerCase();
+
+  if (overview.status === "FALLBACK_SAFE") return false;
+  if (!sector || sector === "fallback") return false;
+  if (name.includes("(fallback)")) return false;
+  if (source === "fallback") return false;
+  return true;
+}
+
+export async function validateTickerAvailability(symbol) {
   try {
     const live = await getLiveMarketData(symbol);
-    return Boolean(
+    if (
       live &&
       Number(live.currentPrice || live.price || 0) > 0 &&
       live.status !== "FALLBACK_SAFE"
-    );
+    ) {
+      return {
+        status: "VALID",
+        source: live.priceSource || "LIVE_MARKET_DATA"
+      };
+    }
+
+    const overview = await getCompanyOverview(symbol);
+    if (hasVerifiedOverview(overview)) {
+      return {
+        status: "VALID",
+        source: overview.source || "COMPANY_OVERVIEW"
+      };
+    }
+
+    return {
+      status: "UNAVAILABLE",
+      reason: "MARKET_DATA_UNAVAILABLE",
+      source: live?.priceSource || overview?.source || "UNKNOWN"
+    };
   } catch (err) {
     console.warn("Symbol validation failed:", symbol, err.message);
-    return false;
+    return {
+      status: "UNAVAILABLE",
+      reason: "VALIDATION_ERROR",
+      message: err.message
+    };
   }
 }
 

@@ -15,7 +15,7 @@ process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
 
-import { checkSymbolExists } from "./marketData.service.js";
+import { validateTickerAvailability } from "./marketData.service.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
 import { buildPortfolioReview } from "../agents/portfolioReview.agent.js";
@@ -847,9 +847,12 @@ bot.on("text", async (ctx) => {
         await send("⚠️ Please share a valid ticker like TCS or RELIANCE.");
         return;
       }
-      const exists = await checkSymbolExists(intent.symbol);
-      if (!exists) {
-        await send("⚠️ I couldn't find that stock. Please check the ticker (e.g., TCS, RELIANCE) and try again.");
+      const validation = await validateTickerAvailability(intent.symbol);
+      if (validation.status !== "VALID") {
+        await send(
+          `⚠️ Market data for ${intent.symbol} is temporarily unavailable right now.\n` +
+          `Please retry in a few moments.`
+        );
         return;
       }
       await performAnalysis(chatId, intent.symbol, footer);
