@@ -106,6 +106,13 @@ export async function recordProviderFailure(provider, errorMessage, threshold = 
     cooldownUntil,
     errorMessage: errorMessage || null
   });
+  if (shouldCooldown) {
+    logEvent("provider.cooldown.activated", {
+      provider,
+      failures,
+      cooldownUntil
+    });
+  }
 }
 
 export async function withProviderGuard(provider, operation, options = {}) {

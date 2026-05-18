@@ -1659,6 +1659,50 @@ CRITICAL RULES:
     const news = await fetchCompanyNews(ticker, stockData?.Name);
     console.log("[NEWS DATA]", news);
 
+    const confidenceEvidence = {
+      status: "AVAILABLE",
+      modelScale: "0_100",
+      adaptiveConfidenceScore: Number((finalDecision.finalConfidenceScore || 0) * 10),
+      reliabilityClass:
+        (finalDecision.finalConfidenceScore || 0) >= 7 ? "HIGH" :
+        (finalDecision.finalConfidenceScore || 0) >= 5 ? "MEDIUM" : "LOW",
+      sampleSufficiency: "UNKNOWN",
+      contributionMap: {
+        technicalTrend: Number((weightedSignals?.components?.trendScore || 0) * 10),
+        technicalMomentum: Number((weightedSignals?.components?.rsiScore || 0) * 10),
+        volumeConfirmation: Number((weightedSignals?.components?.volumeScore || 0) * 10),
+        sectorAlignment: Number((weightedSignals?.components?.sectorScore || 0) * 10),
+        relativeStrength: Number((weightedSignals?.components?.relStrengthScore || 0) * 10),
+        fundamentalQuality: Number((weightedSignals?.components?.fundamentals || 0) * 10),
+        valuationSupport: Number((weightedSignals?.components?.valuation || 0) * 10),
+        dataQuality: isPartialData ? 35 : 80
+      },
+      penalties: {
+        partialDataPenalty: isPartialData ? -10 : 0,
+        degradedExecutionPenalty: !isLive ? -15 : 0,
+        eventRiskPenalty: (eventRisk.eventRisk === "HIGH" || eventRisk.eventRisk === "CRITICAL") ? -20 : 0,
+        tradabilityPenalty: tradability.holdBias ? -15 : 0
+      },
+      warnings: [
+        ...(isPartialData ? ["PARTIAL_DATA"] : []),
+        ...(!isLive ? ["NON_EXECUTABLE_LIVE_PRICE"] : []),
+        ...((eventRisk.eventRisk === "HIGH" || eventRisk.eventRisk === "CRITICAL") ? ["EVENT_RISK_OVERRIDE"] : []),
+        ...(tradability.holdBias ? ["TRADABILITY_HOLD_BIAS"] : [])
+      ]
+    };
+
+    const institutionalEvidence = {
+      replay: { status: "INSUFFICIENT_REPLAY_DEPTH" },
+      calibration: { status: "INSUFFICIENT_DATA" },
+      drift: { status: "NOT_AVAILABLE_IN_THIS_PATH" },
+      benchmark: { status: "NOT_AVAILABLE_IN_THIS_PATH" },
+      marketRegime: {
+        state: marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED",
+        sectorBias: sectorData?.bias || "NEUTRAL",
+        relativeStrength: relStrength?.status || "NEUTRAL"
+      }
+    };
+
     return {
       risk,
       portfolio,
@@ -1685,6 +1729,8 @@ CRITICAL RULES:
         sector: sectorData,
         signals: intelligenceSignals
       },
+      confidenceEvidence,
+      institutionalEvidence,
       action: isLive ? (finalDecision.finalDecision || "HOLD") : "Wait for market open confirmation",
       nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
                 (marketStatus.isPostMarket ? "Monitor tomorrow's open" : 

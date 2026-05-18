@@ -13,6 +13,7 @@ import express from "express";
 import crypto from "crypto";
 import bot from "../services/telegram.service.js";
 import supabase from "../services/supabase.service.js";
+import { createTraceId, logError, logEvent } from "../services/telemetry.service.js";
 
 const router = express.Router();
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -62,6 +63,12 @@ async function getChatIdSafe(entity, subscriptionId = null) {
  * If the row already exists, we skip processing.
  */
 async function markEventProcessed(eventId, eventType, subscriptionId, chatId, payload) {
+  const payloadString = payload == null ? "" : JSON.stringify(payload);
+  const payloadPreview =
+    payloadString.length <= 1000
+      ? (payload || {})
+      : { _truncated: true, preview: payloadString.slice(0, 1000) };
+
   const { data, error } = await supabase
     .from("subscription_events")
     .insert({
@@ -69,12 +76,18 @@ async function markEventProcessed(eventId, eventType, subscriptionId, chatId, pa
       event_type: eventType,
       subscription_id: subscriptionId,
       telegram_chat_id: chatId,
-      payload_preview: payload ? JSON.parse(JSON.stringify(payload).substring(0, 1000) + '}') : {}
+      payload_preview: payloadPreview
     })
     .select("event_id")
     .maybeSingle();
 
   if (error && error.code === '23505') { // Postgres unique violation
+    logEvent("webhook.razorpay.replay_detected", {
+      eventId,
+      eventType,
+      subscriptionId: subscriptionId || null,
+      chatId: chatId || null
+    });
     console.log(`[WEBHOOK IDEMPOTENCY] Skipping duplicate event ${eventId}`);
     return false;
   }
@@ -246,13 +259,26 @@ async function handlePaymentFailed(payload, eventId) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.post("/razorpay", express.raw({ type: "application/json" }), async (req, res) => {
+  const traceId = createTraceId("webhook_razorpay");
   const signature = req.headers["x-razorpay-signature"];
   const razorpayEventId = req.headers["x-razorpay-event-id"];
   const rawBody = req.body?.toString() || "";
 
   try {
     const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!signature || !secret) {
+    if (!rawBody.trim()) {
+      logEvent("webhook.razorpay.rejected", {
+        traceId,
+        reason: "empty_body"
+      });
+      return res.status(400).json({ status: "invalid_payload" });
+    }
+
+    if (!signature || !secret || typeof signature !== "string") {
+      logEvent("webhook.razorpay.rejected", {
+        traceId,
+        reason: "missing_signature_or_secret"
+      });
       return res.status(401).json({ status: "invalid_signature" });
     }
 
@@ -260,13 +286,45 @@ router.post("/razorpay", express.raw({ type: "application/json" }), async (req, 
     shasum.update(rawBody);
     const digest = shasum.digest("hex");
 
-    if (digest !== signature) {
+    const signatureMatches =
+      digest.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+    if (!signatureMatches) {
+      logEvent("webhook.razorpay.rejected", {
+        traceId,
+        reason: "signature_mismatch",
+        eventId: razorpayEventId || null
+      });
       return res.status(401).json({ status: "invalid_signature" });
     }
 
-    const data = JSON.parse(rawBody);
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch (parseError) {
+      logError("webhook.razorpay.malformed_json", parseError, {
+        traceId
+      });
+      return res.status(400).json({ status: "invalid_payload" });
+    }
+
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      logEvent("webhook.razorpay.rejected", {
+        traceId,
+        reason: "invalid_payload_shape"
+      });
+      return res.status(400).json({ status: "invalid_payload" });
+    }
+
     const event = data.event;
     const payload = data.payload || {};
+    if (!event || typeof event !== "string") {
+      logEvent("webhook.razorpay.rejected", {
+        traceId,
+        reason: "missing_event_name"
+      });
+      return res.status(400).json({ status: "invalid_payload" });
+    }
 
     // Use razorpayEventId if present, else construct a deterministic fallback
     const eventId = razorpayEventId || `fallback-${event}-${Date.now()}`;
@@ -287,6 +345,7 @@ router.post("/razorpay", express.raw({ type: "application/json" }), async (req, 
 
     return res.json({ status: "ok" });
   } catch (err) {
+    logError("webhook.razorpay.fatal_error", err, { traceId });
     console.error("[WEBHOOK FATAL ERROR]", err);
     // Returning 500 signals Razorpay to retry the webhook later
     return res.status(500).json({ status: "error" });

@@ -4,7 +4,8 @@ import { logError, logEvent } from "./telemetry.service.js";
 const ANALYTICS_VERSION = "analytics-v1";
 const CALIBRATION_VERSION = "calibration-v1";
 const STRATEGY_VERSION = "strategy-v1";
-const RISK_FREE_RATE = 2;
+const RISK_FREE_RATE_ANNUAL = 0.02;
+const TRADING_DAYS = 252;
 
 class AnalyticsError extends Error {
   constructor(message, code, details = {}) {
@@ -40,9 +41,12 @@ function stddev(values) {
 }
 
 function calcSharpe(values) {
-  const sigma = stddev(values);
+  if (values.length < 2) return 0;
+  const dailyReturns = values.map((v) => Number(v) / 100);
+  const sigma = stddev(dailyReturns);
   if (sigma === 0) return 0;
-  return (mean(values) - RISK_FREE_RATE) / sigma;
+  const dailyRiskFree = RISK_FREE_RATE_ANNUAL / TRADING_DAYS;
+  return ((mean(dailyReturns) - dailyRiskFree) / sigma) * Math.sqrt(TRADING_DAYS);
 }
 
 function calcProfitFactor(values) {

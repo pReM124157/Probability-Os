@@ -5,6 +5,7 @@ import { createTraceId, logEvent } from "./telemetry.service.js";
 
 const INSTANCE_ID = `${os.hostname()}:${process.pid}:${createTraceId("instance")}`;
 const localLeases = new Map();
+// Local lease fallback is best-effort only and does not provide cross-instance exclusion.
 
 export function getInstanceId() {
   return INSTANCE_ID;

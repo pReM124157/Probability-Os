@@ -7,6 +7,8 @@ const REPLAY_VERSION = "replay-v1";
 const EXECUTION_VERSION = "execution-v1";
 const METRICS_VERSION = "metrics-v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TRADING_DAYS = 252;
+const RISK_FREE_RATE_ANNUAL = 0.02;
 const DEFAULT_SLIPPAGE_BPS = Number(process.env.BACKTEST_SLIPPAGE_BPS || 5);
 const DEFAULT_TXN_COST_BPS = Number(process.env.BACKTEST_TXN_COST_BPS || 10);
 const STRATEGY_SET = ["HOLD", "BUY", "SWING", "MOMENTUM", "VALUE", "BREAKOUT"];
@@ -82,7 +84,8 @@ function buildRollingSeries(equityCurve = [], window = 20) {
     const rets = dailyReturnsFromCurve(sample).map((r) => r / 100);
     const mu = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : 0;
     const sigma = stddev(rets);
-    const sharpe = sigma === 0 ? 0 : (mu / sigma) * Math.sqrt(252);
+    const dailyRiskFree = RISK_FREE_RATE_ANNUAL / TRADING_DAYS;
+    const sharpe = sigma === 0 ? 0 : ((mu - dailyRiskFree) / sigma) * Math.sqrt(TRADING_DAYS);
     const ts = sample[sample.length - 1].timestamp;
     rollingCagr.push({ timestamp: ts, value: Number(cagr.toFixed(6)) });
     rollingSharpe.push({ timestamp: ts, value: Number(sharpe.toFixed(6)) });
@@ -261,7 +264,8 @@ export function computeInstitutionalMetrics({ trades, equityCurve, initialCapita
   const meanDaily = dailyReturns.length ? dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length : 0;
   const volDaily = stddev(dailyReturns);
   const volatility = volDaily * Math.sqrt(252) * 100;
-  const sharpe = volDaily === 0 ? 0 : (meanDaily / volDaily) * Math.sqrt(252);
+  const dailyRiskFree = RISK_FREE_RATE_ANNUAL / TRADING_DAYS;
+  const sharpe = volDaily === 0 ? 0 : ((meanDaily - dailyRiskFree) / volDaily) * Math.sqrt(TRADING_DAYS);
   const downside = dailyReturns.filter((r) => r < 0);
   const downsideVol = stddev(downside.length ? downside : [0]);
   const sortino = downsideVol === 0 ? 0 : (meanDaily / downsideVol) * Math.sqrt(252);

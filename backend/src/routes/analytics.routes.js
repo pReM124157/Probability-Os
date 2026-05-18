@@ -10,6 +10,46 @@ import {
 import { createTraceId, logError, logEvent } from "../services/telemetry.service.js";
 
 const router = express.Router();
+const ROUTE_AUTH_TOKEN = process.env.INTERNAL_API_TOKEN || process.env.ADMIN_API_TOKEN || "";
+
+function authorizeProtectedRoute(req, res, next) {
+  const traceId = req.traceId || createTraceId("analytics_auth");
+  const authHeader = String(req.headers.authorization || "");
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const apiKey = String(req.headers["x-api-key"] || "");
+  const providedToken = bearerToken || apiKey;
+
+  if (!ROUTE_AUTH_TOKEN) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "analytics",
+      reason: "server_auth_not_configured"
+    });
+    return res.status(503).json({ success: false, traceId, message: "Route auth is not configured" });
+  }
+
+  if (!providedToken) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "analytics",
+      reason: "missing_token"
+    });
+    return res.status(401).json({ success: false, traceId, message: "Unauthorized" });
+  }
+
+  if (providedToken !== ROUTE_AUTH_TOKEN) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "analytics",
+      reason: "invalid_token"
+    });
+    return res.status(403).json({ success: false, traceId, message: "Forbidden" });
+  }
+
+  return next();
+}
+
+router.use(authorizeProtectedRoute);
 
 async function loadRows() {
   const { data: outcomes, error } = await supabase

@@ -236,6 +236,8 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const preMarket = safeObject(result.preMarket);
   const nextSessionPlan = safeObject(result.nextSessionPlan);
   const news = safeObject(result.news);
+  const confidenceEvidence = safeObject(result.confidenceEvidence);
+  const institutionalEvidence = safeObject(result.institutionalEvidence);
   const priceField = safeString(result.priceField || "");
 
   let marketStatusLabel = "Closed (Last Close Data)";
@@ -288,7 +290,9 @@ function formatAnalysis(res, symbol, stockData = {}) {
     bullishScenario: smartFallback("trigger_up", safeString(nextSessionPlan.entryTrigger), { price }),
     bearishScenario: smartFallback("trigger_down", safeString(nextSessionPlan.stopLoss), { price }),
     keyTrigger: safeString(nextSessionPlan.note || "Opening gap + volume confirmation"),
-    finalInsight: smartFallback("final_insight", result.analysis || "")
+    finalInsight: smartFallback("final_insight", result.analysis || ""),
+    confidenceEvidence,
+    institutionalEvidence
   };
 
   const fmt = (value, pct = false) => {
@@ -299,61 +303,113 @@ function formatAnalysis(res, symbol, stockData = {}) {
   };
 
   const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "Price discovery in progress";
+  const adaptiveScore = Number(normalized.confidenceEvidence?.adaptiveConfidenceScore);
+  const reliabilityClass = safeString(normalized.confidenceEvidence?.reliabilityClass || "LOW");
+  const warnings = Array.isArray(normalized.confidenceEvidence?.warnings) ? normalized.confidenceEvidence.warnings : [];
+  const penalties = safeObject(normalized.confidenceEvidence?.penalties);
+  const contributions = safeObject(normalized.confidenceEvidence?.contributionMap);
+  const noTrade = normalized.verdict.toUpperCase().includes("HOLD") || safeString(normalized.tradeAction).toUpperCase().includes("WAIT");
+  const replayStatus = safeString(normalized.institutionalEvidence?.replay?.status || "INSUFFICIENT_REPLAY_DEPTH");
+  const calibrationStatus = safeString(normalized.institutionalEvidence?.calibration?.status || "INSUFFICIENT_DATA");
+  const driftStatus = safeString(normalized.institutionalEvidence?.drift?.status || "NOT_AVAILABLE_IN_THIS_PATH");
+  const benchmarkStatus = safeString(normalized.institutionalEvidence?.benchmark?.status || "NOT_AVAILABLE_IN_THIS_PATH");
+  const marketRegime = safeObject(normalized.institutionalEvidence?.marketRegime);
+  const confidenceLine = Number.isFinite(adaptiveScore)
+    ? `Adaptive Confidence Score: ${Math.round(adaptiveScore)}/100 (${reliabilityClass})`
+    : "LOW STATISTICAL CONFIDENCE";
+  const warningLine = warnings.length > 0
+    ? warnings.map((w) => `• ${w}`).join("\n")
+    : "• NONE";
+  const activationIf = [
+    normalized.bullishScenario !== "-" ? normalized.bullishScenario : null,
+    normalized.keyTrigger !== "-" ? normalized.keyTrigger : null,
+    Number.isFinite(adaptiveScore) ? "Adaptive confidence >= 55/100" : "Statistical evidence becomes sufficient"
+  ].filter(Boolean).slice(0, 3);
+  const blockedBy = [
+    replayStatus !== "AVAILABLE" ? `Replay reliability: ${replayStatus}` : null,
+    calibrationStatus !== "AVAILABLE" ? `Calibration quality: ${calibrationStatus}` : null,
+    warnings.length > 0 ? `Execution/adaptive warnings active: ${warnings.join(", ")}` : null,
+    normalized.tradeAction || null
+  ].filter(Boolean).slice(0, 4);
 
   return `
-🏛 *FINSIGHT AI — INSTITUTIONAL REPORT (V2)*
+*FINSIGHT AI — INSTITUTIONAL ADAPTIVE DECISION DOSSIER*
 ━━━━━━━━━━━━━━━━━━
-📊 *VERDICT:* ${normalized.verdict}
-⭐ *RATING:* ${normalized.rating}/10 | Confidence: ${normalized.confidence}/10
-📈 *Asset:* ${normalized.asset}
-💰 *Current Price:* ${priceText}
-🕒 *Market Status:* ${normalized.marketStatus}
+*1) Executive Decision*
+• System Verdict: ${normalized.verdict}
+• Asset: ${normalized.asset}
+• Current Price: ${priceText}
+• Market State: ${normalized.marketStatus}
+• Risk Level: ${normalized.riskLevel}
 ━━━━━━━━━━━━━━━━━━
-📊 *TECHNICAL VIEW*
+*2) Adaptive Confidence Attribution*
+• ${confidenceLine}
+• Contribution - Technical Trend: ${contributions.technicalTrend ?? "UNAVAILABLE"}
+• Contribution - Technical Momentum: ${contributions.technicalMomentum ?? "UNAVAILABLE"}
+• Contribution - Sector Alignment: ${contributions.sectorAlignment ?? "UNAVAILABLE"}
+• Contribution - Relative Strength: ${contributions.relativeStrength ?? "UNAVAILABLE"}
+• Contribution - Fundamental Quality: ${contributions.fundamentalQuality ?? "UNAVAILABLE"}
+• Contribution - Data Quality: ${contributions.dataQuality ?? "UNAVAILABLE"}
+• Penalty - Partial Data: ${penalties.partialDataPenalty ?? 0}
+• Penalty - Degraded Execution: ${penalties.degradedExecutionPenalty ?? 0}
+• Penalty - Event Risk: ${penalties.eventRiskPenalty ?? 0}
+━━━━━━━━━━━━━━━━━━
+*3) Institutional Evidence Layer*
+• Replay Engine: ${replayStatus}
+• Confidence Calibration: ${calibrationStatus}
+• Drift State: ${driftStatus}
+• Benchmark Intelligence: ${benchmarkStatus}
+• Regime State: ${marketRegime.state || "UNKNOWN"}
+• Regime Sector Bias: ${marketRegime.sectorBias || normalized.sectorBias}
+• Regime Relative Strength: ${marketRegime.relativeStrength || normalized.relStrength}
+━━━━━━━━━━━━━━━━━━
+*4) Technical Regime Analysis*
 • Trend: ${normalized.trend}
-• Support: ${normalized.support}
-• Resistance: ${normalized.resistance}
 • Momentum: ${normalized.momentum}
 • Volume: ${normalized.volume}
-📍 Trade Setup:
+• Support: ${normalized.support}
+• Resistance: ${normalized.resistance}
 • Entry Zone: ${normalized.entryZone}
-• Stop Loss: ${normalized.stopLoss}
-• Target: ${normalized.target}
-• Action: ${normalized.tradeAction}
 ━━━━━━━━━━━━━━━━━━
-📉 *FUNDAMENTAL SNAPSHOT*
-• P/E Ratio: ${fmt(normalized.pe)}
+*5) Fundamental Risk Analysis*
+• P/E: ${fmt(normalized.pe)}
 • ROE: ${fmt(normalized.roe, true)}
 • Profit Margin: ${fmt(normalized.profitMargin, true)}
 • Debt/Equity: ${fmt(normalized.debtEquity)}
-• Revenue Growth (YoY): ${fmt(normalized.revenueGrowth, true)}
-• Earnings Growth (YoY): ${fmt(normalized.earningsGrowth, true)}
-🧠 Interpretation:
-${normalized.fundamentalView}
+• Revenue Growth YoY: ${fmt(normalized.revenueGrowth, true)}
+• Earnings Growth YoY: ${fmt(normalized.earningsGrowth, true)}
 ━━━━━━━━━━━━━━━━━━
-🌐 *SECTOR & RELATIVE STRENGTH*
-• Sector: ${normalized.sectorName} → ${normalized.sectorBias}
-• Relative Strength vs Nifty: ${normalized.relStrength}
+*6) Replay Intelligence*
+• Status: ${replayStatus}
+• If status != AVAILABLE: INSUFFICIENT REPLAY DEPTH
+• No synthetic replay metrics are shown when sample depth is unavailable.
+━━━━━━━━━━━━━━━━━━
+*7) Adaptive Drift & Reliability*
+• Reliability Class: ${reliabilityClass}
+• Active Warnings:
+${warningLine}
+• Data Integrity Flags influence confidence penalties directly.
+━━━━━━━━━━━━━━━━━━
+*8) Trade Activation Conditions*
+${noTrade ? "• No trade currently justified under institutional thresholds." : "• Trade is conditionally active with governance constraints."}
+• Blocked By:
+${blockedBy.map((x) => `• ${x}`).join("\n")}
+• Activates Only If:
+${activationIf.map((x) => `• ${x}`).join("\n")}
+• Stop Loss Governance: ${normalized.stopLoss}
+• Target Governance: ${normalized.target}
+━━━━━━━━━━━━━━━━━━
+*9) Risk Governance*
+• Exit Signal: ${normalized.exitAction}
+• Exit Rationale: ${normalized.exitReason}
+• Bearish Scenario Control: ${normalized.bearishScenario}
 • Institutional Bias: ${normalized.institutionalBias}
 ━━━━━━━━━━━━━━━━━━
-📰 *LATEST NEWS & SENTIMENT*
-• Positive: ${normalized.newsPositive}
-• Negative: ${normalized.newsNegative}
-• Overall Sentiment: ${normalized.sentiment}
-━━━━━━━━━━━━━━━━━━
-🚨 *RISK & EXIT VIEW*
-• Risk Level: ${normalized.riskLevel}
-• Exit Signal: ${normalized.exitAction}
-• Suggested Action: ${normalized.exitAction}
-• Reason: ${normalized.exitReason}
-━━━━━━━━━━━━━━━━━━
-🔮 *WHAT HAPPENS AFTER MARKET OPENS*
-• If price breaks confirmation zone → ${normalized.bullishScenario}
-• If price weakens below risk zone → ${normalized.bearishScenario}
-• Key Trigger: ${normalized.keyTrigger}
-━━━━━━━━━━━━━━━━━━
-🧠 *FINAL INSIGHT*
-${normalized.finalInsight}
+*10) Final System Verdict*
+• Recommendation: ${normalized.verdict}
+• Confidence State: ${Number.isFinite(adaptiveScore) ? `${Math.round(adaptiveScore)}/100` : "UNRELIABLE DUE TO LOW SAMPLE SIZE"}
+• Final Intelligence Note: ${normalized.finalInsight}
+• News Sentiment: ${normalized.sentiment}
 ━━━━━━━━━━━━━━━━━━
 ⚠️ Educational use only. Not financial advice.`.trim();
 }

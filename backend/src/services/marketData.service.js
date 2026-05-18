@@ -3,7 +3,7 @@ import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
 import { withProviderGuard } from "./providerHealth.service.js";
-import { logError, logMetric } from "./telemetry.service.js";
+import { logError, logEvent, logMetric } from "./telemetry.service.js";
 
 const yahooFinance = new YahooFinance();
 // Global config removed to prevent startup crash
@@ -33,6 +33,24 @@ const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
 const HTTP_PROVIDER_TIMEOUT_MS = 5000;
 const YAHOO_TIMEOUT_MS = 3500;
+
+export const FUNDAMENTAL_METRIC_CANONICALIZATION_MAP = {
+  pe_ratio: { internal: "ratio", display: "number_2dp", validRange: [0, 500] },
+  roe: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
+  roce: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
+  debt_to_equity: { internal: "decimal_ratio", display: "ratio_2dp", validRange: [0, 20] },
+  profit_margin: { internal: "percent", display: "percent_2dp", validRange: [-100, 100] },
+  eps: { internal: "absolute", display: "number_2dp", validRange: [-100000, 100000] },
+  revenue_growth: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
+  earnings_growth: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
+  book_value: { internal: "absolute", display: "number_2dp", validRange: [-100000, 1000000] },
+  dividend_yield: { internal: "percent", display: "percent_2dp", validRange: [0, 100] },
+  market_cap: { internal: "absolute", display: "number_0dp", validRange: [0, 1e16] },
+  beta: { internal: "ratio", display: "number_2dp", validRange: [-10, 10] },
+  peg: { internal: "ratio", display: "number_2dp", validRange: [-100, 100] },
+  free_cash_flow: { internal: "absolute", display: "number_0dp", validRange: [-1e14, 1e14] },
+  current_ratio: { internal: "ratio", display: "number_2dp", validRange: [0, 50] }
+};
 
 function getCached(key) {
   const entry = dataCache.get(key);
@@ -152,6 +170,119 @@ function safeErrorCause(error) {
   };
 }
 
+function parseMetricNumber(raw) {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "string") {
+    const cleaned = raw.trim().replace(/,/g, "");
+    if (!cleaned || cleaned === "-" || cleaned.toUpperCase() === "N/A") return null;
+    const num = Number(cleaned.replace("%", ""));
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+}
+
+function formatMetricForDisplay(value, mode) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  if (mode === "percent_2dp") return `${value.toFixed(2)}%`;
+  if (mode === "number_0dp") return `${Math.round(value)}`;
+  return value.toFixed(2);
+}
+
+function validateMetricRange(metricKey, value, symbol, provider) {
+  const rule = FUNDAMENTAL_METRIC_CANONICALIZATION_MAP[metricKey];
+  if (!rule || value === null || value === undefined) return { valid: true, value };
+  const [min, max] = rule.validRange;
+  if (value < min || value > max) {
+    logEvent("fundamentals.validation.failed", {
+      symbol,
+      metric: metricKey,
+      provider,
+      normalized_value: value,
+      validation_reason: `outside_valid_range_${min}_${max}`
+    });
+    return { valid: false, value: null };
+  }
+  return { valid: true, value };
+}
+
+function normalizePercentMetric(rawValue, provider, symbol, metricKey, { yahooDecimalLikely = false } = {}) {
+  const parsed = parseMetricNumber(rawValue);
+  if (parsed === null) return null;
+  let normalized = parsed;
+  const hadPercentSign = typeof rawValue === "string" && rawValue.includes("%");
+  if (yahooDecimalLikely && !hadPercentSign && Math.abs(parsed) <= 1) normalized = parsed * 100;
+  logEvent("fundamentals.metric.normalized", {
+    symbol,
+    metric: metricKey,
+    provider,
+    raw_value: rawValue,
+    normalized_value: normalized
+  });
+  const checked = validateMetricRange(metricKey, normalized, symbol, provider);
+  return checked.value;
+}
+
+function normalizeDebtToEquityMetric(rawValue, provider, symbol) {
+  const parsed = parseMetricNumber(rawValue);
+  if (parsed === null) return null;
+  let normalized = parsed;
+  let reason = "as_is";
+  if (parsed > 20 && parsed / 100 <= 20) {
+    normalized = parsed / 100;
+    reason = "scaled_down_100x";
+    logEvent("fundamentals.provider.mismatch", {
+      symbol,
+      metric: "debt_to_equity",
+      provider,
+      raw_value: rawValue,
+      normalized_value: normalized,
+      validation_reason: "detected_100x_scale_mismatch"
+    });
+  }
+  logEvent("fundamentals.metric.normalized", {
+    symbol,
+    metric: "debt_to_equity",
+    provider,
+    raw_value: rawValue,
+    normalized_value: normalized,
+    normalization_reason: reason
+  });
+  const checked = validateMetricRange("debt_to_equity", normalized, symbol, provider);
+  if (!checked.valid) {
+    logEvent("fundamentals.metric.suspicious", {
+      symbol,
+      metric: "debt_to_equity",
+      provider,
+      raw_value: rawValue,
+      normalized_value: normalized,
+      validation_reason: "failed_range_validation"
+    });
+  }
+  return checked.value;
+}
+
+export function normalizeFundamentalMetrics({ provider, symbol, raw = {} }) {
+  const pe = parseMetricNumber(raw.pe);
+  const debtToEquity = normalizeDebtToEquityMetric(raw.debtToEquity, provider, symbol);
+  const roe = normalizePercentMetric(raw.roe, provider, symbol, "roe", { yahooDecimalLikely: provider === "yahoo" });
+  const profitMargin = normalizePercentMetric(raw.profitMargin, provider, symbol, "profit_margin", { yahooDecimalLikely: provider === "yahoo" });
+  const revenueGrowth = normalizePercentMetric(raw.revenueGrowth, provider, symbol, "revenue_growth", { yahooDecimalLikely: provider === "yahoo" });
+  const earningsGrowth = normalizePercentMetric(raw.earningsGrowth, provider, symbol, "earnings_growth", { yahooDecimalLikely: provider === "yahoo" });
+
+  return {
+    canonical: { pe, roe, profitMargin, debtToEquity, revenueGrowth, earningsGrowth },
+    display: {
+      pe: formatMetricForDisplay(pe, "number_2dp"),
+      roe: formatMetricForDisplay(roe, "percent_2dp"),
+      profitMargin: formatMetricForDisplay(profitMargin, "percent_2dp"),
+      debtToEquity: formatMetricForDisplay(debtToEquity, "number_2dp"),
+      revenueGrowth: formatMetricForDisplay(revenueGrowth, "percent_2dp"),
+      earningsGrowth: formatMetricForDisplay(earningsGrowth, "percent_2dp")
+    }
+  };
+}
+
 function logProviderError(provider, context = {}, error) {
   console.error(`${provider.toUpperCase()} FETCH ERROR`, {
     ...context,
@@ -168,6 +299,18 @@ function logProviderError(provider, context = {}, error) {
 function toPositiveNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+function isValidHistoricalCandle(candle) {
+  const ts = new Date(candle?.date || candle?.timestamp);
+  if (Number.isNaN(ts.getTime())) return false;
+  const open = Number(candle?.open ?? candle?.close);
+  const high = Number(candle?.high ?? candle?.close);
+  const low = Number(candle?.low ?? candle?.close);
+  const close = Number(candle?.close);
+  if (![open, high, low, close].every((v) => Number.isFinite(v) && v > 0)) return false;
+  if (high < low) return false;
+  return true;
 }
 
 function resolveBestPrice(quote = {}) {
@@ -257,23 +400,35 @@ function createFallbackLiveData(symbol, extra = {}) {
 
 function normalizeAlphaOverviewPayload(payload = {}, symbol) {
   if (!payload || !payload.Symbol) return null;
+  const normalized = normalizeFundamentalMetrics({
+    provider: "alpha_vantage",
+    symbol,
+    raw: {
+      pe: payload.PERatio,
+      roe: payload.ReturnOnEquityTTM,
+      profitMargin: payload.ProfitMargin,
+      debtToEquity: payload.DebtToEquityRatio || payload.DebtToEquity,
+      revenueGrowth: payload.QuarterlyRevenueGrowthYOY,
+      earningsGrowth: payload.QuarterlyEarningsGrowthYOY
+    }
+  });
 
   return {
     Symbol: payload.Symbol,
     symbol: toBaseTicker(payload.Symbol),
     Name: payload.Name || payload.Symbol,
-    "P/E Ratio": payload.PERatio || "-",
-    "ROE": payload.ReturnOnEquityTTM || "-",
-    "Profit Margin": payload.ProfitMargin || "-",
-    "Debt/Equity": payload.DebtToEquityRatio || payload.DebtToEquity || "-",
-    "Revenue Growth (YoY)": payload.QuarterlyRevenueGrowthYOY || "-",
-    "Earnings Growth (YoY)": payload.QuarterlyEarningsGrowthYOY || "-",
-    PERatio: payload.PERatio || 0,
-    ReturnOnEquityTTM: payload.ReturnOnEquityTTM || "-",
-    ProfitMargin: payload.ProfitMargin || "-",
-    DebtToEquityRatio: payload.DebtToEquityRatio || payload.DebtToEquity || "-",
-    QuarterlyRevenueGrowthYOY: payload.QuarterlyRevenueGrowthYOY || "-",
-    QuarterlyEarningsGrowthYOY: payload.QuarterlyEarningsGrowthYOY || "-",
+    "P/E Ratio": normalized.display.pe,
+    "ROE": normalized.display.roe,
+    "Profit Margin": normalized.display.profitMargin,
+    "Debt/Equity": normalized.display.debtToEquity,
+    "Revenue Growth (YoY)": normalized.display.revenueGrowth,
+    "Earnings Growth (YoY)": normalized.display.earningsGrowth,
+    PERatio: normalized.display.pe,
+    ReturnOnEquityTTM: normalized.display.roe,
+    ProfitMargin: normalized.display.profitMargin,
+    DebtToEquityRatio: normalized.display.debtToEquity,
+    QuarterlyRevenueGrowthYOY: normalized.display.revenueGrowth,
+    QuarterlyEarningsGrowthYOY: normalized.display.earningsGrowth,
     MarketCapitalization: payload.MarketCapitalization || null,
     PriceToBookRatio: payload.PriceToBookRatio || null,
     Beta: payload.Beta || null,
@@ -293,22 +448,35 @@ function normalizeFinnhubOverviewPayload({ profile = {}, metrics = {} } = {}, sy
 
   if (!name && !sector && Object.keys(metrics || {}).length === 0) return null;
 
+  const normalized = normalizeFundamentalMetrics({
+    provider: "finnhub",
+    symbol,
+    raw: {
+      pe: metrics.peNormalizedAnnual || metrics.peTTM,
+      roe: metrics.roeTTM,
+      profitMargin: metrics.netMarginTTM,
+      debtToEquity: metrics.totalDebtToEquityQuarterly || metrics.totalDebtToEquityAnnual,
+      revenueGrowth: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y,
+      earningsGrowth: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y
+    }
+  });
+
   return {
     Symbol: profile.ticker || normalizeSymbol(symbol),
     symbol: toBaseTicker(profile.ticker || symbol),
     Name: name || normalizeSymbol(symbol),
-    "P/E Ratio": metrics.peNormalizedAnnual || metrics.peTTM || "-",
-    "ROE": metrics.roeTTM != null ? `${Number(metrics.roeTTM).toFixed(2)}%` : "-",
-    "Profit Margin": metrics.netMarginTTM != null ? `${Number(metrics.netMarginTTM).toFixed(2)}%` : "-",
-    "Debt/Equity": metrics.totalDebtToEquityQuarterly || metrics.totalDebtToEquityAnnual || "-",
-    "Revenue Growth (YoY)": metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || "-",
-    "Earnings Growth (YoY)": metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || "-",
-    PERatio: metrics.peNormalizedAnnual || metrics.peTTM || 0,
-    ReturnOnEquityTTM: metrics.roeTTM != null ? `${Number(metrics.roeTTM).toFixed(2)}%` : "-",
-    ProfitMargin: metrics.netMarginTTM != null ? `${Number(metrics.netMarginTTM).toFixed(2)}%` : "-",
-    DebtToEquityRatio: metrics.totalDebtToEquityQuarterly || metrics.totalDebtToEquityAnnual || "-",
-    QuarterlyRevenueGrowthYOY: metrics.revenueGrowthTTMYoy || metrics.revenueGrowth3Y || "-",
-    QuarterlyEarningsGrowthYOY: metrics.epsGrowthTTMYoy || metrics.epsGrowth3Y || "-",
+    "P/E Ratio": normalized.display.pe,
+    "ROE": normalized.display.roe,
+    "Profit Margin": normalized.display.profitMargin,
+    "Debt/Equity": normalized.display.debtToEquity,
+    "Revenue Growth (YoY)": normalized.display.revenueGrowth,
+    "Earnings Growth (YoY)": normalized.display.earningsGrowth,
+    PERatio: normalized.display.pe,
+    ReturnOnEquityTTM: normalized.display.roe,
+    ProfitMargin: normalized.display.profitMargin,
+    DebtToEquityRatio: normalized.display.debtToEquity,
+    QuarterlyRevenueGrowthYOY: normalized.display.revenueGrowth,
+    QuarterlyEarningsGrowthYOY: normalized.display.earningsGrowth,
     MarketCapitalization: profile.marketCapitalization || null,
     PriceToBookRatio: metrics.pbAnnual || metrics.pbQuarterly || null,
     Beta: metrics.beta || null,
@@ -563,38 +731,37 @@ export async function getCompanyOverview(symbol) {
             })}`
           );
           
-          const fundamentals = {
-            pe: summary.trailingPE ?? null,
-            roe: financials.returnOnEquity ?? null,
-            profitMargin: financials.profitMargins ?? null,
-            debtToEquity: financials.debtToEquity ?? null,
-            revenueGrowth: financials.revenueGrowth ?? null,
-            earningsGrowth: financials.earningsGrowth ?? null
-          };
-
-          const format = (val, isPercent = false) => {
-            if (val === null || val === undefined) return "-";
-            return isPercent ? `${(val * 100).toFixed(2)}%` : val.toFixed(2);
-          };
+          const fundamentals = normalizeFundamentalMetrics({
+            provider: "yahoo",
+            symbol: fetchSymbol,
+            raw: {
+              pe: summary.trailingPE ?? null,
+              roe: financials.returnOnEquity ?? null,
+              profitMargin: financials.profitMargins ?? null,
+              debtToEquity: financials.debtToEquity ?? null,
+              revenueGrowth: financials.revenueGrowth ?? null,
+              earningsGrowth: financials.earningsGrowth ?? null
+            }
+          });
 
           const companyOverview = {
             Symbol: fetchSymbol,
             Name: assetProfile.longName || fetchSymbol,
             
-            "P/E Ratio": format(fundamentals.pe),
-            "ROE": format(fundamentals.roe, true),
-            "Profit Margin": format(fundamentals.profitMargin, true),
-            "Debt/Equity": format(fundamentals.debtToEquity),
-            "Revenue Growth (YoY)": format(fundamentals.revenueGrowth, true),
-            "Earnings Growth (YoY)": format(fundamentals.earningsGrowth, true),
+            "P/E Ratio": fundamentals.display.pe,
+            "ROE": fundamentals.display.roe,
+            "Profit Margin": fundamentals.display.profitMargin,
+            "Debt/Equity": fundamentals.display.debtToEquity,
+            "Revenue Growth (YoY)": fundamentals.display.revenueGrowth,
+            "Earnings Growth (YoY)": fundamentals.display.earningsGrowth,
 
             // Retain old keys for compatibility with telegram.service.js
-            PERatio: format(fundamentals.pe),
-            ReturnOnEquityTTM: format(fundamentals.roe, true),
-            ProfitMargin: format(fundamentals.profitMargin, true),
-            DebtToEquityRatio: format(fundamentals.debtToEquity),
-            QuarterlyRevenueGrowthYOY: format(fundamentals.revenueGrowth, true),
-            QuarterlyEarningsGrowthYOY: format(fundamentals.earningsGrowth, true),
+            PERatio: fundamentals.display.pe,
+            ReturnOnEquityTTM: fundamentals.display.roe,
+            ProfitMargin: fundamentals.display.profitMargin,
+            DebtToEquityRatio: fundamentals.display.debtToEquity,
+            QuarterlyRevenueGrowthYOY: fundamentals.display.revenueGrowth,
+            QuarterlyEarningsGrowthYOY: fundamentals.display.earningsGrowth,
 
             MarketCapitalization: summary.marketCap ?? null,
             PriceToBookRatio: stats.priceToBook ?? null,
@@ -917,12 +1084,16 @@ export async function getLiveMarketData(symbol) {
 
       // 1. CHECK CACHE (Institutional Guard)
       const cached = await getHybridCache(cacheKey, "HIGH");
-      if (cached) {
+          if (cached) {
         const age = Math.floor((Date.now() - cached.timestamp) / 1000);
         const shouldBypassCache = marketStatus.isPreMarket || marketStatus.isPostMarket;
         if (!shouldBypassCache) {
           console.log(`[CACHE] hit symbol=${upperSymbol} age=${age}s`);
-          return { ...cached, dataAge: age, dataConfidence: "CACHED" };
+          const staleLiveData = marketStatus.isMarketOpen && age > 300;
+          if (staleLiveData) {
+            console.warn(`[DATA] stale live cache symbol=${upperSymbol} age=${age}s`);
+          }
+          return { ...cached, dataAge: age, dataConfidence: "CACHED", staleData: staleLiveData };
         }
         console.log(
           `[CACHE] bypass symbol=${upperSymbol} age=${age}s reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
@@ -1081,7 +1252,7 @@ export async function getLiveMarketData(symbol) {
     } catch (error) {
       console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
       logProviderError("market-data", { stage: "critical", symbol }, error);
-      const fallback = createFallbackLiveData(upperSymbol);
+      const fallback = createFallbackLiveData(upperSymbol, { staleData: true });
       await setHybridCache(cacheKey, CACHE_GROUP_LIVE, fallback, "LOW");
       return fallback;
     }
@@ -1122,7 +1293,9 @@ export async function getHistoricalCandles(symbol, options = {}) {
               withTimeout(retry(() => yahooFinance.historical(sym, queryOptions), 1, 500), YAHOO_TIMEOUT_MS)
             );
             if (Array.isArray(tempHistory) && tempHistory.length >= 20) {
-              return tempHistory;
+              const cleaned = tempHistory.filter(isValidHistoricalCandle);
+              if (cleaned.length >= 20) return cleaned;
+              logMetric("provider.historical_candles.filtered_invalid", tempHistory.length - cleaned.length, { symbol: sym });
             }
           } catch (error) {
             logProviderError("yahoo", { stage: "historical", symbol: sym }, error);

@@ -7,6 +7,8 @@ const ADAPTIVE_VERSION = "adaptive-v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SAFE_MIN_WEIGHT = 0.5;
 const SAFE_MAX_WEIGHT = 1.5;
+const TRADING_DAYS = 252;
+const RISK_FREE_RATE_ANNUAL = 0.02;
 
 class AdaptiveError extends Error {
   constructor(message, code, details = {}) {
@@ -182,7 +184,10 @@ function computeModelRollups(group) {
   const losses = Math.max(0, returns.length - wins);
   const rollingWinRate = returns.length ? (wins / returns.length) * 100 : 0;
   const rollingExpectancy = mean(returns);
-  const rollingSharpe = stddev(returns) === 0 ? 0 : mean(returns) / stddev(returns);
+  const dailyReturns = returns.map((r) => Number(r) / 100);
+  const sigmaDaily = stddev(dailyReturns);
+  const dailyRiskFree = RISK_FREE_RATE_ANNUAL / TRADING_DAYS;
+  const rollingSharpe = sigmaDaily === 0 ? 0 : ((mean(dailyReturns) - dailyRiskFree) / sigmaDaily) * Math.sqrt(TRADING_DAYS);
   const rollingAlpha = mean(returns);
   const rollingDrawdown = mean(group.rows.map((r) => Number(r.max_drawdown_pct || 0)));
   const calibrationError = computeCalibrationError(group.rows);

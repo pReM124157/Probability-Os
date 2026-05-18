@@ -2,7 +2,9 @@ import supabase from "./supabase.service.js";
 import { logError, logEvent } from "./telemetry.service.js";
 
 const CALC_VERSION = "stats-v1";
-const RISK_FREE_RATE = 2;
+const RISK_FREE_RATE_ANNUAL = 0.02;
+const TRADING_DAYS = 252;
+const MINIMUM_REQUIRED_DATASET_SIZE = 30;
 const CONFIDENCE_BUCKETS = [
   { label: "50-59", min: 50, max: 59.9999 },
   { label: "60-69", min: 60, max: 69.9999 },
@@ -73,10 +75,13 @@ function profitFactor(returns) {
 }
 
 function sharpe(returns) {
-  const mu = mean(returns);
-  const sigma = stddev(returns);
+  if (returns.length < 2) return 0;
+  const dailyReturns = returns.map((r) => Number(r) / 100);
+  const mu = mean(dailyReturns);
+  const sigma = stddev(dailyReturns);
   if (sigma === 0) return 0;
-  return (mu - RISK_FREE_RATE) / sigma;
+  const dailyRiskFree = RISK_FREE_RATE_ANNUAL / TRADING_DAYS;
+  return ((mu - dailyRiskFree) / sigma) * Math.sqrt(TRADING_DAYS);
 }
 
 function isClosed(status) {
@@ -293,7 +298,21 @@ export async function runStatisticalValidation({ calculationWindow = "ALL_TIME" 
   const startedAt = Date.now();
   try {
     const rows = await fetchJoinedOutcomeRows();
-    if (rows.length < 1) throw new StatisticalValidationError("Insufficient data for validation", "INSUFFICIENT_DATA");
+    const scopedRows = calcWindowFilter(rows, calculationWindow);
+    if (scopedRows.length < MINIMUM_REQUIRED_DATASET_SIZE) {
+      const response = {
+        status: "INSUFFICIENT_DATA",
+        minimumRequired: MINIMUM_REQUIRED_DATASET_SIZE,
+        current: scopedRows.length
+      };
+      logEvent("statistics.validation.insufficient_data", {
+        calculation_window: calculationWindow,
+        minimum_required: MINIMUM_REQUIRED_DATASET_SIZE,
+        current: scopedRows.length,
+        processing_latency_ms: Date.now() - startedAt
+      });
+      return response;
+    }
 
     await persistGrades(rows);
 
@@ -302,20 +321,7 @@ export async function runStatisticalValidation({ calculationWindow = "ALL_TIME" 
     const strategyPayload = computeStrategyPerformance(rows);
 
     if (calibrationPayload.length === 0) {
-      calibrationPayload.push({
-        confidence_bucket: "BOOTSTRAP",
-        total_predictions: 1,
-        actual_win_rate: 100,
-        avg_return_pct: 0,
-        avg_drawdown_pct: 0,
-        calibration_error: 0,
-        calculation_version: CALC_VERSION,
-        source_recommendation_count: 1,
-        replay_metadata: {
-          generated_at: new Date().toISOString(),
-          bucket: "BOOTSTRAP"
-        }
-      });
+      throw new StatisticalValidationError("No confidence buckets with sufficient samples", "INSUFFICIENT_CALIBRATION_DATA");
     }
     if (strategyPayload.length === 0) {
       throw new StatisticalValidationError("No strategy groups with sufficient samples", "INSUFFICIENT_STRATEGY_DATA");

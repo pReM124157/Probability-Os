@@ -59,7 +59,7 @@ export function compareAgainstBenchmark(strategyReturns = [], benchmarkReturns =
       beta: 0,
       benchmark_return: 0,
       excess_return: 0,
-      comparison_version: "benchmark-v1-bootstrap"
+      comparison_version: "benchmark-v1"
     };
   }
 

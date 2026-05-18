@@ -2,6 +2,7 @@ import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supab
 import { safeString } from "../core/safety.js";
 
 const localStateStore = new Map();
+// In-memory fallback is single-process only and not safe for multi-instance consistency.
 
 function stateKey(namespace, id) {
   return `${namespace}:${safeString(id)}`;

@@ -5,6 +5,7 @@ import { logMetric } from "./telemetry.service.js";
 const DEFAULT_WAIT_MS = 1500;
 const DEFAULT_POLL_MS = 150;
 const localSharedCache = new Map();
+const MAX_CACHE_PAYLOAD_BYTES = 1024 * 1024; // 1MB safety cap against cache poisoning amplification
 
 function getLocalCacheEntry(cacheKey) {
   const entry = localSharedCache.get(cacheKey);
@@ -42,6 +43,13 @@ export async function getSharedCache(cacheKey) {
 }
 
 export async function setSharedCache(cacheKey, cacheGroup, payload, ttlSeconds) {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+    throw new Error(`Invalid cache ttlSeconds for ${cacheKey}`);
+  }
+  const payloadBytes = Buffer.byteLength(JSON.stringify(payload ?? {}), "utf8");
+  if (payloadBytes > MAX_CACHE_PAYLOAD_BYTES) {
+    throw new Error(`Cache payload too large for ${cacheKey}: ${payloadBytes} bytes`);
+  }
   const expiresAtMs = Date.now() + ttlSeconds * 1000;
   const expiresAt = new Date(expiresAtMs).toISOString();
   try {

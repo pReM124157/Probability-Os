@@ -11,7 +11,10 @@
     "prestart": "npm run test",
     "start": "node src/server.js",
     "dev": "npm run test && node src/server.js",
-    "test": "node tests/safety.test.js"
+    "test": "node tests/safety.test.js",
+    "test:integration": "vitest run tests/integration --reporter=verbose",
+    "dataset:report": "node -e \"import('./src/services/datasetMaturity.service.js').then(async (m)=>{console.log(JSON.stringify(await m.buildDatasetMaturityReport(),null,2));})\"",
+    "dataset:enrich": "node -e \"import('./src/services/datasetMaturity.service.js').then(async (m)=>{console.log(JSON.stringify(await m.runHistoricalDatasetEnrichment({}),null,2));})\""
   },
   "keywords": [],
   "author": "",
@@ -35,6 +38,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "vitest": "^2.1.9"
   }
 }

@@ -7,6 +7,7 @@ const router = express.Router();
 const WINDOW_MS = 60 * 1000;
 const MAX_PER_WINDOW = Number(process.env.BACKTEST_ROUTE_RPM || 60);
 const buckets = new Map();
+const ROUTE_AUTH_TOKEN = process.env.INTERNAL_API_TOKEN || process.env.ADMIN_API_TOKEN || "";
 
 router.use((req, res, next) => {
   const key = `${req.ip || "unknown"}:${req.path}`;
@@ -19,6 +20,43 @@ router.use((req, res, next) => {
   bucket.count += 1;
   buckets.set(key, bucket);
   if (bucket.count > MAX_PER_WINDOW) return res.status(429).json({ success: false, message: "Rate limit exceeded" });
+  return next();
+});
+
+router.use((req, res, next) => {
+  const traceId = req.traceId || createTraceId("backtesting_auth");
+  const authHeader = String(req.headers.authorization || "");
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const apiKey = String(req.headers["x-api-key"] || "");
+  const providedToken = bearerToken || apiKey;
+
+  if (!ROUTE_AUTH_TOKEN) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "backtesting",
+      reason: "server_auth_not_configured"
+    });
+    return res.status(503).json({ success: false, traceId, message: "Route auth is not configured" });
+  }
+
+  if (!providedToken) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "backtesting",
+      reason: "missing_token"
+    });
+    return res.status(401).json({ success: false, traceId, message: "Unauthorized" });
+  }
+
+  if (providedToken !== ROUTE_AUTH_TOKEN) {
+    logEvent("security.route_auth.rejected", {
+      traceId,
+      routeGroup: "backtesting",
+      reason: "invalid_token"
+    });
+    return res.status(403).json({ success: false, traceId, message: "Forbidden" });
+  }
+
   return next();
 });
 
