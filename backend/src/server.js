@@ -29,6 +29,7 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startStatisticalValidationScheduler } = await import("./scheduler/statisticalValidation.scheduler.js");
       const { startPublicAnalyticsScheduler } = await import("./scheduler/publicAnalytics.scheduler.js");
       const { startBacktestingScheduler } = await import("./scheduler/backtesting.scheduler.js");
+      const { startAdaptiveIntelligenceScheduler } = await import("./scheduler/adaptiveIntelligence.scheduler.js");
 
       startBot();
       startPortfolioScheduler();
@@ -39,6 +40,7 @@ app.listen(PORT, "0.0.0.0", () => {
       startStatisticalValidationScheduler();
       startPublicAnalyticsScheduler();
       startBacktestingScheduler();
+      startAdaptiveIntelligenceScheduler();
       
       console.log("🚀 All background services initialized.");
     } catch (error) {

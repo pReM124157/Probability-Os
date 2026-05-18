@@ -7,6 +7,7 @@ import { masterAgent } from "./agents/master.agent.js";
 import webhookRouter from "./routes/webhook.js";
 import analyticsRouter from "./routes/analytics.routes.js";
 import backtestingRouter from "./routes/backtesting.routes.js";
+import adaptiveRouter from "./routes/adaptive.routes.js";
 import { buildAnalysisContext } from "./core/analysisContext.js";
 import { createTraceId, logError, logEvent } from "./services/telemetry.service.js";
 
@@ -83,6 +84,7 @@ app.use((req, res, next) => {
 app.use('/webhook', webhookRouter);
 app.use('/analytics', analyticsRouter);
 app.use('/backtesting', backtestingRouter);
+app.use('/adaptive', adaptiveRouter);
 app.use(express.json());
 
 
