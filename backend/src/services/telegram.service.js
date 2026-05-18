@@ -56,6 +56,14 @@ import {
   sanitizeInstitutionalAction,
   synthesizePrimaryLimitation
 } from "./presentationAbstraction.service.js";
+import {
+  buildInstitutionalFundamentalNarrative,
+  classifyInstitutionalConfidence,
+  buildGovernanceExplanation,
+  buildEvidenceConstraintSummary,
+  buildDecisionTrace,
+  computeInstitutionalFactorWeights
+} from "./institutionalInterpretation.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const THROTTLE_MS = 2000; // 2s cooldown
@@ -233,13 +241,11 @@ function formatAnalysis(res, symbol, stockData = {}) {
 
   const entryTiming = safeObject(result.entryTiming);
   const technical = safeObject(result.technical);
-  const valuation = safeObject(result.valuation);
   const risk = safeObject(result.risk);
   const exitSignal = safeObject(result.exitSignal);
   const intelligence = safeObject(result.intelligence);
   const sector = safeObject(intelligence.sector);
   const relStrength = safeObject(intelligence.relativeStrength);
-  const preMarket = safeObject(result.preMarket);
   const nextSessionPlan = safeObject(result.nextSessionPlan);
   const news = safeObject(result.news);
   const confidenceEvidence = safeObject(result.confidenceEvidence);
@@ -247,23 +253,17 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const priceField = safeString(result.priceField || "");
 
   let marketStatusLabel = "Closed (Last Close Data)";
-  if (priceField === "postMarketPrice") {
-    marketStatusLabel = "Closed (Post-Market Live Data)";
-  } else if (priceField === "preMarketPrice") {
-    marketStatusLabel = "Pre-Market (Live Discovery)";
-  } else if (result.isMarketOpen) {
-    marketStatusLabel = "Open (Live Data)";
-  } else if (priceField === "regularMarketPrice" || priceField === "currentPrice") {
-    marketStatusLabel = "Closed (Latest Regular Session Price)";
-  }
+  if (priceField === "postMarketPrice") marketStatusLabel = "Closed (Post-Market Live Data)";
+  else if (priceField === "preMarketPrice") marketStatusLabel = "Pre-Market (Live Discovery)";
+  else if (result.isMarketOpen) marketStatusLabel = "Open (Live Data)";
+  else if (priceField === "regularMarketPrice" || priceField === "currentPrice") marketStatusLabel = "Closed (Latest Regular Session Price)";
 
   const price = Number(result.currentPrice || entryTiming.currentPrice || 0);
   const priceChange = Number(technical.priceChangePercent || technical.changePercent || 0);
+  const priceText = price > 0 ? `₹${price}` : "Price discovery in progress";
 
   const normalized = {
     verdict: safeString(result.direction || result.action || result?.decision?.finalDecision || "HOLD"),
-    rating: clampPublicConfidence(result?.decision?.finalConfidenceScore || result.confidence || 5),
-    confidence: clampPublicConfidence(result.confidence || result?.decision?.finalConfidenceScore || 0),
     asset: safeString(symbol || "UNKNOWN"),
     currentPrice: price,
     marketStatus: marketStatusLabel,
@@ -276,42 +276,26 @@ function formatAnalysis(res, symbol, stockData = {}) {
     stopLoss: safeString(entryTiming.stopLoss || (price ? `₹${Math.round(price * 0.96)}` : "Dynamic by volatility")),
     target: safeString(entryTiming.initialTarget || (price ? `₹${Math.round(price * 1.06)}` : "Trend continuation target")),
     tradeAction: sanitizeInstitutionalAction(entryTiming.finalExecutionAdvice),
-    pe: stockData.PERatio ?? "-",
-    roe: stockData.ReturnOnEquityTTM ?? "-",
-    profitMargin: stockData.ProfitMargin ?? "-",
-    debtEquity: stockData.DebtToEquityRatio ?? "-",
-    revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? "-",
-    earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? "-",
-    fundamentalView: smartFallback("interpretation", result.analysis || ""),
+    pe: stockData.PERatio ?? null,
+    roe: stockData.ReturnOnEquityTTM ?? null,
+    profitMargin: stockData.ProfitMargin ?? null,
+    debtEquity: stockData.DebtToEquityRatio ?? null,
+    revenueGrowth: stockData.QuarterlyRevenueGrowthYOY ?? null,
+    earningsGrowth: stockData.QuarterlyEarningsGrowthYOY ?? null,
     sectorName: safeString(stockData.Sector || "Unknown Sector"),
     sectorBias: safeString(sector.bias || "NEUTRAL"),
     relStrength: safeString(relStrength.status || "Neutral"),
-    institutionalBias: safeString(result.marketNote || "Institutional activity appears balanced."),
-    newsPositive: smartFallback("news_positive", safeString(news.positive)),
-    newsNegative: smartFallback("news_negative", safeString(news.negative)),
     sentiment: safeString(news.sentiment || "NEUTRAL"),
     riskLevel: safeString(result.riskLevel || risk.riskLevel || "MEDIUM"),
     exitAction: safeString(exitSignal.action || "Risk-governance hold"),
-    exitReason: safeString(exitSignal.reason || "No strong exit trigger yet."),
     bullishScenario: smartFallback("trigger_up", safeString(nextSessionPlan.entryTrigger), { price }),
     bearishScenario: smartFallback("trigger_down", safeString(nextSessionPlan.stopLoss), { price }),
     keyTrigger: safeString(nextSessionPlan.note || "Opening gap + volume confirmation"),
-    finalInsight: smartFallback("final_insight", result.analysis || ""),
     confidenceEvidence,
     institutionalEvidence
   };
 
-  const fmt = (value) => {
-    // Display values from the canonical semantics engine are already formatted strings.
-    // e.g. ROE = "16.78%", D/E = "0.10", P/E = "24.12"
-    // We must NOT apply any further numeric transform — just pass through.
-    if (value === null || value === undefined || value === "-" || value === "") return "-";
-    return String(value);
-  };
-
-  const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "Price discovery in progress";
   const adaptiveScore = Number(normalized.confidenceEvidence?.adaptiveConfidenceScore);
-  const reliabilityClass = safeString(normalized.confidenceEvidence?.reliabilityClass || "LOW");
   const warnings = Array.isArray(normalized.confidenceEvidence?.warnings) ? normalized.confidenceEvidence.warnings : [];
   const penalties = safeObject(normalized.confidenceEvidence?.penalties);
   const contributions = safeObject(normalized.confidenceEvidence?.contributionMap);
@@ -321,100 +305,139 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const driftStatus = safeString(normalized.institutionalEvidence?.drift?.status || "NOT_AVAILABLE_IN_THIS_PATH");
   const benchmarkStatus = safeString(normalized.institutionalEvidence?.benchmark?.status || "NOT_AVAILABLE_IN_THIS_PATH");
   const marketRegime = safeObject(normalized.institutionalEvidence?.marketRegime);
-  const limitation = synthesizePrimaryLimitation({
-    replayStatus,
-    calibrationStatus,
-    driftStatus,
-    benchmarkStatus,
-    warnings
+
+  // Conviction class
+  const conviction = classifyInstitutionalConfidence(adaptiveScore);
+  const confidenceDisplay = Number.isFinite(adaptiveScore)
+    ? `${Math.round(adaptiveScore)}/100 — ${conviction.label}`
+    : "UNRELIABLE — NON-DEPLOYABLE";
+
+  // Institutional fundamental narrative
+  const fundNarrative = buildInstitutionalFundamentalNarrative({
+    rawMetrics: {
+      pe: normalized.pe, roe: normalized.roe, profitMargin: normalized.profitMargin,
+      debtEquity: normalized.debtEquity, revenueGrowth: normalized.revenueGrowth, earningsGrowth: normalized.earningsGrowth
+    },
+    adaptiveScore, technicalRegime: normalized.trend, sector: normalized.sectorName
   });
-  const confidenceLine = Number.isFinite(adaptiveScore)
-    ? `Adaptive Confidence Score: ${Math.round(adaptiveScore)}/100 (${reliabilityClass})`
-    : "LOW STATISTICAL CONFIDENCE";
+
+  // Factor model
+  const factorModel = computeInstitutionalFactorWeights({
+    roe: normalized.roe, profitMargin: normalized.profitMargin, debtEquity: normalized.debtEquity,
+    revenueGrowth: normalized.revenueGrowth, earningsGrowth: normalized.earningsGrowth,
+    technicalTrend: contributions.technicalTrend ?? 0, technicalMomentum: contributions.technicalMomentum ?? 0,
+    volumeConfirmation: contributions.volumeConfirmation ?? 0, sectorAlignment: contributions.sectorAlignment ?? 0,
+    relativeStrength: contributions.relativeStrength ?? 0,
+    adaptiveScore, replayStatus, calibrationStatus, driftStatus
+  });
+
+  // Evidence constraint — ONE compressed paragraph, no repeated spam
+  const evidenceConstraint = buildEvidenceConstraintSummary({ replayStatus, calibrationStatus, driftStatus, benchmarkStatus });
+
+  // Governance gate
+  const governance = buildGovernanceExplanation({
+    replayStatus, adaptiveScore, isLive: result.isLive,
+    tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS"),
+    eventRisk: warnings.includes("EVENT_RISK_OVERRIDE") ? "HIGH" : "LOW",
+    calibrationStatus
+  });
+
+  // Decision trace — every conclusion traced to an engine
+  const decisionTrace = buildDecisionTrace({
+    replayStatus, adaptiveScore, technicalTrend: normalized.trend,
+    fundamentalScore: fundNarrative.quality_summary.score,
+    calibrationStatus, isLive: result.isLive,
+    tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS")
+  });
+
   const activationIf = [
     normalized.bullishScenario !== "-" ? normalized.bullishScenario : null,
     normalized.keyTrigger !== "-" ? normalized.keyTrigger : null,
-    Number.isFinite(adaptiveScore) ? "Adaptive confidence >= 55/100" : "Statistical evidence becomes sufficient"
+    Number.isFinite(adaptiveScore) ? `Adaptive confidence ≥ 55/100 (currently ${Math.round(adaptiveScore)}/100)` : "Statistical evidence becomes sufficient"
   ].filter(Boolean).slice(0, 3);
-  const blockedBy = [
-    limitation.primary?.message || null,
-    normalized.tradeAction || null
-  ].filter(Boolean).slice(0, 3);
-  const evidenceNotes = [
-    replayStatus !== "AVAILABLE" ? abstractStatus(replayStatus).message : "Historical replay reliability meets minimum institutional threshold.",
-    calibrationStatus !== "AVAILABLE" ? abstractStatus(calibrationStatus).message : "Confidence calibration quality is operationally acceptable.",
-    driftStatus !== "AVAILABLE" ? abstractStatus(driftStatus).message : "Adaptive drift controls are stable.",
-    benchmarkStatus !== "AVAILABLE" ? abstractStatus(benchmarkStatus).message : "Benchmark-relative intelligence is available."
-  ];
+
+  const qs = fundNarrative.quality_summary;
+  const qualityLines = [...qs.drivers.slice(0, 3), ...qs.risks.slice(0, 2)]
+    .map((l) => `  • ${l}`).join("\n") || "  • Insufficient fundamental data for quality layer";
+
+  const bs = fundNarrative.balance_sheet_summary;
+  const balanceLines = [
+    `  • ${bs.institutional_interpretation}`,
+    bs.stress ? "  • Leverage stress indicators active" : "  • No leverage stress detected"
+  ].join("\n");
+
+  const gr = fundNarrative.growth_summary;
+  const growthLines = gr.lines && gr.lines.length
+    ? gr.lines.map((l) => `  • ${l}`).join("\n")
+    : "  • Growth data unavailable for this period";
+
+  const vs = fundNarrative.valuation_summary;
+  const fb = factorModel.factor_breakdown;
 
   return `
 *FINSIGHT AI — INSTITUTIONAL DECISION DOSSIER*
 ━━━━━━━━━━━━━━━━━━
 *1) Executive Decision*
-• System Verdict: ${normalized.verdict}
 • Asset: ${normalized.asset}
 • Current Price: ${priceText}
 • Market State: ${normalized.marketStatus}
-• Confidence State: ${Number.isFinite(adaptiveScore) ? `${Math.round(adaptiveScore)}/100 (${reliabilityClass})` : "LOW STATISTICAL CONFIDENCE"}
+• System Verdict: ${normalized.verdict}
+• Conviction Class: ${confidenceDisplay}
 • Decision Basis: ${normalized.tradeAction}
 ━━━━━━━━━━━━━━━━━━
-*2) Primary Limitation*
-• ${limitation.primary.message}
-${limitation.supporting.length ? `• Additional Context: ${limitation.supporting.map((x) => x.message).join(" | ")}` : "• Additional Context: None"}
+*2) Evidence Reliability*
+${evidenceConstraint}
+• Regime: ${marketRegime.state || "UNKNOWN"} | Sector Bias: ${marketRegime.sectorBias || normalized.sectorBias} | Rel. Strength: ${marketRegime.relativeStrength || normalized.relStrength}
 ━━━━━━━━━━━━━━━━━━
 *3) Trade Activation Conditions*
 ${noTrade ? "• Active Positioning: Deferred under institutional execution controls." : "• Active Positioning: Conditionally allowed under governance constraints."}
 • Activation Triggers:
-${activationIf.map((x) => `• ${x}`).join("\n")}
-• Current Blockers:
-${blockedBy.map((x) => `• ${x}`).join("\n")}
-• Invalidation Trigger: ${normalized.bearishScenario}
-• Risk Controls: Stop Loss ${normalized.stopLoss} | Initial Target ${normalized.target}
+${activationIf.map((x) => `  • ${x}`).join("\n")}
+• Stop Loss: ${normalized.stopLoss} | Target: ${normalized.target}
 ━━━━━━━━━━━━━━━━━━
-*4) Institutional Evidence*
-• ${evidenceNotes[0]}
-• ${evidenceNotes[1]}
-• ${evidenceNotes[2]}
-• ${evidenceNotes[3]}
-• Regime Context: ${marketRegime.state || "UNKNOWN"} | Sector Bias ${marketRegime.sectorBias || normalized.sectorBias} | Relative Strength ${marketRegime.relativeStrength || normalized.relStrength}
+*4) Weighted Factor Model*
+  • Fundamentals: ${fb.fundamentals}/35 | Technicals: ${fb.technicals}/30
+  • Execution: ${fb.execution}/20 | Intelligence: ${fb.intelligence.toFixed(1)}/15
+  • Total Factor Score: ${fb.total}/100
+${factorModel.positive_drivers.length ? factorModel.positive_drivers.map((d) => `  ✓ ${d}`).join("\n") : "  ✓ No dominant positive factors"}
+${factorModel.negative_drivers.length ? factorModel.negative_drivers.map((d) => `  ✗ ${d}`).join("\n") : "  ✗ No material constraint factors"}
 ━━━━━━━━━━━━━━━━━━
 *5) Adaptive Confidence Attribution*
-• ${confidenceLine}
-• Contribution - Technical Trend: ${contributions.technicalTrend ?? "UNAVAILABLE"}
-• Contribution - Technical Momentum: ${contributions.technicalMomentum ?? "UNAVAILABLE"}
-• Contribution - Sector Alignment: ${contributions.sectorAlignment ?? "UNAVAILABLE"}
-• Contribution - Relative Strength: ${contributions.relativeStrength ?? "UNAVAILABLE"}
-• Contribution - Fundamental Quality: ${contributions.fundamentalQuality ?? "UNAVAILABLE"}
-• Contribution - Data Quality: ${contributions.dataQuality ?? "UNAVAILABLE"}
-• Penalty - Partial Data: ${penalties.partialDataPenalty ?? 0}
-• Penalty - Degraded Execution: ${penalties.degradedExecutionPenalty ?? 0}
-• Penalty - Event Risk: ${penalties.eventRiskPenalty ?? 0}
+• Contribution — Technical Trend: ${contributions.technicalTrend ?? "—"} | Momentum: ${contributions.technicalMomentum ?? "—"}
+• Contribution — Sector Alignment: ${contributions.sectorAlignment ?? "—"} | Rel. Strength: ${contributions.relativeStrength ?? "—"}
+• Contribution — Fundamental Quality: ${contributions.fundamentalQuality ?? "—"} | Data Quality: ${contributions.dataQuality ?? "—"}
+• Penalty — Partial Data: ${penalties.partialDataPenalty ?? 0} | Degraded Exec: ${penalties.degradedExecutionPenalty ?? 0} | Event Risk: ${penalties.eventRiskPenalty ?? 0}
 ━━━━━━━━━━━━━━━━━━
-*6) Technical + Fundamental Analysis*
-• Trend: ${normalized.trend}
-• Momentum: ${normalized.momentum}
-• Volume: ${normalized.volume}
-• Support: ${normalized.support}
-• Resistance: ${normalized.resistance}
-• Entry Zone: ${normalized.entryZone}
-• P/E: ${fmt(normalized.pe)}
-• ROE: ${fmt(normalized.roe)}
-• Profit Margin: ${fmt(normalized.profitMargin)}
-• Debt/Equity: ${fmt(normalized.debtEquity)}
-• Revenue Growth YoY: ${fmt(normalized.revenueGrowth)}
-• Earnings Growth YoY: ${fmt(normalized.earningsGrowth)}
+*6) Institutional Fundamental Intelligence*
+• Fundamental Quality Score: ${qs.score}/100 — ${qs.bias}
+• Institutional Bias: ${qs.class}
+Quality Layer
+${qualityLines}
+Balance Sheet Layer
+${balanceLines}
+Growth Layer
+${growthLines}
+Valuation Layer
+  • ${vs.label || "Valuation data unavailable"}
+Net Institutional Interpretation
+  ${fundNarrative.institutional_conclusion}
 ━━━━━━━━━━━━━━━━━━
-*7) Risk Governance*
-• Exit Signal: ${normalized.exitAction}
-• Exit Rationale: ${normalized.exitReason}
-• Institutional Bias: ${normalized.institutionalBias}
+*7) Decision Trace*
+${decisionTrace.map((t) => `• ${t}`).join("\n") || "• Trace data unavailable"}
+━━━━━━━━━━━━━━━━━━
+*8) Governance & Deployment Gate*
+${governance ? governance.formatted : "• No active deployment blocks — conditions conditionally satisfied"}
+• Risk Controls: Stop Loss ${normalized.stopLoss} | Target ${normalized.target}
 • Capital Protection State: ${noTrade ? "DEFENSIVE" : "CONDITIONAL_DEPLOYMENT"}
 ━━━━━━━━━━━━━━━━━━
-*8) Final System Verdict*
+*9) Technical Regime*
+• Trend: ${normalized.trend} | Momentum: ${normalized.momentum} | Volume: ${normalized.volume}
+• Support: ${normalized.support} | Resistance: ${normalized.resistance}
+• Entry Zone: ${normalized.entryZone}
+━━━━━━━━━━━━━━━━━━
+*10) Final Institutional Verdict*
 • Recommendation: ${normalized.verdict}
-• Confidence State: ${Number.isFinite(adaptiveScore) ? `${Math.round(adaptiveScore)}/100` : "UNRELIABLE DUE TO LOW SAMPLE SIZE"}
-• Primary Constraint: ${limitation.primary.message}
-• Intelligence Note: ${normalized.finalInsight}
+• Conviction: ${confidenceDisplay}
 • News Sentiment: ${normalized.sentiment}
 ━━━━━━━━━━━━━━━━━━
 ⚠️ Educational use only. Not financial advice.`.trim();
