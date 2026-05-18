@@ -1,12 +1,15 @@
-import { generateInvestmentAnalysis } from "../services/claude.service.js";
+import { generateStructuredJson } from "../services/claude.service.js";
+import { riskSchema } from "../core/agentSchemas.js";
+import { buildRiskContext } from "../core/analysisContext.js";
 
 export async function runRiskAgent(stockData) {
+  const curated = buildRiskContext(stockData);
   const prompt = `
 You are a risk management expert.
 
 Analyze:
 
-${JSON.stringify(stockData, null, 2)}
+${JSON.stringify(curated, null, 2)}
 
 Return ONLY a JSON object with:
 {
@@ -16,12 +19,14 @@ Return ONLY a JSON object with:
 }
 `;
 
-  const response = await generateInvestmentAnalysis(prompt);
   try {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    return JSON.parse(jsonMatch ? jsonMatch[0] : response);
+    return await generateStructuredJson({
+      prompt,
+      schema: riskSchema,
+      schemaName: "risk"
+    });
   } catch (e) {
-    return { riskLevel: "MEDIUM", riskScore: 5, details: response };
+    throw new Error(`Risk analysis unavailable: ${e.message}`);
   }
 }
 

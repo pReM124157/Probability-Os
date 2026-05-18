@@ -1,3 +1,6 @@
+import { explainabilitySchema } from "../core/agentSchemas.js";
+import { buildExplainabilityContext } from "../core/analysisContext.js";
+
 export async function explainDecision({
   stock,
   financialData,
@@ -10,6 +13,12 @@ export async function explainDecision({
   portfolioImpact
 }) {
   try {
+    buildExplainabilityContext({
+      ...(financialData || {}),
+      ...(valuationData || {}),
+      ...(riskData || {}),
+      ...(technicalData || {})
+    });
     const positives = [];
     const negatives = [];
     const warnings = [];
@@ -124,7 +133,7 @@ export async function explainDecision({
         "The stock shows elevated risk, weak conviction, or deteriorating conditions, making capital protection the priority.";
     }
 
-    return {
+    const payload = {
       stock,
       finalDecision,
       confidenceScore,
@@ -133,6 +142,11 @@ export async function explainDecision({
       negatives,
       warnings
     };
+    const validated = explainabilitySchema.safeParse(payload);
+    if (!validated.success) {
+      throw new Error(`Explainability schema invalid: ${validated.error.issues.map((i) => i.path.join(".")).join(",")}`);
+    }
+    return validated.data;
   } catch (error) {
     console.error("Explainability Agent Error:", error.message);
 

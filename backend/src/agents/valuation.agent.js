@@ -1,11 +1,14 @@
-import { generateInvestmentAnalysis } from "../services/claude.service.js";
+import { generateStructuredJson } from "../services/claude.service.js";
+import { valuationSchema } from "../core/agentSchemas.js";
+import { buildValuationContext } from "../core/analysisContext.js";
 
 export async function valuationAgent(stockData) {
+  const curated = buildValuationContext(stockData);
   const prompt = `
 You are a valuation specialist. 
 
 Analyze this market and financial data:
-${JSON.stringify(stockData, null, 2)}
+${JSON.stringify(curated, null, 2)}
 
 Provide a deep valuation analysis.
 Consider PE ratio vs Sector, Price to Book, and Growth rates.
@@ -20,23 +23,21 @@ Return ONLY a JSON object:
 }
 `;
 
-  const response = await generateInvestmentAnalysis(prompt);
   try {
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    const result = JSON.parse(jsonMatch ? jsonMatch[0] : response);
+    const result = await generateStructuredJson({
+      prompt,
+      schema: valuationSchema,
+      schemaName: "valuation"
+    });
     return {
-      score: result.score || 5,
-      status: result.status || "FAIR",
-      fairPrice: result.fairPrice || 0,
-      marginOfSafety: result.marginOfSafety || "0%",
-      reason: result.reason || "Analysis completed"
+      score: result.score,
+      status: result.status,
+      fairPrice: result.fairPrice,
+      marginOfSafety: result.marginOfSafety,
+      reason: result.reason
     };
   } catch (e) {
-    console.error("Valuation Agent parsing error:", e.message);
-    return { 
-      score: 5, 
-      status: "FAIR", 
-      reason: "Fallback valuation due to analysis error" 
-    };
+    console.error("Valuation Agent structured-output error:", e.message);
+    throw new Error(`Valuation analysis unavailable: ${e.message}`);
   }
 }

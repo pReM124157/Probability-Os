@@ -9,8 +9,9 @@ function sectorBiasToRank(bias) {
   return 5;
 }
 
-export function buildSectorRotation({ rankedStocks = [], marketSectorSnapshot = {} }) {
-  const sectorMomentum = getSectorMomentum();
+export async function buildSectorRotation({ rankedStocks = [], marketSectorSnapshot = {} }) {
+  const sectorMomentum = await getSectorMomentum();
+  if (sectorMomentum?.unavailable) return [];
   const sectorMap = new Map();
 
   Object.entries(sectorMomentum).forEach(([sector, data]) => {

@@ -1,7 +1,9 @@
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
 import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
-import { logError } from "./telemetry.service.js";
+import { logError, logEvent, logMetric } from "./telemetry.service.js";
+import { decisionSchema } from "../core/agentSchemas.js";
+import { buildDecisionContext } from "../core/analysisContext.js";
 
 dotenv.config();
 
@@ -32,7 +34,8 @@ Provide:
 - Clear BUY / HOLD / AVOID signal
 - Structured, data-driven output
 Be precise, concise, and professional.
-Always end with: ⚠️ Educational only. Not financial advice.
+Use non-advisory wording such as "Educational high-conviction analysis" and never imperative trade commands.
+Always end with: ⚠️ Educational analysis only. Not investment advice.
 `.trim();
 
 const FREE_SYSTEM_PROMPT = `
@@ -186,11 +189,59 @@ export const generateInvestmentAnalysis = async (prompt) => {
   }
 };
 
+export async function generateStructuredJson({ prompt, schema, schemaName, maxTokens = 800 }) {
+  const call = async (client, model) => {
+    const startedAt = Date.now();
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      max_tokens: maxTokens
+    });
+    const raw = response?.choices?.[0]?.message?.content || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      logMetric("llm.structured.parse_failure", 1, { schemaName, phase: "json_parse", model });
+      logEvent("llm.structured.malformed_output", { schemaName, model, raw });
+      throw error;
+    }
+    const validated = schema.safeParse(parsed);
+    if (!validated.success) {
+      logMetric("llm.structured.parse_failure", 1, { schemaName, phase: "schema_validate", model });
+      logEvent("llm.structured.malformed_output", {
+        schemaName,
+        model,
+        issues: validated.error.issues
+      });
+      throw new Error(`Schema validation failed for ${schemaName}`);
+    }
+    logMetric("llm.structured.parse_success", 1, { schemaName, model });
+    logMetric("llm.structured.latency_ms", Date.now() - startedAt, { schemaName, model });
+    return validated.data;
+  };
+
+  try {
+    return await call(primaryGroq, "llama-3.3-70b-versatile");
+  } catch (firstError) {
+    try {
+      logEvent("llm.structured.retry", { schemaName, reason: firstError.message });
+      return await call(backupGroq, "llama-3.1-8b-instant");
+    } catch (secondError) {
+      logError("llm.structured.fail_closed", secondError, { schemaName });
+      throw new Error(`Structured output unavailable for ${schemaName}`);
+    }
+  }
+}
+
 const llmCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 export const getInstitutionalAnalysis = async (data) => {
   const ticker = data.Symbol || "UNKNOWN";
+  const curated = buildDecisionContext(data);
   
   // Strong Cache Key including fundamentals and technicals to prevent collisions
   const cacheKey = JSON.stringify({
@@ -238,20 +289,8 @@ You are a hedge fund equity analyst.
 Make strict, data-driven decisions using ONLY provided numbers. 
 No hallucinations. No generic fluff.
 
-STOCK: ${data.Name || data.Symbol} (${data.Symbol}) | SECTOR: ${data.Sector || "N/A"}
-
-CORE METRICS:
-- MCAP: ${data.MarketCapitalization ?? "N/A"} | PE: ${data.PERatio ?? "N/A"} | PB: ${data.PriceToBookRatio ?? "N/A"}
-- MARGIN: ${data.ProfitMargin ?? "N/A"} | ROE: ${data.ReturnOnEquityTTM ?? "N/A"} | D/E: ${data.DebtToEquityRatio ?? "N/A"}
-- REV GROWTH: ${data.QuarterlyRevenueGrowthYOY ?? "N/A"} | EARN GROWTH: ${data.QuarterlyEarningsGrowthYOY ?? "N/A"}
-
-LIVE DATA:
-- PRICE: ₹${data.currentPrice ?? "N/A"} | HIGH/LOW: ${data.dayHigh}/${data.dayLow}
-- 52W H/L: ${data.fiftyTwoWeekHigh}/${data.fiftyTwoWeekLow} | VOL: ${data.volume} (AVG: ${data.averageVolume})
-
-TECHNICALS:
-- RSI: ${data.rsi ?? "N/A"} | 50DMA: ${data.above50DMA} | 200DMA: ${data.above200DMA}
-- MOMENTUM: ${data.momentumScore}/10 | BREAKOUT: ${data.breakoutStrength}/10
+CURATED_CONTEXT:
+${JSON.stringify(curated)}
 
 RULES:
 BUY: Strong fundamentals, healthy growth, attractive valuation.
@@ -259,14 +298,17 @@ HOLD: Mixed setup, neutral valuation, wait for confirmation.
 SELL: Weak quality, poor growth, overvaluation.
 
 FORMAT:
-Final Decision: BUY/HOLD/SELL
-Confidence Score: X/10
-Risk Level: LOW/MEDIUM/HIGH
-Priority Level: LOW/MEDIUM/HIGH
-Rank Score: X/10
-Suggested Allocation: X%
-Reason: (2-line max, data-based)
-Recommended Action: (Short instruction)
+Return valid JSON only:
+{
+  "finalDecision": "BUY" | "HOLD" | "SELL",
+  "finalConfidenceScore": number,
+  "riskLevel": "LOW" | "MEDIUM" | "HIGH",
+  "priorityLevel": "LOW" | "MEDIUM" | "HIGH",
+  "rankScore": number,
+  "suggestedAllocation": "string%",
+  "reason": "string",
+  "recommendation": "string"
+}
 `.trim();
 
   const result = await getOrPopulateSharedCache(
@@ -274,28 +316,11 @@ Recommended Action: (Short instruction)
     "institutional_analysis",
     Math.floor(CACHE_DURATION / 1000),
     async () => {
-      const response = await generateInvestmentAnalysis(prompt);
-
-      // Parse result
-      const decision = response.match(/Final Decision:\s*(.*)/i)?.[1] || "HOLD";
-      const confidence = parseInt(response.match(/Confidence Score:\s*(\d+)/i)?.[1]) || 5;
-      const risk = response.match(/Risk Level:\s*(.*)/i)?.[1] || "MEDIUM";
-      const priority = response.match(/Priority Level:\s*(.*)/i)?.[1] || "MEDIUM";
-      const rank = parseInt(response.match(/Rank Score:\s*(\d+)/i)?.[1]) || 5;
-      const allocation = response.match(/Suggested Allocation:\s*(.*)/i)?.[1] || "0%";
-      const reason = response.match(/Reason:\s*([\s\S]*?)(?=Recommended Action:|$)/i)?.[1]?.trim() || "No reason.";
-      const action = response.match(/Recommended Action:\s*([\s\S]*?)$/i)?.[1]?.trim() || "Monitor.";
-
-      return {
-        finalDecision: decision.toUpperCase(),
-        finalConfidenceScore: confidence,
-        riskLevel: risk.toUpperCase(),
-        priorityLevel: priority.toUpperCase(),
-        rankScore: rank,
-        suggestedAllocation: allocation,
-        reason: reason,
-        recommendation: action
-      };
+      return await generateStructuredJson({
+        prompt,
+        schema: decisionSchema,
+        schemaName: "decision"
+      });
     },
     {
       lockOwner: `llm:${ticker}`,
@@ -344,13 +369,17 @@ export const analyzeStock = async (stock) => {
     "finalVerdict": "BUY" | "HOLD" | "SELL",
     "stockFundamentals": "summary text"
   }`;
-  
-  const response = await generateInvestmentAnalysis(prompt);
+
   try {
-    // Try to extract JSON if it's wrapped in markdown
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    return JSON.parse(jsonMatch ? jsonMatch[0] : response);
+    const response = await primaryGroq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      max_tokens: 300
+    });
+    return JSON.parse(response.choices?.[0]?.message?.content || "{}");
   } catch (e) {
-    return { finalVerdict: "HOLD", stockFundamentals: response };
+    return { finalVerdict: "HOLD", stockFundamentals: "Structured output unavailable." };
   }
 };

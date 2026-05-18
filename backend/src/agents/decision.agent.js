@@ -12,13 +12,13 @@ export async function decisionAgent(data) {
     console.error("Decision Agent Error:", error.message);
     return {
       finalDecision: "HOLD",
-      finalConfidenceScore: 5,
+      finalConfidenceScore: 1,
       riskLevel: "MEDIUM",
-      priorityLevel: "MEDIUM",
-      rankScore: 5,
+      priorityLevel: "LOW",
+      rankScore: 1,
       suggestedAllocation: "0%",
-      reason: "Error in deep analysis phase. Defaulting to neutral position.",
-      recommendation: "Monitor manually."
+      reason: `Decision engine fail-closed: ${error.message}`,
+      recommendation: "No trade. Structured decision output unavailable."
     };
   }
 }

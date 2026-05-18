@@ -145,11 +145,18 @@ export async function analyzeEntryTiming({
                 (trend === "BULLISH" ? 1.0 : -0.5) +
                 (volumeRatio > 1.3 ? 0.8 : volumeRatio < 0.9 ? -0.5 : 0) +
                 (rsi >= 48 && rsi <= 68 ? 0.8 : rsi > 75 ? -1.2 : rsi < 35 ? -0.4 : 0);
+            const trendStrength = Number(momentumScore || 5);
+            const atrPct = activePrice > 0 ? atr / activePrice : 0;
+            const atrCompression = atrPct > 0 && atrPct <= 0.012;
+            const volatilityExpansion = atrPct >= 0.025;
+            const adxProxy = Math.max(10, Math.min(45, 10 + (trendStrength * 3) + (volumeRatio > 1.2 ? 4 : 0)));
+            const momentumConfirmed = trend === "BULLISH" && trendStrength >= 6 && volumeRatio >= 1.1 && rsi >= 50;
 
             const stopAnchor = Math.max(
                 support,
                 sma50 > 0 ? sma50 - (0.4 * atr) : 0,
-                activePrice - (2.2 * atr)
+                activePrice - (2.2 * atr),
+                (sma20 + sma50) / 2
             );
             const stopBuffer = Math.max(0.35 * atr, activePrice * 0.004);
             const computedStop = Math.min(activePrice - Math.max(0.8 * atr, activePrice * 0.006), stopAnchor - stopBuffer);
@@ -157,11 +164,24 @@ export async function analyzeEntryTiming({
                 ? computedStop
                 : activePrice - Math.max(1.2 * atr, activePrice * 0.02);
 
-            const breakoutTarget = resistance > activePrice
-                ? resistance
-                : activePrice + (2.4 * atr);
-            const stretchTarget = activePrice + (3.1 * atr);
-            const computedTarget = Math.max(breakoutTarget, stretchTarget);
+            const continuationProbability = Math.min(
+                0.9,
+                0.45 +
+                (trend === "BULLISH" ? 0.16 : 0) +
+                (trendStrength >= 7 ? 0.1 : trendStrength >= 6 ? 0.06 : 0) +
+                (momentumConfirmed ? 0.1 : 0)
+            );
+            const historicalExtension = Math.max(0.8, Math.min(2.2, 1.05 + (trendStrength - 5) * 0.17));
+            const projectedMove =
+                atr *
+                continuationProbability *
+                historicalExtension *
+                (volatilityExpansion ? 1.2 : atrCompression ? 0.78 : 1);
+            const resistanceProjection = Math.max(resistance, activePrice + (atr * (1.2 + continuationProbability)));
+            const computedTargetBase = Math.max(resistanceProjection, activePrice + projectedMove);
+            const computedTarget = atrCompression
+                ? Math.min(computedTargetBase, activePrice + (1.8 * atr))
+                : computedTargetBase;
             const riskPerShare = activePrice - validStop;
             const rewardPerShare = computedTarget - activePrice;
             const rr = riskPerShare > 0 ? rewardPerShare / riskPerShare : 0;
@@ -169,7 +189,7 @@ export async function analyzeEntryTiming({
             const entryLower = Math.max(validStop + (0.4 * atr), Math.min(activePrice, sma20, sma50) - (0.25 * atr));
             const entryUpper = Math.max(entryLower, Math.min(activePrice + (0.4 * atr), resistance));
 
-            if (setupScore < 4.8 || rr < 1.2 || trend === "BEARISH") {
+            if (setupScore < 4.8 || rr < 1.2 || trend === "BEARISH" || atrCompression || adxProxy < 20) {
                 strategy = "AVOID ENTRY";
                 entryUrgency = "VERY LOW";
                 idealEntryZone = "Avoid";
@@ -256,7 +276,11 @@ export async function analyzeEntryTiming({
             rewardRiskRatio,
             entryUrgency,
             reasoning,
-            finalExecutionAdvice
+            finalExecutionAdvice,
+            atrCompression,
+            adxProxy: Number(adxProxy.toFixed(1)),
+            trendStrength: Number(trendStrength.toFixed(1)),
+            momentumConfirmed
         };
 
     } catch (error) {

@@ -1,5 +1,6 @@
 import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supabase.service.js";
 import { claimEphemeralKey } from "./distributedState.service.js";
+import { logMetric } from "./telemetry.service.js";
 
 const DEFAULT_WAIT_MS = 1500;
 const DEFAULT_POLL_MS = 150;
@@ -23,8 +24,15 @@ export async function getSharedCache(cacheKey) {
       .eq("cache_key", cacheKey)
       .maybeSingle();
     if (error) throw error;
-    if (!data) return null;
-    if (new Date(data.expires_at) <= new Date()) return null;
+    if (!data) {
+      logMetric("cache.hit_rate", 0, { cacheKey });
+      return null;
+    }
+    if (new Date(data.expires_at) <= new Date()) {
+      logMetric("cache.hit_rate", 0, { cacheKey, expired: true });
+      return null;
+    }
+    logMetric("cache.hit_rate", 1, { cacheKey });
     return data.payload;
   } catch (error) {
     if (!isSupabaseSchemaMissing(error)) throw error;
@@ -49,6 +57,7 @@ export async function setSharedCache(cacheKey, cacheGroup, payload, ttlSeconds) 
         onConflict: "cache_key"
       });
     if (error) throw error;
+    logMetric("cache.ttl_seconds", ttlSeconds, { cacheKey, cacheGroup });
   } catch (error) {
     if (!isSupabaseSchemaMissing(error)) throw error;
     localSharedCache.set(cacheKey, {
@@ -116,9 +125,11 @@ export async function getOrPopulateSharedCache(
   const pollMs = options.pollMs || DEFAULT_POLL_MS;
 
   const claimed = await claimEphemeralKey("shared_cache_fill", fillLockKey, lockOwner, fillLockTtlSeconds);
+  logMetric("cache.fill_lock.claimed", claimed ? 1 : 0, { cacheKey, cacheGroup });
   if (!claimed) {
     const waited = await waitForSharedCache(cacheKey, waitMs, pollMs);
     if (waited) return waited;
+    logMetric("cache.fill_lock.wait_timeout", 1, { cacheKey, cacheGroup });
     return producer();
   }
 

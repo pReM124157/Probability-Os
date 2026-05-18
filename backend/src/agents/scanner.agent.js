@@ -23,6 +23,21 @@ const STOCK_UNIVERSE = [
   "TCS", "TECHM", "TITAN", "ULTRACEMCO", "WIPRO"
 ];
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function mapWithConcurrency(items, worker, maxConcurrency = 3) {
+  const results = [];
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(maxConcurrency, items.length) }).map(async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 /**
  * Layer 1: Cheap Pre-Filter (No Groq/AI)
  * Uses market data to score stocks and shortlist candidates
@@ -31,69 +46,55 @@ async function getShortlistedStocks(limit = 10) {
   console.log(`📊 Layer 1: Pre-filtering ${STOCK_UNIVERSE.length} stocks...`);
   const candidates = [];
 
-  // Process in small batches to be polite to Yahoo Finance
-  const batchSize = 10;
-  for (let i = 0; i < STOCK_UNIVERSE.length; i += batchSize) {
-    const batch = STOCK_UNIVERSE.slice(i, i + batchSize);
-    
-    await Promise.all(batch.map(async (symbol) => {
-      try {
-        const [marketData, history] = await Promise.all([
-          getLiveMarketData(symbol),
-          getHistoricalCandles(symbol, { days: 260, interval: "1d" })
-        ]);
-        if (!Array.isArray(history) || history.length < 50 || !marketData?.currentPrice) return;
+  await mapWithConcurrency(STOCK_UNIVERSE, async (symbol) => {
+    try {
+      await sleep(Math.floor(Math.random() * 180) + 60);
+      const [marketData, history] = await Promise.all([
+        getLiveMarketData(symbol),
+        getHistoricalCandles(symbol, { days: 260, interval: "1d" })
+      ]);
+      if (!Array.isArray(history) || history.length < 50 || !marketData?.currentPrice) return;
 
-        const prices = history.map((candle) => Number(candle?.close || 0)).filter((value) => value > 0);
-        const highs = history.map((candle) => Number(candle?.high || 0)).filter((value) => value > 0);
-        const volumes = history.map((candle) => Number(candle?.volume || 0)).filter((value) => value > 0);
-        if (!prices.length || !highs.length) return;
+      const prices = history.map((candle) => Number(candle?.close || 0)).filter((value) => value > 0);
+      const highs = history.map((candle) => Number(candle?.high || 0)).filter((value) => value > 0);
+      const volumes = history.map((candle) => Number(candle?.volume || 0)).filter((value) => value > 0);
+      if (!prices.length || !highs.length) return;
 
-        const currentPrice = Number(marketData.currentPrice || prices[prices.length - 1] || 0);
-        const fiftyTwoWeekHigh = Math.max(...highs);
-        const averageDailyVolume3Month = volumes.slice(-60).reduce((sum, value) => sum + value, 0) / Math.max(volumes.slice(-60).length, 1);
-        const regularMarketVolume = Number(history[history.length - 1]?.volume || 0);
-        const fiftyDayAverage = prices.slice(-50).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-50).length, 1);
-        const twoHundredDayAverage = prices.slice(-200).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-200).length, 1);
-        const previousClose = Number(marketData.previousClose || prices[prices.length - 2] || currentPrice);
-        const changePercent = previousClose > 0
-          ? ((currentPrice - previousClose) / previousClose) * 100
-          : Number(marketData.change || 0);
-        
-        let score = 0;
+      const currentPrice = Number(marketData.currentPrice || prices[prices.length - 1] || 0);
+      const fiftyTwoWeekHigh = Math.max(...highs);
+      const averageDailyVolume3Month = volumes.slice(-60).reduce((sum, value) => sum + value, 0) / Math.max(volumes.slice(-60).length, 1);
+      const regularMarketVolume = Number(history[history.length - 1]?.volume || 0);
+      const fiftyDayAverage = prices.slice(-50).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-50).length, 1);
+      const twoHundredDayAverage = prices.slice(-200).reduce((sum, value) => sum + value, 0) / Math.max(prices.slice(-200).length, 1);
+      const previousClose = Number(marketData.previousClose || prices[prices.length - 2] || currentPrice);
+      const changePercent = previousClose > 0
+        ? ((currentPrice - previousClose) / previousClose) * 100
+        : Number(marketData.change || 0);
+      
+      let score = 0;
 
-        // 1. Breakout Strength (Proximity to 52w High)
-        if (fiftyTwoWeekHigh > 0) {
-          const proximity = currentPrice / fiftyTwoWeekHigh;
-          if (proximity > 0.98) score += 25; // Imminent breakout
-          else if (proximity > 0.95) score += 15;
-        }
-
-        // 2. Volume Strength (Relative to 3M Average)
-        if (averageDailyVolume3Month > 0) {
-          const volRatio = regularMarketVolume / averageDailyVolume3Month;
-          if (volRatio > 2.0) score += 25;
-          else if (volRatio > 1.5) score += 15;
-        }
-
-        // 3. Trend Strength (Moving Averages)
-        if (fiftyDayAverage > 0 && currentPrice > fiftyDayAverage) {
-          score += 10;
-        }
-        if (twoHundredDayAverage > 0 && currentPrice > twoHundredDayAverage) {
-          score += 15;
-        }
-
-        // 4. Price Momentum (Day Change %)
-        if (changePercent > 2) score += 15;
-        else if (changePercent > 0) score += 5;
-
-        candidates.push({ symbol, score, price: currentPrice });
-      } catch (err) {
-        // Skip failed quotes
+      if (fiftyTwoWeekHigh > 0) {
+        const proximity = currentPrice / fiftyTwoWeekHigh;
+        if (proximity > 0.98) score += 25;
+        else if (proximity > 0.95) score += 15;
       }
-    }));
-  }
+
+      if (averageDailyVolume3Month > 0) {
+        const volRatio = regularMarketVolume / averageDailyVolume3Month;
+        if (volRatio > 2.0) score += 25;
+        else if (volRatio > 1.5) score += 15;
+      }
+
+      if (fiftyDayAverage > 0 && currentPrice > fiftyDayAverage) score += 10;
+      if (twoHundredDayAverage > 0 && currentPrice > twoHundredDayAverage) score += 15;
+      if (changePercent > 2) score += 15;
+      else if (changePercent > 0) score += 5;
+
+      candidates.push({ symbol, score, price: currentPrice });
+    } catch (err) {
+      // Skip failed quotes
+    }
+  }, 3);
 
   return candidates
     .sort((a, b) => b.score - a.score)
@@ -174,7 +175,7 @@ export async function runMorningScannerPipeline(limit = 5) {
     }
   }
 
-  const sectorRotation = buildSectorRotation({
+  const sectorRotation = await buildSectorRotation({
     rankedStocks: rankedCandidates,
     marketSectorSnapshot: marketOverview.sectors
   });

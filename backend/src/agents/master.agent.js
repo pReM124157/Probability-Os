@@ -17,6 +17,7 @@ import { analyzeRebalancing } from "./rebalancer.agent.js";
 import { getPortfolio } from "../services/portfolioMemory.service.js";
 import { formatPortfolioReview } from "../core/portfolioFormatter.js";
 import { logRecommendation, getLearningBoost } from "./performanceTracker.agent.js";
+import { insertRecommendationAudit } from "../services/recommendationAudit.service.js";
 import { analyzeEventRisk } from "./eventRisk.agent.js";
 import { 
   calculateRelativeStrength, 
@@ -29,26 +30,13 @@ import { generateTieredAnalysis } from "../services/claude.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
 import { executeTool } from "../tools/registry.js";
-import { buildAnalysisContext } from "../core/analysisContext.js";
+import { buildAnalysisContext, buildDecisionContext } from "../core/analysisContext.js";
+import { getOrPopulateSharedCache, getSharedCache } from "../services/sharedCache.service.js";
+import { logEvent, logMetric } from "../services/telemetry.service.js";
 import {
   validateAnalysisReadiness,
   ANALYSIS_READINESS
 } from "../core/tickerContracts.js";
-
-// --- Global Cache for Market Updates ---
-let marketCache = {
-  data: null,
-  timestamp: 0,
-  state: null
-};
-let isFetchingMarketUpdate = false;
-
-// --- Global Cache for Top Opportunities ---
-let topOpsCache = {
-  data: null,
-  timestamp: 0
-};
-let isFetchingTopOps = false;
 
 const LIVE_PRICE_SOURCES = new Set([
   "YAHOO",
@@ -407,6 +395,70 @@ function buildVerifiedAnalysisFailure(ticker, details = {}) {
   };
 }
 
+function normalizeRecommendationLabel(value) {
+  return safeString(value).trim().toUpperCase();
+}
+
+function applyInstitutionalTradabilityValidation({
+  recommendation,
+  confidenceScore,
+  trendStrength,
+  trend,
+  momentumConfirmed,
+  rr,
+  atrCompression,
+  adxProxy
+}) {
+  const reasons = [];
+  let nextRecommendation = normalizeRecommendationLabel(recommendation) || "HOLD";
+  let nextConfidence = toNumber(confidenceScore);
+  let conviction = nextConfidence >= 8 ? "HIGH" : nextConfidence >= 6 ? "MEDIUM" : "LOW";
+  const isWeakTrend = trend !== "BULLISH" || trendStrength < 6;
+  const isSideways = Boolean(atrCompression) || toNumber(adxProxy) < 20 || isWeakTrend;
+
+  if (rr < 1.5 && nextConfidence < 8) {
+    nextRecommendation = "HOLD";
+    conviction = "LOW";
+    nextConfidence = Math.min(nextConfidence, 5.8);
+    reasons.push("Insufficient reward asymmetry for institutional-grade setup.");
+  }
+
+  const highConvictionLabels = new Set(["STRONG BUY", "HIGH CONVICTION BUY", "AGGRESSIVE BUY"]);
+  if (highConvictionLabels.has(nextRecommendation)) {
+    const allowHighConviction = rr >= 2 && trendStrength >= 7 && Boolean(momentumConfirmed);
+    if (!allowHighConviction) {
+      nextRecommendation = rr >= 1.5 && trend === "BULLISH" ? "BUY" : "HOLD";
+      reasons.push("High-conviction label removed: setup lacks required R/R, trend strength, or momentum confirmation.");
+    }
+  }
+
+  if (isSideways) {
+    nextConfidence = Math.min(nextConfidence, 6.4);
+    if (nextRecommendation.includes("AGGRESSIVE")) {
+      nextRecommendation = "BUY";
+    }
+    if (rr < 2 || isWeakTrend) {
+      nextRecommendation = "HOLD";
+    }
+    reasons.push("Low volatility / weak trend regime detected; aggressive targeting suppressed.");
+  }
+
+  if (rr < 1.5 && nextRecommendation.includes("BUY")) {
+    nextRecommendation = "HOLD";
+  }
+
+  nextRecommendation = nextRecommendation || "HOLD";
+  nextConfidence = clamp(nextConfidence, 1, 10);
+
+  return {
+    recommendation: nextRecommendation,
+    confidenceScore: nextConfidence,
+    conviction: conviction === "HIGH" && nextConfidence < 8 ? "MEDIUM" : conviction,
+    holdBias: nextRecommendation === "HOLD",
+    reasons
+  };
+}
+
 /**
  * Generates a fresh market update with full intelligence pipeline.
  */
@@ -454,36 +506,27 @@ What matters: Market is range-bound—wait for clearer direction.
  * Handles caching and rate control for market updates.
  */
 async function getCachedMarketUpdate() {
-  const now = Date.now();
   const currentState = getMarketStateKey();
-  
-  // Concurrency Lock: Prevent duplicate API hits under load
-  if (isFetchingMarketUpdate) {
-    if (marketCache.data) return marketCache.data;
-    return `India — Market Update\nNo clear market view yet.\nWhat matters: Wait for clarity before acting.`;
-  }
-
-  // 5-minute TTL (300,000 ms) + State Awareness (Reset on Open/Close)
-  const isFresh = marketCache.data && 
-                  (now - marketCache.timestamp < 300000) && 
-                  marketCache.state === currentState;
-
-  if (isFresh) {
-    console.log("MARKET_UPDATE: Serving from cache.");
-    return marketCache.data;
-  }
-  
+  const cacheKey = `MARKET_UPDATE_${currentState}`;
+  const startedAt = Date.now();
+  const cached = await getSharedCache(cacheKey);
+  logMetric("master.market_update.cache_hit", cached ? 1 : 0, { state: currentState });
+  if (cached) return cached;
   try {
-    isFetchingMarketUpdate = true;
-    const fresh = await generateMarketUpdate();
-    marketCache = { data: fresh, timestamp: now, state: currentState };
+    const fresh = await getOrPopulateSharedCache(
+      cacheKey,
+      "master_market_update",
+      300,
+      async () => generateMarketUpdate(),
+      { lockOwner: "master.market_update", fillLockTtlSeconds: 30, waitMs: 4000 }
+    );
+    logMetric("master.market_update.duration_ms", Date.now() - startedAt, { state: currentState });
     return fresh;
   } catch (err) {
     console.error("MARKET_UPDATE_ERROR:", err.message);
-    if (marketCache.data) return marketCache.data; // Serve stale if failure
+    const stale = await getSharedCache(cacheKey);
+    if (stale) return stale;
     return `India — Market Update\nMarket data currently unavailable.\nWhat matters: Wait for clarity before acting.`;
-  } finally {
-    isFetchingMarketUpdate = false;
   }
 }
 
@@ -570,23 +613,20 @@ What matters: Stick to strength, avoid mixed setups.
  * Handles caching and rate control for Top Opportunities.
  */
 async function getTopOpportunities() {
-  const now = Date.now();
-  // 1-hour TTL (3,600,000 ms) for Top Ops
-  if (topOpsCache.data && (now - topOpsCache.timestamp < 3600000)) {
-    return topOpsCache.data;
-  }
-
-  if (isFetchingTopOps) {
-    return topOpsCache.data || "Top Opportunities — India\nScanning universe...\nWhat matters: Data analysis in progress.";
-  }
-
+  const cacheKey = "TOP_OPPORTUNITIES_V1";
+  const cached = await getSharedCache(cacheKey);
+  logMetric("master.top_ops.cache_hit", cached ? 1 : 0);
+  if (cached) return cached;
   try {
-    isFetchingTopOps = true;
-    const fresh = await generateTopOpportunities();
-    topOpsCache = { data: fresh, timestamp: now };
-    return fresh;
-  } finally {
-    isFetchingTopOps = false;
+    return await getOrPopulateSharedCache(
+      cacheKey,
+      "master_top_opportunities",
+      3600,
+      async () => generateTopOpportunities(),
+      { lockOwner: "master.top_ops", fillLockTtlSeconds: 60, waitMs: 5000 }
+    );
+  } catch {
+    return "Top Opportunities — India\nScanning universe...\nWhat matters: Data analysis in progress.";
   }
 }
 
@@ -1186,8 +1226,10 @@ CRITICAL RULES:
     const niftyChange = indices.nifty.change || 0;
     const relStrength = calculateRelativeStrength(liveMarketData.change, niftyChange);
     
-    const sectorMap = getSectorMomentum();
-    const sectorData = sectorMap[normalizeSectorKey(stockData.Sector)] || { strength: 0, bias: "NEUTRAL" };
+    const sectorMap = await getSectorMomentum();
+    const sectorData = sectorMap?.unavailable
+      ? { strength: 0, bias: "NEUTRAL", message: "Sector momentum unavailable." }
+      : (sectorMap[normalizeSectorKey(stockData.Sector)] || { strength: 0, bias: "NEUTRAL" });
     
     const intelligenceSignals = generateSignals({
       roe: parseFloat(stockData.ReturnOnEquityTTM) || 0,
@@ -1300,6 +1342,31 @@ CRITICAL RULES:
       finalConfidenceScore: adjustedConfidence,
       reason: professionalReasoning
     };
+
+    const tradability = applyInstitutionalTradabilityValidation({
+      recommendation: finalDecision.recommendation || finalDecision.finalDecision,
+      confidenceScore: finalDecision.finalConfidenceScore,
+      trendStrength: entryTiming.trendStrength ?? technical.score,
+      trend: technical.trend,
+      momentumConfirmed: entryTiming.momentumConfirmed,
+      rr: parseCurrency(entryTiming.rewardRiskRatio),
+      atrCompression: entryTiming.atrCompression,
+      adxProxy: entryTiming.adxProxy
+    });
+
+    finalDecision.finalDecision = tradability.recommendation === "SELL" ? "SELL" : tradability.recommendation;
+    finalDecision.recommendation = tradability.recommendation;
+    finalDecision.finalConfidenceScore = tradability.confidenceScore;
+    if (tradability.reasons.length > 0) {
+      finalDecision.reason = `${finalDecision.reason} ${tradability.reasons.join(" ")}`.trim();
+    }
+    finalDecision.conviction = tradability.conviction;
+
+    if (tradability.holdBias) {
+      entryTiming.strategy = "WAIT";
+      entryTiming.entryUrgency = "LOW";
+      entryTiming.finalExecutionAdvice = "No-trade preferred until payoff asymmetry and trend quality improve.";
+    }
 
     // PHASE 4: Strategic Allocation (Portfolio, Ranking, Capital, Rebalancing)
     const portfolio = await portfolioAgent({
@@ -1463,8 +1530,103 @@ CRITICAL RULES:
       entryPrice: activePrice,
       stopLoss: parseCurrency(entryTiming.stopLoss),
       target: parseCurrency(entryTiming.initialTarget),
-      reasoning: finalDecision.reason
+      reasoning: finalDecision.reason,
+      sector: stockData.Sector || null,
+      supportingSignals: {
+        rr: parseCurrency(entryTiming.rewardRiskRatio),
+        trend: technical?.trend || "UNKNOWN",
+        momentumScore: technical?.score || null,
+        volatilityBand: technical?.volatility || null
+      },
+      marketRegime: marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED",
+      promptContext: buildDecisionContext({
+        ...stockData,
+        ...technical,
+        currentPrice: activePrice
+      }),
+      outputPayload: finalDecision,
+      marketSnapshot: {
+        price: activePrice,
+        change: liveMarketData?.change || 0,
+        source: liveMarketData?.priceSource || null
+      },
+      providerSources: {
+        liveData: liveMarketData?.priceSource || null,
+        overview: stockData?.source || "yahoo"
+      }
     });
+
+    // AUDIT FOUNDATION: immutable recommendation audit insertion (bounded + fail-safe)
+    const auditPayload = {
+      symbol: ticker,
+      exchange: "NSE",
+      recommendationType: finalDecision.finalDecision || "HOLD",
+      action: finalDecision.finalDecision || "HOLD",
+      confidence: Number((finalDecision.finalConfidenceScore || 0) * 10),
+      conviction: finalDecision.conviction || "MEDIUM",
+      entryPrice: activePrice,
+      stopLoss: parseCurrency(entryTiming.stopLoss),
+      targetPrice: parseCurrency(entryTiming.initialTarget),
+      rrRatio: parseCurrency(entryTiming.rewardRiskRatio),
+      horizon: "SWING",
+      sector: stockData?.Sector || null,
+      marketRegime: marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED",
+      valuationScore: Number(valuation?.score || 0),
+      technicalScore: Number(technical?.score || 0),
+      riskScore:
+        risk?.riskLevel === "LOW" ? 3 :
+        risk?.riskLevel === "MEDIUM" ? 6 : 9,
+      liquidityScore: Number(technical?.volumeRatio || 0),
+      volatilityScore: Number(technical?.atr || 0),
+      aiSummary: finalDecision.reason,
+      reasoningSnapshot: {
+        decision: finalDecision,
+        entryTiming,
+        risk
+      },
+      indicatorSnapshot: {
+        rsi: technical?.rsi,
+        sma20: technical?.sma20,
+        sma50: technical?.sma50,
+        sma200: technical?.sma200,
+        atr: technical?.atr,
+        volumeRatio: technical?.volumeRatio
+      },
+      marketSnapshot: {
+        currentPrice: activePrice,
+        marketOpen: liveMarketData?.isMarketOpen || false,
+        change: liveMarketData?.change || 0,
+        changePercent: liveMarketData?.changePercent || 0,
+        marketNote
+      },
+      providerMetadata: {
+        liveSource: liveMarketData?.priceSource || null,
+        priceField: liveMarketData?.priceField || null,
+        overviewSource: stockData?.source || "yahoo"
+      },
+      analysisVersion: "financial-audit-v1",
+      generatedBy: "master.agent",
+      userId: options?.userId || null,
+      telegramChatId: options?.telegramChatId ? String(options.telegramChatId) : null
+    };
+
+    try {
+      await Promise.race([
+        insertRecommendationAudit(auditPayload),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("recommendation audit timeout")), 2200))
+      ]);
+    } catch (auditError) {
+      logEvent("recommendation.audit.insert_failure", {
+        symbol: ticker,
+        recommendation_id: null,
+        latency_ms: null,
+        validation_status: "unknown",
+        provider_sources: auditPayload.providerMetadata,
+        confidence: auditPayload.confidence,
+        action: auditPayload.action
+      });
+      console.error(`[AUDIT ERROR] ${ticker}:`, auditError.message);
+    }
 
     // FINAL EXECUTION SAFETY CHECK
     // Fix 1: Block non-live or critical latency for execution

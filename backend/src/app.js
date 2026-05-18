@@ -10,15 +10,51 @@ import { createTraceId, logError, logEvent } from "./services/telemetry.service.
 
 
 const app = express();
+const REQUEST_WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS_PER_WINDOW = Number(process.env.RATE_LIMIT_PER_MIN || 120);
+const rateBuckets = new Map();
 
 app.get("/", (req, res) => {
   res.status(200).send("OK");
 });
 
 
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "http://localhost:3000,http://localhost:3001")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: "*"
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS not allowed"), false);
+  }
 }));
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  next();
+});
+
+app.use((req, res, next) => {
+  const key = `${req.ip || "unknown"}:${req.path}`;
+  const now = Date.now();
+  const bucket = rateBuckets.get(key) || { count: 0, start: now };
+  if (now - bucket.start > REQUEST_WINDOW_MS) {
+    bucket.count = 0;
+    bucket.start = now;
+  }
+  bucket.count += 1;
+  rateBuckets.set(key, bucket);
+  if (bucket.count > MAX_REQUESTS_PER_WINDOW) {
+    return res.status(429).json({ success: false, message: "Rate limit exceeded" });
+  }
+  next();
+});
 
 app.use((req, res, next) => {
   const traceId = req.headers["x-trace-id"] || createTraceId("http");

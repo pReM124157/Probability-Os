@@ -16,7 +16,15 @@ export async function logRecommendation({
     entryPrice,
     target,
     stopLoss,
-    reasoning
+    reasoning,
+    model = "llama-3.3-70b-versatile",
+    sector = null,
+    supportingSignals = {},
+    marketRegime = null,
+    promptContext = null,
+    outputPayload = null,
+    marketSnapshot = null,
+    providerSources = null
 }) {
     try {
         const { data, error } = await supabase
@@ -33,6 +41,7 @@ export async function logRecommendation({
             }]);
 
         if (error) throw error;
+
         console.log(`✅ Recommendation logged for ${symbol}`);
         return data;
     } catch (error) {
