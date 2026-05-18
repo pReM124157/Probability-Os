@@ -27,6 +27,8 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startSpikeHook } = await import("./scheduler/spikeHook.scheduler.js");
       const { startRecommendationTrackingScheduler } = await import("./scheduler/recommendationTracking.scheduler.js");
       const { startStatisticalValidationScheduler } = await import("./scheduler/statisticalValidation.scheduler.js");
+      const { startPublicAnalyticsScheduler } = await import("./scheduler/publicAnalytics.scheduler.js");
+      const { startBacktestingScheduler } = await import("./scheduler/backtesting.scheduler.js");
 
       startBot();
       startPortfolioScheduler();
@@ -35,6 +37,8 @@ app.listen(PORT, "0.0.0.0", () => {
       startSpikeHook();
       startRecommendationTrackingScheduler();
       startStatisticalValidationScheduler();
+      startPublicAnalyticsScheduler();
+      startBacktestingScheduler();
       
       console.log("🚀 All background services initialized.");
     } catch (error) {
