@@ -4,6 +4,14 @@ import { safeString, safeSubstring } from "../core/safety.js";
 import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
 import { withProviderGuard } from "./providerHealth.service.js";
 import { logError, logEvent, logMetric } from "./telemetry.service.js";
+import {
+  CANONICAL_METRIC_REGISTRY,
+  CANONICAL_SEMANTICS_VERSION,
+  normalizeMetric,
+  formatCanonical,
+  crossProviderConsensus,
+  validateFundamentalsSemantics
+} from "./canonicalSemantics.service.js";
 
 const yahooFinance = new YahooFinance();
 // Global config removed to prevent startup crash
@@ -25,6 +33,11 @@ const CACHE_GROUP_OVERVIEW = "company_overview";
 const CACHE_GROUP_LIVE = "live_market_data";
 const CACHE_GROUP_HISTORICAL = "historical_candles";
 const CACHE_GROUP_MARKET = "market_snapshots";
+// Overview cache keys are tagged with the canonical semantics version so that
+// a version bump automatically invalidates all cached fundamental payloads
+// with stale/incorrect normalization. This prevents old >20 heuristic values
+// from being served from cache after the normalization engine is upgraded.
+const CACHE_GROUP_OVERVIEW_VERSIONED = `company_overview_v${CANONICAL_SEMANTICS_VERSION}`;
 
 // --- Circuit Breaker State ---
 let yahooFailureCount = 0;
@@ -34,23 +47,9 @@ const YAHOO_COOLDOWN_MS = 60000;
 const HTTP_PROVIDER_TIMEOUT_MS = 5000;
 const YAHOO_TIMEOUT_MS = 3500;
 
-export const FUNDAMENTAL_METRIC_CANONICALIZATION_MAP = {
-  pe_ratio: { internal: "ratio", display: "number_2dp", validRange: [0, 500] },
-  roe: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
-  roce: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
-  debt_to_equity: { internal: "decimal_ratio", display: "ratio_2dp", validRange: [0, 20] },
-  profit_margin: { internal: "percent", display: "percent_2dp", validRange: [-100, 100] },
-  eps: { internal: "absolute", display: "number_2dp", validRange: [-100000, 100000] },
-  revenue_growth: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
-  earnings_growth: { internal: "percent", display: "percent_2dp", validRange: [-100, 1000] },
-  book_value: { internal: "absolute", display: "number_2dp", validRange: [-100000, 1000000] },
-  dividend_yield: { internal: "percent", display: "percent_2dp", validRange: [0, 100] },
-  market_cap: { internal: "absolute", display: "number_0dp", validRange: [0, 1e16] },
-  beta: { internal: "ratio", display: "number_2dp", validRange: [-10, 10] },
-  peg: { internal: "ratio", display: "number_2dp", validRange: [-100, 100] },
-  free_cash_flow: { internal: "absolute", display: "number_0dp", validRange: [-1e14, 1e14] },
-  current_ratio: { internal: "ratio", display: "number_2dp", validRange: [0, 50] }
-};
+// Re-export canonical registry for legacy consumers
+export const FUNDAMENTAL_METRIC_CANONICALIZATION_MAP = CANONICAL_METRIC_REGISTRY;
+export { CANONICAL_SEMANTICS_VERSION };
 
 function getCached(key) {
   const entry = dataCache.get(key);
@@ -170,116 +169,55 @@ function safeErrorCause(error) {
   };
 }
 
-function parseMetricNumber(raw) {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
-  if (typeof raw === "string") {
-    const cleaned = raw.trim().replace(/,/g, "");
-    if (!cleaned || cleaned === "-" || cleaned.toUpperCase() === "N/A") return null;
-    const num = Number(cleaned.replace("%", ""));
-    return Number.isFinite(num) ? num : null;
-  }
-  return null;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// CANONICAL NORMALIZATION BRIDGE
+// All metric normalization is now handled by canonicalSemantics.service.js
+// This function is the single public API for the entire fundamental pipeline.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function formatMetricForDisplay(value, mode) {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
-  if (mode === "percent_2dp") return `${value.toFixed(2)}%`;
-  if (mode === "number_0dp") return `${Math.round(value)}`;
-  return value.toFixed(2);
-}
-
-function validateMetricRange(metricKey, value, symbol, provider) {
-  const rule = FUNDAMENTAL_METRIC_CANONICALIZATION_MAP[metricKey];
-  if (!rule || value === null || value === undefined) return { valid: true, value };
-  const [min, max] = rule.validRange;
-  if (value < min || value > max) {
-    logEvent("fundamentals.validation.failed", {
-      symbol,
-      metric: metricKey,
-      provider,
-      normalized_value: value,
-      validation_reason: `outside_valid_range_${min}_${max}`
-    });
-    return { valid: false, value: null };
-  }
-  return { valid: true, value };
-}
-
-function normalizePercentMetric(rawValue, provider, symbol, metricKey, { yahooDecimalLikely = false } = {}) {
-  const parsed = parseMetricNumber(rawValue);
-  if (parsed === null) return null;
-  let normalized = parsed;
-  const hadPercentSign = typeof rawValue === "string" && rawValue.includes("%");
-  if (yahooDecimalLikely && !hadPercentSign && Math.abs(parsed) <= 1) normalized = parsed * 100;
-  logEvent("fundamentals.metric.normalized", {
-    symbol,
-    metric: metricKey,
-    provider,
-    raw_value: rawValue,
-    normalized_value: normalized
-  });
-  const checked = validateMetricRange(metricKey, normalized, symbol, provider);
-  return checked.value;
-}
-
-function normalizeDebtToEquityMetric(rawValue, provider, symbol) {
-  const parsed = parseMetricNumber(rawValue);
-  if (parsed === null) return null;
-  let normalized = parsed;
-  let reason = "as_is";
-  if (parsed > 20 && parsed / 100 <= 20) {
-    normalized = parsed / 100;
-    reason = "scaled_down_100x";
-    logEvent("fundamentals.provider.mismatch", {
-      symbol,
-      metric: "debt_to_equity",
-      provider,
-      raw_value: rawValue,
-      normalized_value: normalized,
-      validation_reason: "detected_100x_scale_mismatch"
-    });
-  }
-  logEvent("fundamentals.metric.normalized", {
-    symbol,
-    metric: "debt_to_equity",
-    provider,
-    raw_value: rawValue,
-    normalized_value: normalized,
-    normalization_reason: reason
-  });
-  const checked = validateMetricRange("debt_to_equity", normalized, symbol, provider);
-  if (!checked.valid) {
-    logEvent("fundamentals.metric.suspicious", {
-      symbol,
-      metric: "debt_to_equity",
-      provider,
-      raw_value: rawValue,
-      normalized_value: normalized,
-      validation_reason: "failed_range_validation"
-    });
-  }
-  return checked.value;
-}
-
+/**
+ * normalizeFundamentalMetrics — Provider-aware canonical normalization.
+ *
+ * CRITICAL SEMANTIC CONTRACT:
+ *  - Yahoo Finance debtToEquity is ALWAYS percentage-style (÷100 required)
+ *    e.g. TCS raw=10.39 → canonical=0.1039  (NOT passed through as 10.39)
+ *  - All percent metrics (ROE, margins, growth) from all providers are decimal
+ *    fractions that require ×100 to reach percentage display form.
+ *  - No heuristic threshold checks. Transform is deterministic per provider.
+ *
+ * @param {{ provider: string, symbol: string, raw: object }} opts
+ * @returns {{ canonical: object, display: object, semanticsVersion: string }}
+ */
 export function normalizeFundamentalMetrics({ provider, symbol, raw = {} }) {
-  const pe = parseMetricNumber(raw.pe);
-  const debtToEquity = normalizeDebtToEquityMetric(raw.debtToEquity, provider, symbol);
-  const roe = normalizePercentMetric(raw.roe, provider, symbol, "roe", { yahooDecimalLikely: provider === "yahoo" });
-  const profitMargin = normalizePercentMetric(raw.profitMargin, provider, symbol, "profit_margin", { yahooDecimalLikely: provider === "yahoo" });
-  const revenueGrowth = normalizePercentMetric(raw.revenueGrowth, provider, symbol, "revenue_growth", { yahooDecimalLikely: provider === "yahoo" });
-  const earningsGrowth = normalizePercentMetric(raw.earningsGrowth, provider, symbol, "earnings_growth", { yahooDecimalLikely: provider === "yahoo" });
+  const resolvedProvider = provider || "fallback";
+
+  const _n = (metricKey, rawValue) => normalizeMetric(metricKey, rawValue, resolvedProvider, symbol);
+
+  const pe            = _n("pe_ratio",          raw.pe);
+  const debtToEquity  = _n("debt_to_equity",    raw.debtToEquity);
+  const roe           = _n("roe",               raw.roe);
+  const profitMargin  = _n("profit_margin",     raw.profitMargin);
+  const revenueGrowth = _n("revenue_growth",    raw.revenueGrowth);
+  const earningsGrowth= _n("earnings_growth",   raw.earningsGrowth);
 
   return {
-    canonical: { pe, roe, profitMargin, debtToEquity, revenueGrowth, earningsGrowth },
+    canonical: {
+      pe:             pe.canonical,
+      roe:            roe.canonical,
+      profitMargin:   profitMargin.canonical,
+      debtToEquity:   debtToEquity.canonical,
+      revenueGrowth:  revenueGrowth.canonical,
+      earningsGrowth: earningsGrowth.canonical
+    },
     display: {
-      pe: formatMetricForDisplay(pe, "number_2dp"),
-      roe: formatMetricForDisplay(roe, "percent_2dp"),
-      profitMargin: formatMetricForDisplay(profitMargin, "percent_2dp"),
-      debtToEquity: formatMetricForDisplay(debtToEquity, "number_2dp"),
-      revenueGrowth: formatMetricForDisplay(revenueGrowth, "percent_2dp"),
-      earningsGrowth: formatMetricForDisplay(earningsGrowth, "percent_2dp")
-    }
+      pe:             pe.display,
+      roe:            roe.display,
+      profitMargin:   profitMargin.display,
+      debtToEquity:   debtToEquity.display,
+      revenueGrowth:  revenueGrowth.display,
+      earningsGrowth: earningsGrowth.display
+    },
+    semanticsVersion: CANONICAL_SEMANTICS_VERSION
   };
 }
 
@@ -644,7 +582,7 @@ export async function getCompanyOverview(symbol) {
     try {
       const overview = await getOrPopulateSharedCache(
         cacheKey,
-        CACHE_GROUP_OVERVIEW,
+        CACHE_GROUP_OVERVIEW_VERSIONED,
         ttlSecondsForQuality("HIGH"),
         async () => {
           const symbolsToTry = buildSymbolVariants(upperSymbol);
@@ -795,7 +733,7 @@ export async function getCompanyOverview(symbol) {
         overview?.status === "FALLBACK_SAFE"
           ? "LOW"
           : "HIGH";
-      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW, overview, overviewQuality);
+      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW_VERSIONED, overview, overviewQuality);
       return overview;
     } catch (error) {
       console.error("--- YAHOO OVERVIEW FAILURE ---");
@@ -811,7 +749,7 @@ export async function getCompanyOverview(symbol) {
       if (finnhubOverview) return finnhubOverview;
 
       const fallbackOverview = createFallbackOverview(upperSymbol);
-      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW, fallbackOverview, "LOW");
+      await setHybridCache(cacheKey, CACHE_GROUP_OVERVIEW_VERSIONED, fallbackOverview, "LOW");
       return fallbackOverview;
     }
   });

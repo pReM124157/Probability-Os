@@ -51,6 +51,11 @@ import {
   releaseSchedulerLease,
   renewSchedulerLease
 } from "./schedulerLease.service.js";
+import {
+  abstractStatus,
+  sanitizeInstitutionalAction,
+  synthesizePrimaryLimitation
+} from "./presentationAbstraction.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const THROTTLE_MS = 2000; // 2s cooldown
@@ -216,6 +221,7 @@ function clampPublicConfidence(value, floor = 3) {
   return Math.max(Math.round(numeric), floor);
 }
 
+
 function formatAnalysis(res, symbol, stockData = {}) {
   const result = safeObject(res);
   if (isVerifiedAnalysisUnavailable(result)) {
@@ -269,7 +275,7 @@ function formatAnalysis(res, symbol, stockData = {}) {
     entryZone: safeString(entryTiming.idealEntryZone || "Watch opening range"),
     stopLoss: safeString(entryTiming.stopLoss || (price ? `₹${Math.round(price * 0.96)}` : "Dynamic by volatility")),
     target: safeString(entryTiming.initialTarget || (price ? `₹${Math.round(price * 1.06)}` : "Trend continuation target")),
-    tradeAction: safeString(entryTiming.finalExecutionAdvice || "Wait for confirmation with price and volume."),
+    tradeAction: sanitizeInstitutionalAction(entryTiming.finalExecutionAdvice),
     pe: stockData.PERatio ?? "-",
     roe: stockData.ReturnOnEquityTTM ?? "-",
     profitMargin: stockData.ProfitMargin ?? "-",
@@ -285,7 +291,7 @@ function formatAnalysis(res, symbol, stockData = {}) {
     newsNegative: smartFallback("news_negative", safeString(news.negative)),
     sentiment: safeString(news.sentiment || "NEUTRAL"),
     riskLevel: safeString(result.riskLevel || risk.riskLevel || "MEDIUM"),
-    exitAction: safeString(exitSignal.action || "Monitor closely"),
+    exitAction: safeString(exitSignal.action || "Risk-governance hold"),
     exitReason: safeString(exitSignal.reason || "No strong exit trigger yet."),
     bullishScenario: smartFallback("trigger_up", safeString(nextSessionPlan.entryTrigger), { price }),
     bearishScenario: smartFallback("trigger_down", safeString(nextSessionPlan.stopLoss), { price }),
@@ -295,11 +301,12 @@ function formatAnalysis(res, symbol, stockData = {}) {
     institutionalEvidence
   };
 
-  const fmt = (value, pct = false) => {
-    if (value === "-" || value === "") return "-";
-    const n = Number(value);
-    if (Number.isNaN(n)) return `${value}`;
-    return pct ? `${(n * 100).toFixed(1)}%` : n.toString();
+  const fmt = (value) => {
+    // Display values from the canonical semantics engine are already formatted strings.
+    // e.g. ROE = "16.78%", D/E = "0.10", P/E = "24.12"
+    // We must NOT apply any further numeric transform — just pass through.
+    if (value === null || value === undefined || value === "-" || value === "") return "-";
+    return String(value);
   };
 
   const priceText = normalized.currentPrice > 0 ? `₹${normalized.currentPrice}` : "Price discovery in progress";
@@ -314,35 +321,64 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const driftStatus = safeString(normalized.institutionalEvidence?.drift?.status || "NOT_AVAILABLE_IN_THIS_PATH");
   const benchmarkStatus = safeString(normalized.institutionalEvidence?.benchmark?.status || "NOT_AVAILABLE_IN_THIS_PATH");
   const marketRegime = safeObject(normalized.institutionalEvidence?.marketRegime);
+  const limitation = synthesizePrimaryLimitation({
+    replayStatus,
+    calibrationStatus,
+    driftStatus,
+    benchmarkStatus,
+    warnings
+  });
   const confidenceLine = Number.isFinite(adaptiveScore)
     ? `Adaptive Confidence Score: ${Math.round(adaptiveScore)}/100 (${reliabilityClass})`
     : "LOW STATISTICAL CONFIDENCE";
-  const warningLine = warnings.length > 0
-    ? warnings.map((w) => `• ${w}`).join("\n")
-    : "• NONE";
   const activationIf = [
     normalized.bullishScenario !== "-" ? normalized.bullishScenario : null,
     normalized.keyTrigger !== "-" ? normalized.keyTrigger : null,
     Number.isFinite(adaptiveScore) ? "Adaptive confidence >= 55/100" : "Statistical evidence becomes sufficient"
   ].filter(Boolean).slice(0, 3);
   const blockedBy = [
-    replayStatus !== "AVAILABLE" ? `Replay reliability: ${replayStatus}` : null,
-    calibrationStatus !== "AVAILABLE" ? `Calibration quality: ${calibrationStatus}` : null,
-    warnings.length > 0 ? `Execution/adaptive warnings active: ${warnings.join(", ")}` : null,
+    limitation.primary?.message || null,
     normalized.tradeAction || null
-  ].filter(Boolean).slice(0, 4);
+  ].filter(Boolean).slice(0, 3);
+  const evidenceNotes = [
+    replayStatus !== "AVAILABLE" ? abstractStatus(replayStatus).message : "Historical replay reliability meets minimum institutional threshold.",
+    calibrationStatus !== "AVAILABLE" ? abstractStatus(calibrationStatus).message : "Confidence calibration quality is operationally acceptable.",
+    driftStatus !== "AVAILABLE" ? abstractStatus(driftStatus).message : "Adaptive drift controls are stable.",
+    benchmarkStatus !== "AVAILABLE" ? abstractStatus(benchmarkStatus).message : "Benchmark-relative intelligence is available."
+  ];
 
   return `
-*FINSIGHT AI — INSTITUTIONAL ADAPTIVE DECISION DOSSIER*
+*FINSIGHT AI — INSTITUTIONAL DECISION DOSSIER*
 ━━━━━━━━━━━━━━━━━━
 *1) Executive Decision*
 • System Verdict: ${normalized.verdict}
 • Asset: ${normalized.asset}
 • Current Price: ${priceText}
 • Market State: ${normalized.marketStatus}
-• Risk Level: ${normalized.riskLevel}
+• Confidence State: ${Number.isFinite(adaptiveScore) ? `${Math.round(adaptiveScore)}/100 (${reliabilityClass})` : "LOW STATISTICAL CONFIDENCE"}
+• Decision Basis: ${normalized.tradeAction}
 ━━━━━━━━━━━━━━━━━━
-*2) Adaptive Confidence Attribution*
+*2) Primary Limitation*
+• ${limitation.primary.message}
+${limitation.supporting.length ? `• Additional Context: ${limitation.supporting.map((x) => x.message).join(" | ")}` : "• Additional Context: None"}
+━━━━━━━━━━━━━━━━━━
+*3) Trade Activation Conditions*
+${noTrade ? "• Active Positioning: Deferred under institutional execution controls." : "• Active Positioning: Conditionally allowed under governance constraints."}
+• Activation Triggers:
+${activationIf.map((x) => `• ${x}`).join("\n")}
+• Current Blockers:
+${blockedBy.map((x) => `• ${x}`).join("\n")}
+• Invalidation Trigger: ${normalized.bearishScenario}
+• Risk Controls: Stop Loss ${normalized.stopLoss} | Initial Target ${normalized.target}
+━━━━━━━━━━━━━━━━━━
+*4) Institutional Evidence*
+• ${evidenceNotes[0]}
+• ${evidenceNotes[1]}
+• ${evidenceNotes[2]}
+• ${evidenceNotes[3]}
+• Regime Context: ${marketRegime.state || "UNKNOWN"} | Sector Bias ${marketRegime.sectorBias || normalized.sectorBias} | Relative Strength ${marketRegime.relativeStrength || normalized.relStrength}
+━━━━━━━━━━━━━━━━━━
+*5) Adaptive Confidence Attribution*
 • ${confidenceLine}
 • Contribution - Technical Trend: ${contributions.technicalTrend ?? "UNAVAILABLE"}
 • Contribution - Technical Momentum: ${contributions.technicalMomentum ?? "UNAVAILABLE"}
@@ -354,61 +390,31 @@ function formatAnalysis(res, symbol, stockData = {}) {
 • Penalty - Degraded Execution: ${penalties.degradedExecutionPenalty ?? 0}
 • Penalty - Event Risk: ${penalties.eventRiskPenalty ?? 0}
 ━━━━━━━━━━━━━━━━━━
-*3) Institutional Evidence Layer*
-• Replay Engine: ${replayStatus}
-• Confidence Calibration: ${calibrationStatus}
-• Drift State: ${driftStatus}
-• Benchmark Intelligence: ${benchmarkStatus}
-• Regime State: ${marketRegime.state || "UNKNOWN"}
-• Regime Sector Bias: ${marketRegime.sectorBias || normalized.sectorBias}
-• Regime Relative Strength: ${marketRegime.relativeStrength || normalized.relStrength}
-━━━━━━━━━━━━━━━━━━
-*4) Technical Regime Analysis*
+*6) Technical + Fundamental Analysis*
 • Trend: ${normalized.trend}
 • Momentum: ${normalized.momentum}
 • Volume: ${normalized.volume}
 • Support: ${normalized.support}
 • Resistance: ${normalized.resistance}
 • Entry Zone: ${normalized.entryZone}
-━━━━━━━━━━━━━━━━━━
-*5) Fundamental Risk Analysis*
 • P/E: ${fmt(normalized.pe)}
-• ROE: ${fmt(normalized.roe, true)}
-• Profit Margin: ${fmt(normalized.profitMargin, true)}
+• ROE: ${fmt(normalized.roe)}
+• Profit Margin: ${fmt(normalized.profitMargin)}
 • Debt/Equity: ${fmt(normalized.debtEquity)}
-• Revenue Growth YoY: ${fmt(normalized.revenueGrowth, true)}
-• Earnings Growth YoY: ${fmt(normalized.earningsGrowth, true)}
+• Revenue Growth YoY: ${fmt(normalized.revenueGrowth)}
+• Earnings Growth YoY: ${fmt(normalized.earningsGrowth)}
 ━━━━━━━━━━━━━━━━━━
-*6) Replay Intelligence*
-• Status: ${replayStatus}
-• If status != AVAILABLE: INSUFFICIENT REPLAY DEPTH
-• No synthetic replay metrics are shown when sample depth is unavailable.
-━━━━━━━━━━━━━━━━━━
-*7) Adaptive Drift & Reliability*
-• Reliability Class: ${reliabilityClass}
-• Active Warnings:
-${warningLine}
-• Data Integrity Flags influence confidence penalties directly.
-━━━━━━━━━━━━━━━━━━
-*8) Trade Activation Conditions*
-${noTrade ? "• No trade currently justified under institutional thresholds." : "• Trade is conditionally active with governance constraints."}
-• Blocked By:
-${blockedBy.map((x) => `• ${x}`).join("\n")}
-• Activates Only If:
-${activationIf.map((x) => `• ${x}`).join("\n")}
-• Stop Loss Governance: ${normalized.stopLoss}
-• Target Governance: ${normalized.target}
-━━━━━━━━━━━━━━━━━━
-*9) Risk Governance*
+*7) Risk Governance*
 • Exit Signal: ${normalized.exitAction}
 • Exit Rationale: ${normalized.exitReason}
-• Bearish Scenario Control: ${normalized.bearishScenario}
 • Institutional Bias: ${normalized.institutionalBias}
+• Capital Protection State: ${noTrade ? "DEFENSIVE" : "CONDITIONAL_DEPLOYMENT"}
 ━━━━━━━━━━━━━━━━━━
-*10) Final System Verdict*
+*8) Final System Verdict*
 • Recommendation: ${normalized.verdict}
 • Confidence State: ${Number.isFinite(adaptiveScore) ? `${Math.round(adaptiveScore)}/100` : "UNRELIABLE DUE TO LOW SAMPLE SIZE"}
-• Final Intelligence Note: ${normalized.finalInsight}
+• Primary Constraint: ${limitation.primary.message}
+• Intelligence Note: ${normalized.finalInsight}
 • News Sentiment: ${normalized.sentiment}
 ━━━━━━━━━━━━━━━━━━
 ⚠️ Educational use only. Not financial advice.`.trim();
