@@ -10,10 +10,10 @@ function validSymbol(symbol) {
 }
 
 function parseQuantity(raw) {
-  if (raw == null || raw === "") return 1;
+  if (raw == null || raw === "") return null;
   const cleaned = String(raw).replace(/,/g, "").trim();
   const qty = Number(cleaned);
-  if (!Number.isFinite(qty) || qty <= 0) return null;
+  if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) return null;
   return qty;
 }
 
@@ -35,6 +35,7 @@ export function parseAddCommand(message = "") {
 
   const entries = [];
   const errors = [];
+  const missingQuantitySymbols = [];
 
   for (const row of payloadLines) {
     const clean = row.replace(/,/g, " ").trim();
@@ -47,15 +48,24 @@ export function parseAddCommand(message = "") {
       errors.push({ input: row, symbol, reason: "Invalid symbol" });
       continue;
     }
-    if (quantity == null) {
+    if (parts.length > 1 && quantity == null) {
       errors.push({ input: row, symbol, reason: "Invalid quantity" });
       continue;
     }
-
+    if (parts.length === 1) {
+      entries.push({ symbol, quantity: null });
+      missingQuantitySymbols.push(symbol);
+      continue;
+    }
     entries.push({ symbol, quantity });
   }
 
-  return { entries, errors };
+  return {
+    entries,
+    errors,
+    missingQuantitySymbols,
+    requiresInteractiveQuantity: missingQuantitySymbols.length > 0
+  };
 }
 
 export function parseRemoveCommand(message = "") {

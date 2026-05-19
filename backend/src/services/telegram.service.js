@@ -43,6 +43,8 @@ import { parseAddCommand, parseRemoveCommand } from "./portfolioCommandParser.se
 import {
   claimEphemeralKey,
   consumeState,
+  deleteState,
+  getState,
   putState
 } from "./distributedState.service.js";
 import { createTraceId, logError, logEvent } from "./telemetry.service.js";
@@ -228,6 +230,61 @@ function clampPublicConfidence(value, floor = 3) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return floor;
   return Math.max(Math.round(numeric), floor);
+}
+
+function isValidPositiveInteger(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!/^\d+$/.test(trimmed)) return false;
+  const qty = Number(trimmed);
+  return Number.isInteger(qty) && qty > 0;
+}
+
+async function executePortfolioBatchAdd(chatId, rawEntries = []) {
+  const seen = new Set();
+  const entries = [];
+  for (const item of rawEntries) {
+    const symbol = String(item.symbol || "").toUpperCase().trim();
+    const quantity = Number(item.quantity);
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+    entries.push({ symbol, quantity });
+  }
+
+  const symbols = entries.map((x) => x.symbol);
+  const { data: existingRows, error: existingErr } = symbols.length
+    ? await supabase
+        .from("holdings")
+        .select("symbol")
+        .eq("chat_id", String(chatId))
+        .in("symbol", symbols)
+    : { data: [], error: null };
+
+  if (existingErr) {
+    throw new Error("Could not validate existing holdings right now.");
+  }
+
+  const existing = new Set((existingRows || []).map((r) => String(r.symbol || "").toUpperCase()));
+  const successes = [];
+  const failures = [];
+
+  for (const entry of entries) {
+    if (existing.has(entry.symbol)) {
+      failures.push({ symbol: entry.symbol, reason: "Already exists" });
+      continue;
+    }
+    try {
+      await addHolding(chatId, {
+        symbol: entry.symbol,
+        quantity: entry.quantity,
+        avgPrice: 0
+      });
+      successes.push(entry);
+    } catch (err) {
+      failures.push({ symbol: entry.symbol, reason: err?.message || "Insert failed" });
+    }
+  }
+
+  return { successes, failures };
 }
 
 
@@ -766,6 +823,61 @@ bot.on("text", async (ctx) => {
     const lowerText = text.toLowerCase();
 
     // ── STRICT COMMAND-FIRST ROUTING (NO AI FALLTHROUGH) ───────────
+    if (text.trim().startsWith("/cancel")) {
+      await deleteState("portfolio_add_session", chatId);
+      await send("Portfolio add session cancelled.");
+      return;
+    }
+
+    const activePortfolioAddSession = await getState("portfolio_add_session", chatId);
+    if (activePortfolioAddSession?.mode === "portfolio_add") {
+      if (!isValidPositiveInteger(text)) {
+        const targetSymbol = activePortfolioAddSession.missingSymbols?.[activePortfolioAddSession.currentIndex] || "current symbol";
+        await send(`Please enter a valid positive quantity for ${targetSymbol}.`);
+        return;
+      }
+
+      const qty = Number(String(text).trim());
+      console.log("[PORTFOLIO QTY RECEIVED]", qty);
+
+      const missingSymbols = activePortfolioAddSession.missingSymbols || [];
+      const currentIndex = Number(activePortfolioAddSession.currentIndex || 0);
+      const currentSymbol = missingSymbols[currentIndex];
+      const collected = Array.isArray(activePortfolioAddSession.collected) ? [...activePortfolioAddSession.collected] : [];
+      collected.push({ symbol: currentSymbol, quantity: qty });
+
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < missingSymbols.length) {
+        const nextSession = {
+          ...activePortfolioAddSession,
+          currentIndex: nextIndex,
+          collected
+        };
+        await putState("portfolio_add_session", chatId, nextSession, 15 * 60);
+        await send(`Enter quantity for ${missingSymbols[nextIndex]}:`);
+        return;
+      }
+
+      const result = await executePortfolioBatchAdd(chatId, collected);
+      await deleteState("portfolio_add_session", chatId);
+      console.log("[PORTFOLIO SESSION COMPLETE]");
+
+      if (result.successes.length && !result.failures.length) {
+        const lines = result.successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n");
+        await send(`✅ Added to portfolio:\n${lines}\nPortfolio updated successfully.`);
+        return;
+      }
+
+      const okBlock = result.successes.length
+        ? `✅ Added:\n${result.successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n")}`
+        : "";
+      const failBlock = result.failures.length
+        ? `⚠ Failed:\n${result.failures.map((f) => `• ${f.symbol} — ${f.reason}`).join("\n")}`
+        : "";
+      await send([okBlock, failBlock].filter(Boolean).join("\n"));
+      return;
+    }
+
     if (text.trim().startsWith("/add")) {
       console.log("[PORTFOLIO COMMAND ROUTED]", "add");
       const parsed = parseAddCommand(text);
@@ -784,57 +896,40 @@ bot.on("text", async (ctx) => {
         uniqueEntries.push(entry);
       }
 
-      const symbols = uniqueEntries.map((x) => x.symbol);
-      const { data: existingRows, error: existingErr } = symbols.length
-        ? await supabase
-            .from("holdings")
-            .select("symbol")
-            .eq("chat_id", String(chatId))
-            .in("symbol", symbols)
-        : { data: [], error: null };
+      const preset = uniqueEntries.filter((e) => Number.isInteger(e.quantity) && e.quantity > 0);
+      const missing = uniqueEntries.filter((e) => !Number.isInteger(e.quantity) || e.quantity <= 0).map((e) => e.symbol);
 
-      if (existingErr) {
-        await send("⚠️ Could not validate existing holdings right now. Please retry.");
+      if (missing.length > 0) {
+        const session = {
+          userId: String(chatId),
+          mode: "portfolio_add",
+          symbols: uniqueEntries.map((e) => e.symbol),
+          missingSymbols: missing,
+          currentIndex: 0,
+          collected: preset
+        };
+        console.log("[PORTFOLIO SESSION START]", session);
+        await putState("portfolio_add_session", chatId, session, 15 * 60);
+        await send(`Enter quantity for ${missing[0]}:`);
         return;
       }
 
-      const existing = new Set((existingRows || []).map((r) => String(r.symbol || "").toUpperCase()));
-      const successes = [];
-      const failures = [...parsed.errors.map((e) => ({ symbol: e.symbol || e.input, reason: e.reason }))];
+      const result = await executePortfolioBatchAdd(chatId, preset);
+      const failures = [...parsed.errors.map((e) => ({ symbol: e.symbol || e.input, reason: e.reason })), ...result.failures];
 
-      for (const entry of uniqueEntries) {
-        if (existing.has(entry.symbol)) {
-          failures.push({ symbol: entry.symbol, reason: "Already exists" });
-          continue;
-        }
-        try {
-          await addHolding(chatId, {
-            symbol: entry.symbol,
-            quantity: entry.quantity,
-            avgPrice: 0
-          });
-          successes.push(entry);
-        } catch (err) {
-          failures.push({ symbol: entry.symbol, reason: err?.message || "Insert failed" });
-        }
-      }
-
-      if (successes.length && !failures.length) {
-        const lines = successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n");
+      if (result.successes.length && !failures.length) {
+        const lines = result.successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n");
         await send(`✅ Added to portfolio:\n${lines}\nPortfolio updated successfully.`);
         return;
       }
 
-      if (successes.length || failures.length) {
-        const okBlock = successes.length
-          ? `✅ Added:\n${successes.map((s) => `• ${s.symbol}${s.quantity ? ` — Qty ${s.quantity}` : ""}`).join("\n")}`
-          : "";
-        const failBlock = failures.length
-          ? `⚠ Failed:\n${failures.map((f) => `• ${f.symbol} — ${f.reason}`).join("\n")}`
-          : "";
-        await send([okBlock, failBlock].filter(Boolean).join("\n"));
-        return;
-      }
+      const okBlock = result.successes.length
+        ? `✅ Added:\n${result.successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n")}`
+        : "";
+      const failBlock = failures.length
+        ? `⚠ Failed:\n${failures.map((f) => `• ${f.symbol} — ${f.reason}`).join("\n")}`
+        : "";
+      await send([okBlock, failBlock].filter(Boolean).join("\n"));
       return;
     }
 
