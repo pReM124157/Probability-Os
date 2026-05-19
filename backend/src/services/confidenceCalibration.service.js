@@ -2,41 +2,59 @@ function clamp(value, min = 0, max = 1) {
   return Math.min(Math.max(Number(value) || 0, min), max);
 }
 
-export function trackPredictionConsistency(predictions = []) {
-  if (!predictions.length) return 0;
-  const avgError = predictions.reduce((acc, p) => acc + Math.abs(Number(p.error || 0)), 0) / predictions.length;
-  return Number(clamp(1 - avgError, 0, 1).toFixed(4));
+function betaPosteriorMean(alpha, beta) {
+  return alpha / Math.max(alpha + beta, 1);
 }
 
-export function calculateConfidenceReliability(predictions = []) {
-  if (!predictions.length) return 0.5;
-  const hitRate = predictions.filter((p) => p.correct).length / predictions.length;
-  const consistency = trackPredictionConsistency(predictions);
+export function calculatePredictionConsistency(outcomes = []) {
+  if (outcomes.length < 2) return 0.5;
+  const errors = outcomes.map((o) => Math.abs(Number(o.error || (1 - Number(o.prediction_accuracy || 0.5)))));
+  const avgErr = errors.reduce((a, b) => a + b, 0) / errors.length;
+  return Number(clamp(1 - avgErr, 0, 1).toFixed(4));
+}
+
+export function calculateHistoricalReliability(outcomes = []) {
+  if (!outcomes.length) return 0.5;
+  const hitRate = outcomes.filter((o) => Number(o.exit_quality || 0) >= 0.6).length / outcomes.length;
+  const consistency = calculatePredictionConsistency(outcomes);
   return Number(clamp(hitRate * 0.65 + consistency * 0.35, 0, 1).toFixed(4));
 }
 
-export function adjustConfidenceByRegime(confidence = 0.7, regime = "SIDEWAYS", regimeReliability = 0.6) {
-  const stressPenalty = ["VOLATILITY_PANIC", "RISK_OFF", "LIQUIDITY_STRESS"].includes(regime) ? 0.15 : 0;
-  return Number(clamp(confidence * (0.65 + regimeReliability * 0.35) * (1 - stressPenalty), 0.1, 0.95).toFixed(4));
+export function calculateRegimeSpecificAccuracy(outcomes = [], regime = "UNKNOWN") {
+  const rows = outcomes.filter((o) => (o.regime || "UNKNOWN") === regime);
+  if (!rows.length) return 0.5;
+  return Number((rows.reduce((a, r) => a + Number(r.prediction_accuracy || r.historical_accuracy || 0), 0) / rows.length).toFixed(4));
 }
 
-export function adjustConfidenceByVolatility(confidence = 0.7, volatility = 0.2) {
-  const penalty = clamp((volatility - 0.18) / 0.4, 0, 0.4);
+export function calculateVolatilityAdjustedConfidence(confidence = 0.7, volatility = 0.2) {
+  const penalty = clamp((volatility - 0.18) / 0.35, 0, 0.45);
   return Number(clamp(confidence * (1 - penalty), 0.1, 0.95).toFixed(4));
 }
 
-export function calculateConfidenceDecay(predictions = []) {
-  if (predictions.length < 8) return 0;
-  const recent = predictions.slice(0, 4).filter((p) => p.correct).length / 4;
-  const prior = predictions.slice(4, 8).filter((p) => p.correct).length / 4;
-  return Number(clamp(prior - recent, 0, 0.5).toFixed(4));
+export function calculateConfidenceDecay(outcomes = []) {
+  if (outcomes.length < 10) return 0;
+  const latest = outcomes.slice(0, 5);
+  const prior = outcomes.slice(5, 10);
+  const l = calculateHistoricalReliability(latest);
+  const p = calculateHistoricalReliability(prior);
+  return Number(clamp(p - l, 0, 0.5).toFixed(4));
 }
 
-export function recalibrateConfidence({ baseConfidence = 0.8, predictions = [], regime = "SIDEWAYS", volatility = 0.2, regimeReliability = 0.6 } = {}) {
-  const reliability = calculateConfidenceReliability(predictions);
-  const decay = calculateConfidenceDecay(predictions);
-  let calibrated = baseConfidence * (0.55 + reliability * 0.45) * (1 - decay);
-  calibrated = adjustConfidenceByRegime(calibrated, regime, regimeReliability);
-  calibrated = adjustConfidenceByVolatility(calibrated, volatility);
-  return Number(clamp(calibrated, 0.1, 0.95).toFixed(4));
+export function calculateBayesianConfidence({ wins = 1, losses = 1, priorAlpha = 3, priorBeta = 2 } = {}) {
+  const alpha = priorAlpha + wins;
+  const beta = priorBeta + losses;
+  return Number(clamp(betaPosteriorMean(alpha, beta), 0.1, 0.95).toFixed(4));
+}
+
+export function recalibrateConfidence({ baseConfidence = 0.7, outcomes = [], regime = "UNKNOWN", volatility = 0.2 } = {}) {
+  const reliability = calculateHistoricalReliability(outcomes);
+  const regimeAcc = calculateRegimeSpecificAccuracy(outcomes, regime);
+  const decay = calculateConfidenceDecay(outcomes);
+  const wins = outcomes.filter((o) => Number(o.exit_quality || 0) >= 0.6).length;
+  const losses = Math.max(0, outcomes.length - wins);
+  const bayes = calculateBayesianConfidence({ wins, losses });
+
+  let c = baseConfidence * (0.35 + reliability * 0.25 + regimeAcc * 0.2 + bayes * 0.2) * (1 - decay);
+  c = calculateVolatilityAdjustedConfidence(c, volatility);
+  return Number(clamp(c, 0.1, 0.95).toFixed(4));
 }

@@ -2,70 +2,73 @@ function clamp(value, min = 0, max = 1) {
   return Math.min(Math.max(Number(value) || 0, min), max);
 }
 
-export function detectVolatilityRegime({ vix = 18, volatilityTrend = 0 } = {}) {
-  if (vix >= 35 || volatilityTrend > 1.6) return "VOLATILITY_PANIC";
-  if (vix >= 28) return "RISK_OFF";
-  if (vix >= 22) return "WEAKENING";
-  if (vix >= 16) return "SIDEWAYS";
+export function detectRegimeUsingBreadth({ breadth = 0.5 } = {}) {
+  if (breadth > 0.62) return "BULLISH_EXPANSION";
+  if (breadth > 0.54) return "HEALTHY_BULLISH";
+  if (breadth > 0.45) return "SIDEWAYS";
+  return "WEAKENING";
+}
+
+export function detectRegimeUsingVolatility({ vix = 20, volatilityExpansion = 0 } = {}) {
+  if (vix > 35 || volatilityExpansion > 0.65) return "VOLATILITY_PANIC";
+  if (vix > 28) return "RISK_OFF";
+  if (vix > 22) return "WEAKENING";
   return "HEALTHY_BULLISH";
 }
 
-export function detectLiquidityStress({ bidAskSpread = 0.002, marketDepthDrop = 0, fundingStress = 0 } = {}) {
-  const stress = clamp((bidAskSpread * 100) * 0.4 + clamp(marketDepthDrop, 0, 1) * 0.35 + clamp(fundingStress, 0, 1) * 0.25, 0, 1);
-  return {
-    detected: stress >= 0.6,
-    stressScore: Number(stress.toFixed(4))
-  };
+export function detectRegimeUsingLiquidity({ spread = 0.002, depthDrop = 0.1 } = {}) {
+  const stress = clamp((spread / 0.01) * 0.6 + depthDrop * 0.4, 0, 1);
+  return { state: stress > 0.65 ? "LIQUIDITY_STRESS" : "NORMAL", stress };
 }
 
-export function detectInstitutionalRiskOff({ breadth = 0.5, creditSpreadWidening = 0, defensiveOutperformance = 0 } = {}) {
-  const score = clamp((1 - clamp(breadth, 0, 1)) * 0.4 + clamp(creditSpreadWidening, 0, 1) * 0.35 + clamp(defensiveOutperformance, 0, 1) * 0.25, 0, 1);
-  return {
-    detected: score >= 0.55,
-    score: Number(score.toFixed(4))
-  };
+export function detectRegimeUsingMacroPressure({ usdStrength = 0.5, ratesPressure = 0.5, creditStress = 0.4 } = {}) {
+  return Number(clamp(usdStrength * 0.3 + ratesPressure * 0.35 + creditStress * 0.35, 0, 1).toFixed(4));
 }
 
-export function detectDefensiveRotation({ defensiveStrength = 0, cyclicalWeakness = 0 } = {}) {
-  const score = clamp(clamp(defensiveStrength, 0, 1) * 0.55 + clamp(cyclicalWeakness, 0, 1) * 0.45, 0, 1);
-  return {
-    detected: score >= 0.55,
-    score: Number(score.toFixed(4))
-  };
+export function detectRiskOffTransition({ volatilityRegime = "HEALTHY_BULLISH", breadthRegime = "HEALTHY_BULLISH", liquidityState = "NORMAL" } = {}) {
+  const riskOff = ["VOLATILITY_PANIC", "RISK_OFF", "WEAKENING"].includes(volatilityRegime)
+    && ["SIDEWAYS", "WEAKENING"].includes(breadthRegime);
+  return riskOff || liquidityState === "LIQUIDITY_STRESS";
+}
+
+export function detectInstitutionalRotation({ defensiveOutperformance = 0.5, cyclicalWeakness = 0.5 } = {}) {
+  const score = clamp(defensiveOutperformance * 0.55 + cyclicalWeakness * 0.45, 0, 1);
+  return { detected: score > 0.58, score: Number(score.toFixed(4)) };
 }
 
 export function detectMarketRegime(snapshot = {}) {
-  const volRegime = detectVolatilityRegime(snapshot);
-  const liquidity = detectLiquidityStress(snapshot);
-  const riskOff = detectInstitutionalRiskOff(snapshot);
-  const rotation = detectDefensiveRotation(snapshot);
+  const breadthRegime = detectRegimeUsingBreadth(snapshot);
+  const volatilityRegime = detectRegimeUsingVolatility(snapshot);
+  const liquidity = detectRegimeUsingLiquidity(snapshot);
+  const macroPressure = detectRegimeUsingMacroPressure(snapshot);
+  const rotation = detectInstitutionalRotation(snapshot);
+  const riskOff = detectRiskOffTransition({
+    volatilityRegime,
+    breadthRegime,
+    liquidityState: liquidity.state
+  });
 
-  const trend = Number(snapshot.indexTrend) || 0;
-  const breadth = Number(snapshot.breadth) || 0.5;
+  let state = breadthRegime;
+  if (liquidity.state === "LIQUIDITY_STRESS") state = "LIQUIDITY_STRESS";
+  else if (volatilityRegime === "VOLATILITY_PANIC") state = "VOLATILITY_PANIC";
+  else if (riskOff) state = "RISK_OFF";
 
-  let state = "SIDEWAYS";
-  if (liquidity.detected) state = "LIQUIDITY_STRESS";
-  else if (volRegime === "VOLATILITY_PANIC") state = "VOLATILITY_PANIC";
-  else if (riskOff.detected && volRegime !== "HEALTHY_BULLISH") state = "RISK_OFF";
-  else if (trend > 0.8 && breadth > 0.6 && volRegime === "HEALTHY_BULLISH") state = "BULLISH_EXPANSION";
-  else if (trend > 0.4 && breadth > 0.55) state = "HEALTHY_BULLISH";
-  else if (trend < -0.4 || breadth < 0.42 || rotation.detected) state = "WEAKENING";
-
-  const danger = clamp(
-    (liquidity.stressScore * 0.3) +
-    ((riskOff.score || 0) * 0.25) +
-    ((rotation.score || 0) * 0.15) +
-    (volRegime === "VOLATILITY_PANIC" ? 0.3 : volRegime === "RISK_OFF" ? 0.2 : 0.1),
+  const dangerScore = clamp(
+    (state === "VOLATILITY_PANIC" ? 0.35 : state === "RISK_OFF" ? 0.25 : 0.1) +
+    liquidity.stress * 0.25 +
+    macroPressure * 0.2 +
+    rotation.score * 0.2,
     0,
     1
   );
 
   return {
     state,
-    volatilityRegime: volRegime,
+    breadthRegime,
+    volatilityRegime,
     liquidityStress: liquidity,
-    institutionalRiskOff: riskOff,
-    defensiveRotation: rotation,
-    dangerScore: Number(danger.toFixed(4))
+    macroPressure,
+    institutionalRotation: rotation,
+    dangerScore: Number(dangerScore.toFixed(4))
   };
 }

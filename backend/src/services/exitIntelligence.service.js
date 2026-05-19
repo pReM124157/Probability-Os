@@ -14,6 +14,62 @@ function clamp(value, min = 0, max = 1) {
   return Math.min(Math.max(Number(value) || 0, min), max);
 }
 
+export function calculateInstitutionalDistributionProbability({
+  priceTrend = 0,
+  volumeTrend = 0,
+  volatility = 0.2,
+  liquidityStress = 0.2
+} = {}) {
+  const score = clamp(
+    clamp((0.2 - priceTrend) / 0.8, 0, 1) * 0.35 +
+    clamp((0 - volumeTrend) / 0.8, 0, 1) * 0.3 +
+    clamp(volatility / 0.6, 0, 1) * 0.2 +
+    clamp(liquidityStress, 0, 1) * 0.15,
+    0,
+    1
+  );
+  return Number(score.toFixed(4));
+}
+
+export function calculateMomentumDecayCurve({ momentumSeries = [] } = {}) {
+  if (momentumSeries.length < 3) return 0;
+  const x0 = Number(momentumSeries[momentumSeries.length - 3] || 0);
+  const x1 = Number(momentumSeries[momentumSeries.length - 2] || 0);
+  const x2 = Number(momentumSeries[momentumSeries.length - 1] || 0);
+  const decay = (x0 - x1) + (x1 - x2);
+  return Number(decay.toFixed(4));
+}
+
+export function calculateTrendExhaustionProbability({ trendMaturityScore = 0, momentumDecay = 0, volatilityExpansion = 0 } = {}) {
+  const p = clamp(
+    clamp(trendMaturityScore, 0, 1) * 0.45 +
+    clamp(momentumDecay, 0, 1) * 0.3 +
+    clamp(volatilityExpansion / 40, 0, 1) * 0.25,
+    0,
+    1
+  );
+  return Number(p.toFixed(4));
+}
+
+export function calculateDynamicProfitLocking({ unrealizedProfitPct = 0, drawdownRisk = 0.2, concentrationRisk = 0.2 } = {}) {
+  const lock = clamp(
+    clamp(unrealizedProfitPct / 40, 0, 1) * 0.45 +
+    clamp(drawdownRisk, 0, 1) * 0.35 +
+    clamp(concentrationRisk, 0, 1) * 0.2,
+    0,
+    1
+  );
+  return Number(lock.toFixed(4));
+}
+
+export function calculateOptimalExitPath({ sellPercent = 0, liquidityRisk = 0.2 } = {}) {
+  if (sellPercent >= 0.95) return "FULL_EXIT";
+  if (sellPercent >= 0.45) return liquidityRisk > 0.6 ? "STAGGERED_DEFENSIVE_EXIT" : "DEFENSIVE_EXIT";
+  if (sellPercent >= 0.25) return "PARTIAL_EXIT";
+  if (sellPercent >= 0.1) return "TRIM";
+  return "HOLD";
+}
+
 export function detectTrendFailure(holding = {}) {
   const trend = Number(holding.trendQuality) || 0;
   const supportFailure = Boolean(holding.supportFailure);
@@ -67,10 +123,24 @@ export function calculateDefensiveReduction({ regimeDanger = 0.2, correlationRis
 export function calculateOptimalExit(holding = {}, regime = {}, threat = {}) {
   const unrealizedProfitPct = calculateProfitCapture(holding.avgPrice, holding.currentPrice);
   const volatilityIncreasePct = calculateVolatilityExpansion(holding.volatility, holding.baselineVolatility || 0.18);
+  const distributionProbability = calculateInstitutionalDistributionProbability({
+    priceTrend: holding.priceTrend,
+    volumeTrend: holding.volumeTrend,
+    volatility: holding.volatility,
+    liquidityStress: regime.liquidityStress?.stress || 0
+  });
+  const momentumDecay = calculateMomentumDecayCurve({
+    momentumSeries: holding.momentumSeries || [holding.momentum || 0, holding.momentumSlope || 0, holding.momentumAcceleration || 0]
+  });
+  const trendExhaustionProbability = calculateTrendExhaustionProbability({
+    trendMaturityScore: holding.trendMaturityScore,
+    momentumDecay,
+    volatilityExpansion: volatilityIncreasePct
+  });
 
   const weaknessScore = clamp(
     (Number(holding.trendMaturityScore) || 0) * 0.3 +
-    (Number(holding.distributionProbability) || 0) * 0.3 +
+    distributionProbability * 0.3 +
     (Number(holding.downsideAsymmetry) || 0) * 0.2 +
     (Number(regime.dangerScore) || 0) * 0.2,
     0,
@@ -83,11 +153,17 @@ export function calculateOptimalExit(holding = {}, regime = {}, threat = {}) {
     regimeDanger: regime.dangerScore,
     correlationRisk: holding.correlationRisk,
     structuralBreakdown: holding.state === "EXIT_NOW" || holding.state === "BREAKDOWN_RISK",
-    distributionDetected: holding.distributionProbability >= 0.62,
+    distributionDetected: distributionProbability >= 0.62,
     trendMaturing: holding.state === "TREND_MATURING" || holding.state === "OVEREXTENDED"
   });
+  const profitLocking = calculateDynamicProfitLocking({
+    unrealizedProfitPct,
+    drawdownRisk: (threat.downsideProbability || 0.2),
+    concentrationRisk: threat.concentrationRisk || 0.2
+  });
+  const adjustedSellPercent = clamp(Math.max(sellPercent, profitLocking * 0.5 + trendExhaustionProbability * 0.5), 0, 1);
 
-  const exitQty = Math.floor((Number(holding.quantity) || 0) * sellPercent);
+  const exitQty = Math.floor((Number(holding.quantity) || 0) * adjustedSellPercent);
   const expectedDownsidePct = calculateExpectedDrawdown({
     volatility: holding.volatility,
     beta: holding.beta,
@@ -102,35 +178,37 @@ export function calculateOptimalExit(holding = {}, regime = {}, threat = {}) {
     previousDownside: 0.04
   });
 
-  const action = sellPercent >= 0.95 ? "FULL_EXIT"
-    : sellPercent >= 0.45 ? "DEFENSIVE_EXIT"
-      : sellPercent >= 0.25 ? "PARTIAL_EXIT"
-        : sellPercent >= 0.1 ? "TRIM"
-          : "HOLD";
+  const action = calculateOptimalExitPath({
+    sellPercent: adjustedSellPercent,
+    liquidityRisk: regime.liquidityStress?.stress || 0
+  });
 
   return {
     action,
-    sellPercent: Number((sellPercent * 100).toFixed(2)),
+    sellPercent: Number((adjustedSellPercent * 100).toFixed(2)),
     quantity: exitQty,
     unrealizedProfitPct: Number(unrealizedProfitPct.toFixed(2)),
     expectedDownsidePct,
     volatilityIncreasePct,
+    distributionProbability,
+    trendExhaustionProbability,
+    momentumDecay,
     rrDeteriorationPct,
     concentrationRiskReductionPct: Number((calculatePortfolioHeatReduction({
-      sellWeight: (holding.weight || 0) * sellPercent,
+      sellWeight: (holding.weight || 0) * adjustedSellPercent,
       positionVolatility: holding.volatility,
       positionBeta: holding.beta
     })).toFixed(2)),
     portfolioImprovement: calculatePortfolioImprovementAfterExit({
       positionWeight: holding.weight,
-      sellPercent,
+      sellPercent: adjustedSellPercent,
       expectedDownside: expectedDownsidePct / 100,
       volatility: holding.volatility,
       portfolioVolatility: threat.portfolioVolatility || 0.24
     }),
     capitalProtectionBenefitPct: calculateCapitalProtectionEfficiency({
       expectedDownside: expectedDownsidePct / 100,
-      sellPercent
+      sellPercent: adjustedSellPercent
     })
   };
 }

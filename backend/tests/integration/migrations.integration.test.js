@@ -25,6 +25,7 @@ describe("integration: fresh migration replay safety", () => {
     const analytics = readMigration("20260519_public_analytics_layer.sql");
     const surveillance = readMigration("20260519_portfolio_surveillance_engine.sql");
     const adaptiveV2 = readMigration("20260519_adaptive_portfolio_intelligence_v2.sql");
+    const realQuant = readMigration("20260519_real_quantitative_pipeline.sql");
 
     expect(backtesting).toMatch(/create table if not exists public\.backtest_runs/i);
     expect(backtesting).toMatch(/create index if not exists backtest_runs_created_at_desc_idx/i);
@@ -42,5 +43,9 @@ describe("integration: fresh migration replay safety", () => {
     expect(adaptiveV2).toMatch(/create table if not exists public\.portfolio_stress_tests/i);
     expect(adaptiveV2).toMatch(/create table if not exists public\.adaptive_learning_memory/i);
     expect(adaptiveV2).toMatch(/create table if not exists public\.reasoning_audit_logs/i);
+    expect(realQuant).toMatch(/create table if not exists public\.historical_market_returns/i);
+    expect(realQuant).toMatch(/create table if not exists public\.portfolio_covariance_matrix/i);
+    expect(realQuant).toMatch(/create table if not exists public\.monte_carlo_forecasts/i);
+    expect(realQuant).toMatch(/create table if not exists public\.historical_regime_performance/i);
   });
 });

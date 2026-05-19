@@ -1,4 +1,5 @@
 import express from "express";
+import { runPortfolioDefenseCycle } from "./agents/portfolioDefense.agent.js";
 
 const PORT = process.env.PORT || 5000;
 const app = express();
@@ -43,6 +44,9 @@ app.listen(PORT, "0.0.0.0", () => {
       startAdaptiveIntelligenceScheduler();
       
       console.log("🚀 All background services initialized.");
+      console.log("🚨 PORTFOLIO DEFENSE AGENT RUNNING");
+      await runPortfolioDefenseCycle();
+      console.log("✅ MANUAL PORTFOLIO DEFENSE TEST COMPLETED");
     } catch (error) {
       console.error("❌ Failed to initialize background services:", error);
     }
