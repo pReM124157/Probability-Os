@@ -6,8 +6,6 @@ import { safeString } from "../core/safety.js";
  */
 export async function addHolding(chatId, { symbol, quantity, avgPrice }) {
   try {
-    console.log(`💾 Attempting to save holding: ${symbol} for chat ${chatId}`);
-    
     const { data, error } = await supabase
       .from("holdings")
       .upsert({
@@ -20,12 +18,7 @@ export async function addHolding(chatId, { symbol, quantity, avgPrice }) {
         onConflict: "chat_id,symbol"
       });
 
-    if (error) {
-      console.error("ADD HOLDING ERROR:", error);
-      throw new Error(error.message);
-    }
-
-    console.log("HOLDING SAVED:", data);
+    if (error) throw new Error(error.message);
     return data;
   } catch (error) {
     console.error("Detailed Add Holding Error:", error);
@@ -44,11 +37,10 @@ export async function getPortfolio(chatId) {
       .eq("chat_id", chatId);
 
     if (error) throw error;
-    
-    // Map to the format expected by portfolio agents
-    return data.map(h => ({
+
+    return data.map((h) => ({
       symbol: h.symbol,
-      allocation: h.quantity * h.avg_price, // Value for weight calculation
+      allocation: h.quantity * h.avg_price,
       quantity: h.quantity,
       avgPrice: h.avg_price
     }));
@@ -94,4 +86,77 @@ export async function updateHolding(chatId, symbol, updates) {
     console.error("Error updating holding:", error.message);
     throw error;
   }
+}
+
+function clamp(value, min = 0, max = 1) {
+  return Math.min(Math.max(Number(value) || 0, min), max);
+}
+
+export async function storeHistoricalPortfolioStates(state = {}) {
+  const row = {
+    user_id: state.userId || "system",
+    portfolio_value: Number(state.portfolioValue || 0),
+    drawdown: Number(state.drawdown || 0),
+    volatility: Number(state.volatility || 0),
+    concentration: Number(state.concentration || 0),
+    heat_score: Number(state.heatScore || 0),
+    regime: state.regime || "UNKNOWN",
+    notes: state.notes || null
+  };
+
+  const { error } = await supabase.from("portfolio_history").insert(row);
+  if (error) console.warn("[PORTFOLIO MEMORY] storeHistoricalPortfolioStates failed:", error.message);
+  return row;
+}
+
+export function trackPortfolioEvolution(history = []) {
+  if (history.length < 2) return { trend: "INSUFFICIENT_DATA", improvement: 0 };
+  const latest = history[0];
+  const prior = history[history.length - 1];
+  const improvement = Number((Number(prior.drawdown || 0) - Number(latest.drawdown || 0)).toFixed(2));
+  return { trend: improvement >= 0 ? "IMPROVING" : "DETERIORATING", improvement };
+}
+
+export function trackBehaviorPatterns(history = []) {
+  const highHeat = history.filter((h) => Number(h.heat_score || 0) > 65).length;
+  const highConcentration = history.filter((h) => Number(h.concentration || 0) > 40).length;
+  return {
+    highHeatRatio: Number(clamp(highHeat / Math.max(history.length, 1), 0, 1).toFixed(4)),
+    highConcentrationRatio: Number(clamp(highConcentration / Math.max(history.length, 1), 0, 1).toFixed(4))
+  };
+}
+
+export function trackRecurringFailures(events = []) {
+  const grouped = events.reduce((acc, e) => {
+    const key = e.failure_reason || "UNKNOWN";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return grouped;
+}
+
+export function trackRecurringStrengths(events = []) {
+  const grouped = events.reduce((acc, e) => {
+    const key = e.success_reason || "UNKNOWN";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return grouped;
+}
+
+export function detectRepeatedRiskPatterns(history = []) {
+  const patterns = [];
+  const behaviors = trackBehaviorPatterns(history);
+  if (behaviors.highHeatRatio > 0.35) patterns.push("Recurring excessive portfolio heat");
+  if (behaviors.highConcentrationRatio > 0.3) patterns.push("Recurring concentration mistakes");
+  return patterns;
+}
+
+export function buildHistoricalPortfolioGraph(history = []) {
+  return history.map((h) => ({
+    t: h.created_at,
+    value: Number(h.portfolio_value || 0),
+    drawdown: Number(h.drawdown || 0),
+    heat: Number(h.heat_score || 0)
+  }));
 }

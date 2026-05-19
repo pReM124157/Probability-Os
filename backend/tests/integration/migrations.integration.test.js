@@ -23,11 +23,24 @@ describe("integration: fresh migration replay safety", () => {
     const backtesting = readMigration("20260519_backtesting_engine.sql");
     const adaptive = readMigration("20260519_adaptive_intelligence_engine.sql");
     const analytics = readMigration("20260519_public_analytics_layer.sql");
+    const surveillance = readMigration("20260519_portfolio_surveillance_engine.sql");
+    const adaptiveV2 = readMigration("20260519_adaptive_portfolio_intelligence_v2.sql");
+
     expect(backtesting).toMatch(/create table if not exists public\.backtest_runs/i);
     expect(backtesting).toMatch(/create index if not exists backtest_runs_created_at_desc_idx/i);
     expect(adaptive).toMatch(/create table if not exists public\.adaptive_model_state/i);
     expect(adaptive).toMatch(/create index if not exists adaptive_model_state_model_key_idx/i);
     expect(analytics).toMatch(/create table if not exists public\.analytics_snapshots/i);
     expect(analytics).toMatch(/create index if not exists analytics_snapshots_generated_at_desc_idx/i);
+
+    expect(surveillance).toMatch(/create table if not exists public\.portfolio_positions/i);
+    expect(surveillance).toMatch(/create table if not exists public\.portfolio_alerts/i);
+    expect(surveillance).toMatch(/create table if not exists public\.portfolio_history/i);
+    expect(surveillance).toMatch(/create index if not exists portfolio_history_created_at_desc_idx/i);
+
+    expect(adaptiveV2).toMatch(/create table if not exists public\.portfolio_correlation_matrix/i);
+    expect(adaptiveV2).toMatch(/create table if not exists public\.portfolio_stress_tests/i);
+    expect(adaptiveV2).toMatch(/create table if not exists public\.adaptive_learning_memory/i);
+    expect(adaptiveV2).toMatch(/create table if not exists public\.reasoning_audit_logs/i);
   });
 });
