@@ -39,6 +39,7 @@ import { generateChatReply } from "./chat.service.js";
 import { formatIST } from "../utils/time.js";
 import { formatPortfolioReview } from "../core/portfolioFormatter.js";
 import { buildAnalysisContext } from "../core/analysisContext.js";
+import { parseAddCommand, parseRemoveCommand } from "./portfolioCommandParser.service.js";
 import {
   claimEphemeralKey,
   consumeState,
@@ -764,6 +765,151 @@ bot.on("text", async (ctx) => {
 
     const lowerText = text.toLowerCase();
 
+    // ── STRICT COMMAND-FIRST ROUTING (NO AI FALLTHROUGH) ───────────
+    if (text.trim().startsWith("/add")) {
+      console.log("[PORTFOLIO COMMAND ROUTED]", "add");
+      const parsed = parseAddCommand(text);
+      console.log("[PORTFOLIO PARSED]", parsed);
+
+      if (!parsed.entries.length && !parsed.errors.length) {
+        await send("Usage:\n/add RELIANCE 10\nor\n/add\\nRELIANCE 10\\nTCS 5\\nINFY");
+        return;
+      }
+
+      const uniqueEntries = [];
+      const seen = new Set();
+      for (const entry of parsed.entries) {
+        if (seen.has(entry.symbol)) continue;
+        seen.add(entry.symbol);
+        uniqueEntries.push(entry);
+      }
+
+      const symbols = uniqueEntries.map((x) => x.symbol);
+      const { data: existingRows, error: existingErr } = symbols.length
+        ? await supabase
+            .from("holdings")
+            .select("symbol")
+            .eq("chat_id", String(chatId))
+            .in("symbol", symbols)
+        : { data: [], error: null };
+
+      if (existingErr) {
+        await send("⚠️ Could not validate existing holdings right now. Please retry.");
+        return;
+      }
+
+      const existing = new Set((existingRows || []).map((r) => String(r.symbol || "").toUpperCase()));
+      const successes = [];
+      const failures = [...parsed.errors.map((e) => ({ symbol: e.symbol || e.input, reason: e.reason }))];
+
+      for (const entry of uniqueEntries) {
+        if (existing.has(entry.symbol)) {
+          failures.push({ symbol: entry.symbol, reason: "Already exists" });
+          continue;
+        }
+        try {
+          await addHolding(chatId, {
+            symbol: entry.symbol,
+            quantity: entry.quantity,
+            avgPrice: 0
+          });
+          successes.push(entry);
+        } catch (err) {
+          failures.push({ symbol: entry.symbol, reason: err?.message || "Insert failed" });
+        }
+      }
+
+      if (successes.length && !failures.length) {
+        const lines = successes.map((s) => `• ${s.symbol} — Qty ${s.quantity}`).join("\n");
+        await send(`✅ Added to portfolio:\n${lines}\nPortfolio updated successfully.`);
+        return;
+      }
+
+      if (successes.length || failures.length) {
+        const okBlock = successes.length
+          ? `✅ Added:\n${successes.map((s) => `• ${s.symbol}${s.quantity ? ` — Qty ${s.quantity}` : ""}`).join("\n")}`
+          : "";
+        const failBlock = failures.length
+          ? `⚠ Failed:\n${failures.map((f) => `• ${f.symbol} — ${f.reason}`).join("\n")}`
+          : "";
+        await send([okBlock, failBlock].filter(Boolean).join("\n"));
+        return;
+      }
+      return;
+    }
+
+    if (text.trim().startsWith("/remove")) {
+      console.log("[PORTFOLIO COMMAND ROUTED]", "remove");
+      const parsed = parseRemoveCommand(text);
+      console.log("[PORTFOLIO PARSED]", parsed);
+
+      if (!parsed.symbols.length && !parsed.errors.length) {
+        await send("Usage:\n/remove RELIANCE\nor\n/remove\\nRELIANCE\\nTCS\\nINFY");
+        return;
+      }
+
+      const uniqueSymbols = [...new Set(parsed.symbols)];
+      const symbols = uniqueSymbols;
+      const { data: existingRows, error: existingErr } = symbols.length
+        ? await supabase
+            .from("holdings")
+            .select("symbol")
+            .eq("chat_id", String(chatId))
+            .in("symbol", symbols)
+        : { data: [], error: null };
+
+      if (existingErr) {
+        await send("⚠️ Could not validate holdings right now. Please retry.");
+        return;
+      }
+
+      const existing = new Set((existingRows || []).map((r) => String(r.symbol || "").toUpperCase()));
+      const removed = [];
+      const failures = [...parsed.errors.map((e) => ({ symbol: e.symbol || e.input, reason: e.reason }))];
+
+      for (const symbol of uniqueSymbols) {
+        if (!existing.has(symbol)) {
+          failures.push({ symbol, reason: "Not found" });
+          continue;
+        }
+        try {
+          await removeHolding(chatId, symbol);
+          removed.push(symbol);
+        } catch (err) {
+          failures.push({ symbol, reason: err?.message || "Remove failed" });
+        }
+      }
+
+      const okBlock = removed.length ? `✅ Removed:\n${removed.map((s) => `• ${s}`).join("\n")}` : "";
+      const failBlock = failures.length ? `⚠ Failed:\n${failures.map((f) => `• ${f.symbol} — ${f.reason}`).join("\n")}` : "";
+      await send([okBlock, failBlock].filter(Boolean).join("\n") || "No symbols processed.");
+      return;
+    }
+
+    if (text.trim().startsWith("/portfolio")) {
+      console.log("[PORTFOLIO COMMAND ROUTED]", "portfolio");
+      try {
+        const dbHoldings = await getPortfolio(chatId);
+        if (!dbHoldings?.length) {
+          await bot.telegram.sendMessage(chatId, "Your portfolio is empty.\nUse /add to add holdings.");
+          return;
+        }
+        const review = await buildPortfolioReview(dbHoldings);
+        const msg = formatPortfolioReview(review);
+        await bot.telegram.sendMessage(chatId, msg);
+      } catch (err) {
+        console.error("[PORTFOLIO ERROR]", err);
+        await bot.telegram.sendMessage(chatId, "⚠️ Unable to fetch portfolio right now.");
+      }
+      return;
+    }
+
+    if (text.trim().startsWith("/watchlist")) {
+      console.log("[PORTFOLIO COMMAND ROUTED]", "watchlist");
+      await send("Watchlist command routed. Use /top or /scanner for current opportunities.");
+      return;
+    }
+
     // ── /subscribe ─────────────────────────────────────────────────
     if (lowerText === "/subscribe") {
       await sendSubscriptionLink(chatId);
@@ -866,21 +1012,7 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    // ── Portfolio commands ──────────────────────────────────────────
-    if (lowerText.startsWith("/add ")) {
-      const parts = text.split(/\s+/);
-      if (parts.length < 4) { await send("Usage: /add TICKER QUANTITY PRICE\nExample: /add HDFCBANK 50 1450"); return; }
-      const symbol = parts[1].toUpperCase();
-      const quantity = Number(parts[2]);
-      const avgPrice = Number(parts[3]);
-      if (isNaN(quantity) || isNaN(avgPrice)) { await send("❌ Invalid quantity or price."); return; }
-      try {
-        await addHolding(chatId, { symbol, quantity, avgPrice });
-        await send(`✅ Holding Added\n📈 Stock: ${symbol}\n📦 Qty: ${quantity}\n💰 Avg Price: ₹${avgPrice}\n📊 Invested: ₹${quantity * avgPrice}\n\nUse /portfolio to view health.`);
-      } catch (err) { await bot.telegram.sendMessage(chatId, `❌ Error: ${err.message}`); }
-      return;
-    }
-
+    // ── Portfolio update command (non-batch) ───────────────────────
     if (lowerText.startsWith("/update ")) {
       const parts = text.split(/\s+/);
       if (parts.length < 4) { await send("Usage: /update TICKER QUANTITY PRICE"); return; }
@@ -892,30 +1024,6 @@ bot.on("text", async (ctx) => {
         await updateHolding(chatId, symbol, { quantity, avg_price: avgPrice, updated_at: new Date() });
         await send(`🔄 Holding Updated\n📈 Stock: ${symbol}\n📦 New Qty: ${quantity}\n💰 New Avg Price: ₹${avgPrice}`);
       } catch (err) { await bot.telegram.sendMessage(chatId, `❌ Error: ${err.message}`); }
-      return;
-    }
-
-    if (lowerText.startsWith("/remove")) {
-      const symbol = text.replace(/^\/remove\s*/i, "").trim().toUpperCase();
-      if (!symbol) { await send("Usage: /remove TICKER"); return; }
-      try {
-        await removeHolding(chatId, symbol);
-        await send(`🗑 ${symbol} removed from your portfolio.`);
-      } catch (err) { await bot.telegram.sendMessage(chatId, `❌ Error: ${err.message}`); }
-      return;
-    }
-
-    if (lowerText.startsWith("/portfolio")) {
-      try {
-        const dbHoldings = await getPortfolio(chatId);
-        if (!dbHoldings?.length) { await bot.telegram.sendMessage(chatId, `Your portfolio is empty.\nUse /add TICKER QTY PRICE to add holdings.`); return; }
-        const review = await buildPortfolioReview(dbHoldings);
-        const msg = formatPortfolioReview(review);
-        await bot.telegram.sendMessage(chatId, msg);
-      } catch (err) {
-        console.error("[PORTFOLIO ERROR]", err);
-        await bot.telegram.sendMessage(chatId, "⚠️ Unable to fetch portfolio right now.");
-      }
       return;
     }
 
