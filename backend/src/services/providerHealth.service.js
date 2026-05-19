@@ -9,6 +9,7 @@ const AUTH_COOLDOWN_S        = 300;  // 5 min on auth failures
 const ESCALATED_COOLDOWN_S   = 900;  // 15 min on 5+ failures
 const DEFAULT_SKIP_CODE      = "PROVIDER_COOLDOWN_ACTIVE";
 const localProviderHealth    = new Map();
+const providerStats = new Map();
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -195,6 +196,7 @@ export async function recoverProviderHealth(provider) {
 
 export function resetProviderHealthForTest(provider) {
   localProviderHealth.delete(provider);
+  providerStats.delete(provider);
 }
 
 // ─── WITH PROVIDER GUARD ──────────────────────────────────────────────────────
@@ -216,11 +218,22 @@ export async function withProviderGuard(provider, operation, options = {}) {
 
   const startedAt = Date.now();
   try {
+    const started = Date.now();
     const result = await operation();
+    const stats = providerStats.get(provider) || { success: 0, fail: 0, latencyMs: 0, bursts: 0, timeout: 0 };
+    stats.success += 1;
+    stats.latencyMs = Math.round((stats.latencyMs * 0.7) + ((Date.now() - started) * 0.3));
+    stats.bursts = Math.max(0, stats.bursts - 1);
+    providerStats.set(provider, stats);
     await recordProviderSuccess(provider);
     logEvent("provider.latency", { provider, durationMs: Date.now() - startedAt });
     return result;
   } catch (error) {
+    const stats = providerStats.get(provider) || { success: 0, fail: 0, latencyMs: 0, bursts: 0, timeout: 0 };
+    stats.fail += 1;
+    stats.bursts += 1;
+    if (String(error?.message || "").toLowerCase().includes("timeout")) stats.timeout += 1;
+    providerStats.set(provider, stats);
     await recordProviderFailure(provider, error?.message || "Unknown provider error");
     throw error;
   }
@@ -228,3 +241,52 @@ export async function withProviderGuard(provider, operation, options = {}) {
 
 // ─── AUTH FAILURE EXPORT ──────────────────────────────────────────────────────
 export { isAuthError as isProviderAuthFailure };
+
+export function trackProviderSuccessRate(provider) {
+  const stats = providerStats.get(provider) || { success: 0, fail: 0 };
+  const total = stats.success + stats.fail;
+  return total > 0 ? Number((stats.success / total).toFixed(4)) : 1;
+}
+
+export function trackProviderLatency(provider) {
+  const stats = providerStats.get(provider) || { latencyMs: 0 };
+  return Number(stats.latencyMs || 0);
+}
+
+export function trackProviderFailureBursts(provider) {
+  const stats = providerStats.get(provider) || { bursts: 0 };
+  return Number(stats.bursts || 0);
+}
+
+export function calculateDynamicCooldown(provider) {
+  const burst = trackProviderFailureBursts(provider);
+  const latency = trackProviderLatency(provider);
+  return Math.min(30 * 60, 60 + (burst * 45) + Math.floor(latency / 250));
+}
+
+export function calculateProviderReliability(provider) {
+  const successRate = trackProviderSuccessRate(provider);
+  const latencyScore = Math.max(0, 1 - (trackProviderLatency(provider) / 5000));
+  const burstPenalty = Math.min(1, trackProviderFailureBursts(provider) / 10);
+  const timeoutPenalty = Math.min(1, (providerStats.get(provider)?.timeout || 0) / 10);
+  return Number(((successRate * 0.55) + (latencyScore * 0.25) + ((1 - burstPenalty) * 0.1) + ((1 - timeoutPenalty) * 0.1)).toFixed(4));
+}
+
+export function dynamicCooldownRecovery(provider) {
+  const stats = providerStats.get(provider);
+  if (!stats) return;
+  stats.bursts = Math.max(0, stats.bursts - 1);
+  providerStats.set(provider, stats);
+}
+
+export function partialProviderRecovery(provider) {
+  const stats = providerStats.get(provider);
+  if (!stats) return;
+  stats.fail = Math.max(0, stats.fail - 1);
+  providerStats.set(provider, stats);
+}
+
+export function cooldownDecay(provider) {
+  dynamicCooldownRecovery(provider);
+  partialProviderRecovery(provider);
+}

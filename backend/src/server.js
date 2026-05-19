@@ -1,5 +1,8 @@
 import express from "express";
-import { runPortfolioDefenseCycle } from "./agents/portfolioDefense.agent.js";
+import { initializePortfolioDefenseAgent } from "./agents/portfolioDefense.agent.js";
+import { initializeInfrastructure } from "./services/infrastructure.service.js";
+import { staggerSchedulerExecution } from "./services/schedulerStagger.service.js";
+import { startInstitutionalWorkers } from "./workers/index.js";
 
 const PORT = process.env.PORT || 5000;
 const app = express();
@@ -32,21 +35,23 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startBacktestingScheduler } = await import("./scheduler/backtesting.scheduler.js");
       const { startAdaptiveIntelligenceScheduler } = await import("./scheduler/adaptiveIntelligence.scheduler.js");
 
+      await initializeInfrastructure();
+      initializePortfolioDefenseAgent();
+      console.log("🛡️ Portfolio Defense Agent Initialized");
+      startInstitutionalWorkers();
+
       startBot();
-      startPortfolioScheduler();
-      startMonitoringJob();
-      startDailyHook();
-      startSpikeHook();
-      startRecommendationTrackingScheduler();
-      startStatisticalValidationScheduler();
-      startPublicAnalyticsScheduler();
-      startBacktestingScheduler();
-      startAdaptiveIntelligenceScheduler();
+      await staggerSchedulerExecution("portfolio_surveillance", async () => startPortfolioScheduler());
+      await staggerSchedulerExecution("monitoring", async () => startMonitoringJob());
+      await staggerSchedulerExecution("daily_hook", async () => startDailyHook());
+      await staggerSchedulerExecution("spike_hook", async () => startSpikeHook());
+      await staggerSchedulerExecution("recommendation_tracking", async () => startRecommendationTrackingScheduler());
+      await staggerSchedulerExecution("statistical_validation", async () => startStatisticalValidationScheduler());
+      await staggerSchedulerExecution("public_analytics", async () => startPublicAnalyticsScheduler());
+      await staggerSchedulerExecution("backtesting", async () => startBacktestingScheduler());
+      await staggerSchedulerExecution("adaptive_intelligence", async () => startAdaptiveIntelligenceScheduler());
       
       console.log("🚀 All background services initialized.");
-      console.log("🚨 PORTFOLIO DEFENSE AGENT RUNNING");
-      await runPortfolioDefenseCycle();
-      console.log("✅ MANUAL PORTFOLIO DEFENSE TEST COMPLETED");
     } catch (error) {
       console.error("❌ Failed to initialize background services:", error);
     }

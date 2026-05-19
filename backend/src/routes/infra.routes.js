@@ -16,6 +16,7 @@
 import express from "express";
 import supabase, { isSupabaseSchemaMissing } from "../services/supabase.service.js";
 import { logEvent } from "../services/telemetry.service.js";
+import { getPortfolioDefenseHealth } from "../services/portfolioDefenseHealth.service.js";
 
 const router = express.Router();
 
@@ -166,6 +167,14 @@ router.get("/providers/:provider", async (req, res) => {
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
+});
+
+router.get("/portfolio-defense-health", async (_req, res) => {
+  return res.json({
+    success: true,
+    asOf: new Date().toISOString(),
+    health: getPortfolioDefenseHealth()
+  });
 });
 
 export default router;

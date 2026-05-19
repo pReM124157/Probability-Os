@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { syncRecommendationOutcomes } from "../services/recommendationOutcome.service.js";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+import { preventSchedulerOverlap, staggerSchedulerExecution } from "../services/schedulerStagger.service.js";
 
 function withTimeout(promise, timeoutMs = 8 * 60 * 1000) {
   return Promise.race([
@@ -27,6 +28,8 @@ export function startRecommendationTrackingScheduler() {
 
   // Every 30 minutes during market hours (09:00-16:00 IST)
   cron.schedule("*/30 9-16 * * 1-5", async () => {
+    if (!preventSchedulerOverlap("recommendation_tracking", 5 * 60 * 1000)) return;
+    await staggerSchedulerExecution("recommendation_tracking", async () => {});
     await runWithSchedulerLease(
       "scheduler:recommendation_outcome_tracking_market",
       async ({ traceId }) => {
@@ -41,6 +44,8 @@ export function startRecommendationTrackingScheduler() {
 
   // Overnight reconciliation
   cron.schedule("15 1 * * *", async () => {
+    if (!preventSchedulerOverlap("recommendation_tracking", 5 * 60 * 1000)) return;
+    await staggerSchedulerExecution("recommendation_tracking", async () => {});
     await runWithSchedulerLease(
       "scheduler:recommendation_outcome_tracking_reconcile",
       async ({ traceId }) => {

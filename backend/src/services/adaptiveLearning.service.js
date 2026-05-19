@@ -1,7 +1,82 @@
 import supabase from "./supabase.service.js";
 
-function clamp(value, min = 0, max = 1) {
-  return Math.min(Math.max(Number(value) || 0, min), max);
+function clamp(v, min = 0, max = 1) { return Math.min(Math.max(Number(v) || 0, min), max); }
+function mean(values = []) { return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0; }
+
+export async function trackRealTradeOutcomes(strategyType = "DEFENSIVE_EXIT", limit = 600) {
+  const { data, error } = await supabase.from("adaptive_learning_memory").select("*").eq("strategy_type", strategyType).order("created_at", { ascending: false }).limit(limit);
+  if (error) return [];
+  return data || [];
+}
+
+export function trackExitTimingAccuracy(outcomes = []) {
+  if (!outcomes.length) return 0.5;
+  const vals = outcomes.map((o) => Number(o.exit_quality || 0));
+  return Number(clamp(mean(vals), 0, 1).toFixed(6));
+}
+
+export function trackProfitCapture(outcomes = []) {
+  return Number(clamp(mean(outcomes.map((o) => Number(o.unrealized_profit_captured || 0))), 0, 1).toFixed(6));
+}
+
+export function trackDrawdownAvoidance(outcomes = []) {
+  const vals = outcomes.map((o) => Number(o.downside_avoided || 0));
+  return Number(clamp(mean(vals) / 0.2, 0, 1).toFixed(6));
+}
+
+export function trackRegimePerformance(outcomes = []) {
+  const map = {};
+  for (const row of outcomes) {
+    const key = row.regime || "UNKNOWN";
+    if (!map[key]) map[key] = [];
+    map[key].push(Number(row.prediction_accuracy || row.historical_accuracy || 0));
+  }
+  return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, Number(clamp(mean(v), 0, 1).toFixed(6))]));
+}
+
+export function calculateRollingStrategyPerformance(outcomes = [], window = 30) {
+  const series = [];
+  for (let i = window; i <= outcomes.length; i += 1) {
+    const slice = outcomes.slice(i - window, i);
+    series.push(Number(clamp(mean(slice.map((r) => Number(r.prediction_accuracy || r.historical_accuracy || 0))), 0, 1).toFixed(6)));
+  }
+  return series;
+}
+
+export function detectStrategyDegradation(rolling = []) {
+  if (rolling.length < 4) return { degraded: false, slope: 0 };
+  const latest = mean(rolling.slice(-4));
+  const prior = mean(rolling.slice(-8, -4));
+  const slope = latest - prior;
+  return { degraded: slope < -0.06, slope: Number(slope.toFixed(6)) };
+}
+
+export function autoSuppressFailingStrategies({ degraded = false, reliability = 0.5 } = {}) {
+  return degraded && reliability < 0.48;
+}
+
+export function learnOptimalAllocationBehavior(outcomes = []) {
+  const gain = trackProfitCapture(outcomes);
+  const dd = trackDrawdownAvoidance(outcomes);
+  return Number(clamp(0.55 * gain + 0.45 * dd, 0, 1).toFixed(6));
+}
+
+export function learnOptimalExitBehavior(outcomes = []) {
+  return Number(clamp(trackExitTimingAccuracy(outcomes) * 0.7 + trackDrawdownAvoidance(outcomes) * 0.3, 0, 1).toFixed(6));
+}
+
+export function adaptConfidenceScaling({ baseConfidence = 0.75, reliability = 0.6, degradationSlope = 0, volatilityRegimePenalty = 0 } = {}) {
+  const adjusted = baseConfidence * (0.45 + reliability * 0.55) * (1 - Math.max(0, -degradationSlope)) * (1 - clamp(volatilityRegimePenalty, 0, 0.35));
+  return Number(clamp(adjusted, 0.12, 0.96).toFixed(6));
+}
+
+export function adaptRiskTolerance({ reliability = 0.6, tailRisk = 0.05 } = {}) {
+  return Number(clamp(0.25 + reliability * 0.45 - tailRisk * 1.8, 0.08, 0.6).toFixed(6));
+}
+
+export function adaptPositionSizing({ baseSize = 1, reliability = 0.6, degradation = false } = {}) {
+  const score = baseSize * (0.5 + reliability * 0.6) * (degradation ? 0.7 : 1);
+  return Number(clamp(score, 0.2, 1.5).toFixed(6));
 }
 
 export async function storeDecisionOutcome(outcome = {}) {
@@ -19,93 +94,38 @@ export async function storeDecisionOutcome(outcome = {}) {
     sector: outcome.sector || "UNKNOWN",
     volatility_regime: outcome.volatilityRegime || "UNKNOWN"
   };
-
   const { error } = await supabase.from("adaptive_learning_memory").insert(row);
   if (error) console.warn("[ADAPTIVE] storeDecisionOutcome failed:", error.message);
   return row;
 }
 
 export async function loadHistoricalDecisionOutcomes({ strategyType = "DEFENSIVE_EXIT", limit = 400 } = {}) {
-  const { data, error } = await supabase
-    .from("adaptive_learning_memory")
-    .select("*")
-    .eq("strategy_type", strategyType)
-    .order("created_at", { ascending: false })
-    .limit(limit);
-  if (error) {
-    console.warn("[ADAPTIVE] loadHistoricalDecisionOutcomes failed:", error.message);
-    return [];
-  }
-  return data || [];
-}
-
-export function trackActualPortfolioPerformance(outcomes = []) {
-  if (!outcomes.length) return { avgDownsideAvoided: 0, avgCapture: 0 };
-  const avgDownsideAvoided = outcomes.reduce((a, r) => a + Number(r.downside_avoided || 0), 0) / outcomes.length;
-  const avgCapture = outcomes.reduce((a, r) => a + Number(r.unrealized_profit_captured || 0), 0) / outcomes.length;
-  return {
-    avgDownsideAvoided: Number(avgDownsideAvoided.toFixed(4)),
-    avgCapture: Number(avgCapture.toFixed(4))
-  };
-}
-
-export function trackActualExitPerformance(outcomes = []) {
-  if (!outcomes.length) return { exitQuality: 0, winRate: 0 };
-  const exitQuality = outcomes.reduce((a, r) => a + Number(r.exit_quality || 0), 0) / outcomes.length;
-  const winRate = outcomes.filter((r) => Number(r.exit_quality || 0) >= 0.6).length / outcomes.length;
-  return { exitQuality: Number(exitQuality.toFixed(4)), winRate: Number(winRate.toFixed(4)) };
-}
-
-export function recalculateHistoricalAccuracy(outcomes = []) {
-  if (!outcomes.length) return 0.5;
-  const avg = outcomes.reduce((a, r) => a + Number(r.prediction_accuracy || r.historical_accuracy || 0), 0) / outcomes.length;
-  return Number(clamp(avg, 0, 1).toFixed(4));
-}
-
-export function adaptByMarketRegime(outcomes = [], regime = "UNKNOWN") {
-  const rows = outcomes.filter((o) => (o.regime || "UNKNOWN") === regime);
-  const accuracy = recalculateHistoricalAccuracy(rows);
-  return { regime, accuracy, penalty: Number(clamp(0.55 - accuracy, 0, 0.35).toFixed(4)) };
-}
-
-export function adaptByVolatilityRegime(outcomes = [], volatilityRegime = "UNKNOWN") {
-  const rows = outcomes.filter((o) => (o.volatility_regime || "UNKNOWN") === volatilityRegime);
-  const accuracy = recalculateHistoricalAccuracy(rows);
-  return { volatilityRegime, accuracy, penalty: Number(clamp(0.55 - accuracy, 0, 0.35).toFixed(4)) };
-}
-
-export function reweightStrategiesAutomatically({ baseWeight = 1, accuracy = 0.6, exitQuality = 0.6 } = {}) {
-  return Number(clamp(baseWeight * (0.5 + accuracy * 0.3 + exitQuality * 0.2), 0.2, 1.4).toFixed(4));
-}
-
-export function adaptConfidenceScaling({ baseConfidence = 0.75, accuracy = 0.6, regimePenalty = 0, volPenalty = 0 } = {}) {
-  return Number(clamp(baseConfidence * (0.5 + accuracy * 0.5) * (1 - regimePenalty) * (1 - volPenalty), 0.1, 0.95).toFixed(4));
+  return trackRealTradeOutcomes(strategyType, limit);
 }
 
 export async function recalibrateStrategyState({ strategyType = "DEFENSIVE_EXIT", regime = "UNKNOWN", volatilityRegime = "UNKNOWN", baseConfidence = 0.75 } = {}) {
-  const outcomes = await loadHistoricalDecisionOutcomes({ strategyType });
-  const accuracy = recalculateHistoricalAccuracy(outcomes);
-  const perf = trackActualPortfolioPerformance(outcomes);
-  const exitPerf = trackActualExitPerformance(outcomes);
-  const regimeAdapt = adaptByMarketRegime(outcomes, regime);
-  const volAdapt = adaptByVolatilityRegime(outcomes, volatilityRegime);
+  const outcomes = await trackRealTradeOutcomes(strategyType, 500);
+  const reliability = Number(clamp(mean(outcomes.map((o) => Number(o.prediction_accuracy || o.historical_accuracy || 0))), 0, 1).toFixed(6));
+  const rolling = calculateRollingStrategyPerformance(outcomes, 30);
+  const degradation = detectStrategyDegradation(rolling);
+
+  const regimePerf = trackRegimePerformance(outcomes);
+  const regimeAccuracy = Number(regimePerf[regime] || reliability || 0.5);
+  const volPenalty = volatilityRegime === "HIGH" ? 0.14 : volatilityRegime === "EXTREME" ? 0.22 : 0.05;
+
+  const exitPerformance = learnOptimalExitBehavior(outcomes);
+  const allocationPerformance = learnOptimalAllocationBehavior(outcomes);
 
   return {
-    reliability: accuracy,
-    strategyWeight: reweightStrategiesAutomatically({
-      baseWeight: 1,
-      accuracy,
-      exitQuality: exitPerf.exitQuality
-    }),
-    confidence: adaptConfidenceScaling({
-      baseConfidence,
-      accuracy,
-      regimePenalty: regimeAdapt.penalty,
-      volPenalty: volAdapt.penalty
-    }),
-    portfolioPerformance: perf,
-    exitPerformance: exitPerf,
-    regimeAdaptation: regimeAdapt,
-    volatilityAdaptation: volAdapt
+    reliability,
+    strategyWeight: adaptPositionSizing({ baseSize: 1, reliability, degradation: degradation.degraded }),
+    confidence: adaptConfidenceScaling({ baseConfidence, reliability: (reliability * 0.7 + regimeAccuracy * 0.3), degradationSlope: degradation.slope, volatilityRegimePenalty: volPenalty }),
+    riskTolerance: adaptRiskTolerance({ reliability, tailRisk: 1 - allocationPerformance }),
+    positionSizing: adaptPositionSizing({ baseSize: 1, reliability, degradation: degradation.degraded }),
+    exitPerformance: { score: exitPerformance },
+    allocationPerformance: { score: allocationPerformance },
+    regimeAdaptation: { regime, accuracy: regimeAccuracy },
+    degradation,
+    suppressed: autoSuppressFailingStrategies({ degraded: degradation.degraded, reliability })
   };
 }

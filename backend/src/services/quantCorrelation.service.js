@@ -1,36 +1,21 @@
 import supabase from "./supabase.service.js";
 
-function clamp(value, min = -1, max = 1) {
-  return Math.min(Math.max(Number(value) || 0, min), max);
-}
-
-function mean(arr = []) {
-  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-}
-
+function mean(arr = []) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
 function covariance(a = [], b = []) {
   const n = Math.min(a.length, b.length);
   if (n < 2) return 0;
-  const x = a.slice(-n);
-  const y = b.slice(-n);
-  const mx = mean(x);
-  const my = mean(y);
+  const x = a.slice(-n); const y = b.slice(-n);
+  const mx = mean(x); const my = mean(y);
   return x.reduce((acc, v, i) => acc + ((v - mx) * (y[i] - my)), 0) / (n - 1);
 }
-
-function variance(a = []) {
-  return covariance(a, a);
-}
-
-export function calculateRollingCorrelation(seriesA = [], seriesB = [], window = 20) {
-  const cov = covariance(seriesA.slice(-window), seriesB.slice(-window));
-  const va = variance(seriesA.slice(-window));
-  const vb = variance(seriesB.slice(-window));
+function variance(a = []) { return covariance(a, a); }
+function corr(a = [], b = []) {
+  const cov = covariance(a, b); const va = variance(a); const vb = variance(b);
   if (va <= 0 || vb <= 0) return 0;
-  return Number(clamp(cov / Math.sqrt(va * vb)).toFixed(4));
+  return cov / Math.sqrt(va * vb);
 }
 
-export function calculateCovarianceMatrix(returnMap = {}, window = 60) {
+export function buildRollingCovarianceMatrix(returnMap = {}, window = 60) {
   const tickers = Object.keys(returnMap);
   const matrix = {};
   for (const a of tickers) {
@@ -42,55 +27,100 @@ export function calculateCovarianceMatrix(returnMap = {}, window = 60) {
   return matrix;
 }
 
-export function calculateBetaAdjustedCorrelation(seriesA = [], seriesB = [], betaA = 1, betaB = 1, window = 60) {
-  const corr = calculateRollingCorrelation(seriesA, seriesB, window);
-  const betaAdjustment = Math.sqrt(Math.max(betaA, 0.2) * Math.max(betaB, 0.2));
-  return Number(clamp(corr / betaAdjustment).toFixed(4));
-}
-
-export function calculateVolatilityAdjustedCorrelation(seriesA = [], seriesB = [], volA = 0.2, volB = 0.2, window = 60) {
-  const corr = calculateRollingCorrelation(seriesA, seriesB, window);
-  const volAdj = Math.max(0.4, Math.min(2.5, (volA + volB) / 0.4));
-  return Number(clamp(corr * volAdj).toFixed(4));
-}
-
-export function calculateDynamicCorrelationWindows(seriesA = [], seriesB = [], windows = [20, 60, 120]) {
-  return windows.map((w) => ({ window: w, correlation: calculateRollingCorrelation(seriesA, seriesB, w) }));
-}
-
-export function detectHistoricalCorrelationSpikes(seriesA = [], seriesB = [], window = 20, threshold = 0.75) {
-  const spikes = [];
-  const n = Math.min(seriesA.length, seriesB.length);
-  for (let i = window; i <= n; i += 1) {
-    const corr = calculateRollingCorrelation(seriesA.slice(0, i), seriesB.slice(0, i), window);
-    if (Math.abs(corr) >= threshold) spikes.push({ index: i - 1, correlation: corr });
-  }
-  return spikes;
-}
-
-export function detectCorrelationRegimeShifts(seriesA = [], seriesB = []) {
-  const short = calculateRollingCorrelation(seriesA, seriesB, 20);
-  const medium = calculateRollingCorrelation(seriesA, seriesB, 60);
-  const long = calculateRollingCorrelation(seriesA, seriesB, 120);
-  const shift = Math.abs(short - long);
+export function calculateEigenRisk(covMatrix = {}) {
+  const tickers = Object.keys(covMatrix);
+  if (!tickers.length) return { dominantEigenApprox: 0, concentration: 0 };
+  const rowSums = tickers.map((t) => Object.values(covMatrix[t] || {}).reduce((a, b) => a + Math.abs(Number(b || 0)), 0));
+  const dominant = Math.max(...rowSums, 0);
+  const total = rowSums.reduce((a, b) => a + b, 0) || 1;
   return {
-    short,
-    medium,
-    long,
-    shift: Number(shift.toFixed(4)),
-    shifted: shift > 0.25
+    dominantEigenApprox: Number(dominant.toFixed(8)),
+    concentration: Number((dominant / total).toFixed(6))
   };
 }
 
-export function detectHiddenExposureClusters(positions = [], corrMatrix = {}) {
-  return positions
-    .map((p) => {
-      const linked = positions
-        .filter((q) => q.ticker !== p.ticker && Math.abs(corrMatrix[p.ticker]?.[q.ticker] || 0) > 0.72)
-        .map((q) => q.ticker);
-      return { ticker: p.ticker, cluster: linked };
-    })
-    .filter((r) => r.cluster.length >= 2);
+export function runPCAFactorDecomposition(covMatrix = {}, factorCount = 3) {
+  const tickers = Object.keys(covMatrix);
+  if (!tickers.length) return { factors: [], explainedVariance: [] };
+  const rowSums = tickers.map((t) => Object.values(covMatrix[t] || {}).map((v) => Math.abs(Number(v || 0))).reduce((a, b) => a + b, 0));
+  const total = rowSums.reduce((a, b) => a + b, 0) || 1;
+  const sorted = tickers.map((t, i) => ({ ticker: t, score: rowSums[i] / total })).sort((a, b) => b.score - a.score);
+  const factors = sorted.slice(0, factorCount);
+  return {
+    factors,
+    explainedVariance: factors.map((f) => Number(f.score.toFixed(6)))
+  };
+}
+
+export function calculateFactorBetas(positions = [], returnMap = {}) {
+  const marketProxy = Object.values(returnMap)[0] || [];
+  const mVar = variance(marketProxy) || 1e-8;
+  return positions.map((p) => {
+    const series = returnMap[p.ticker] || [];
+    const beta = covariance(series, marketProxy) / mVar;
+    return { ticker: p.ticker, beta: Number(beta.toFixed(6)) };
+  });
+}
+
+export function detectFactorDominance(pca = {}) {
+  const top = Number(pca.explainedVariance?.[0] || 0);
+  return { dominant: top > 0.35, topFactorExplained: top };
+}
+
+export function calculateMarginalRiskContribution(positions = [], covMatrix = {}, weights = {}) {
+  return positions.map((p) => {
+    const w = Number(weights[p.ticker] ?? p.weight ?? 0);
+    const row = covMatrix[p.ticker] || {};
+    const mrc = Object.entries(row).reduce((acc, [k, v]) => acc + (Number(v || 0) * Number(weights[k] ?? 0)), 0) * w;
+    return { ticker: p.ticker, marginalRisk: Number(mrc.toFixed(8)) };
+  });
+}
+
+export function calculateComponentVaR(mrc = [], portfolioVaR = 0) {
+  const total = mrc.reduce((a, x) => a + Math.abs(Number(x.marginalRisk || 0)), 0) || 1;
+  return mrc.map((r) => ({ ticker: r.ticker, componentVaR: Number((Math.abs(r.marginalRisk) / total * portfolioVaR).toFixed(6)) }));
+}
+
+export function calculateVolatilityContagion(corrMatrix = {}) {
+  const vals = [];
+  for (const a of Object.keys(corrMatrix)) {
+    for (const b of Object.keys(corrMatrix[a] || {})) if (a !== b) vals.push(Math.abs(Number(corrMatrix[a][b] || 0)));
+  }
+  const score = mean(vals);
+  return Number(score.toFixed(6));
+}
+
+export function calculateCrossSectorDependency(positions = [], corrMatrix = {}) {
+  const bySector = new Map();
+  for (const p of positions) {
+    const s = p.sector || "UNKNOWN";
+    if (!bySector.has(s)) bySector.set(s, []);
+    bySector.get(s).push(p.ticker);
+  }
+
+  const sectors = [...bySector.keys()];
+  const dependencies = [];
+  for (let i = 0; i < sectors.length; i += 1) {
+    for (let j = i + 1; j < sectors.length; j += 1) {
+      const aTickers = bySector.get(sectors[i]);
+      const bTickers = bySector.get(sectors[j]);
+      const vals = [];
+      for (const a of aTickers) for (const b of bTickers) vals.push(Math.abs(Number(corrMatrix[a]?.[b] || 0)));
+      dependencies.push({ sectorA: sectors[i], sectorB: sectors[j], dependency: Number(mean(vals).toFixed(6)) });
+    }
+  }
+  return dependencies;
+}
+
+export function detectCorrelationBreakdown(returnMap = {}) {
+  const tickers = Object.keys(returnMap);
+  if (tickers.length < 2) return { broken: false, shift: 0 };
+  const a = returnMap[tickers[0]] || [];
+  const b = returnMap[tickers[1]] || [];
+  const short = corr(a.slice(-20), b.slice(-20));
+  const long = corr(a.slice(-120), b.slice(-120));
+  const shift = Math.abs(short - long);
+  return { broken: shift > 0.35, shift: Number(shift.toFixed(6)), short: Number(short.toFixed(6)), long: Number(long.toFixed(6)) };
 }
 
 export async function persistPortfolioCovarianceMatrix(rows = []) {
@@ -100,41 +130,46 @@ export async function persistPortfolioCovarianceMatrix(rows = []) {
 }
 
 export async function generateCorrelationIntel({ positions = [], returnMap = {} } = {}) {
-  const covarianceMatrix = calculateCovarianceMatrix(returnMap, 60);
+  const covarianceMatrix = buildRollingCovarianceMatrix(returnMap, 90);
   const correlationMatrix = {};
-
   Object.keys(covarianceMatrix).forEach((a) => {
     correlationMatrix[a] = {};
     Object.keys(covarianceMatrix[a]).forEach((b) => {
-      const corr = calculateRollingCorrelation(returnMap[a] || [], returnMap[b] || [], 60);
-      correlationMatrix[a][b] = corr;
+      correlationMatrix[a][b] = Number(corr(returnMap[a] || [], returnMap[b] || []).toFixed(6));
     });
   });
 
-  const clusters = detectHiddenExposureClusters(positions, correlationMatrix);
+  const pca = runPCAFactorDecomposition(covarianceMatrix, 3);
+  const factorBetas = calculateFactorBetas(positions, returnMap);
+  const eigenRisk = calculateEigenRisk(covarianceMatrix);
+  const breakdown = detectCorrelationBreakdown(returnMap);
+  const volatilityContagion = calculateVolatilityContagion(correlationMatrix);
+  const crossSectorDependency = calculateCrossSectorDependency(positions, correlationMatrix);
+
+  const weights = Object.fromEntries(positions.map((p) => [p.ticker, Number(p.weight || 0)]));
+  const mrc = calculateMarginalRiskContribution(positions, covarianceMatrix, weights);
+  const componentVaR = calculateComponentVaR(mrc, 0.06);
+
   const rows = [];
   Object.keys(correlationMatrix).forEach((a) => {
     Object.keys(correlationMatrix[a]).forEach((b) => {
-      rows.push({
-        ticker_a: a,
-        ticker_b: b,
-        covariance: covarianceMatrix[a][b],
-        rolling_correlation: correlationMatrix[a][b],
-        created_at: new Date().toISOString()
-      });
+      rows.push({ ticker_a: a, ticker_b: b, covariance: covarianceMatrix[a][b], rolling_correlation: correlationMatrix[a][b], created_at: new Date().toISOString() });
     });
   });
   await persistPortfolioCovarianceMatrix(rows);
 
-  const avgAbs = rows.length ? rows.reduce((acc, r) => acc + Math.abs(Number(r.rolling_correlation || 0)), 0) / rows.length : 0;
-  const fragility = Math.min(1, avgAbs * 1.2 + (clusters.length / Math.max(positions.length, 1)) * 0.35);
-
   return {
     covarianceMatrix,
     correlationMatrix,
-    hiddenExposureClusters: clusters,
-    diversificationScore: Number(((1 - fragility) * 100).toFixed(2)),
-    portfolioFragilityScore: Number((fragility * 100).toFixed(2)),
-    hiddenConcentrationWarnings: clusters.map((c) => `${c.ticker} has high historical co-movement with ${c.cluster.join(",")}`)
+    eigenRisk,
+    pca,
+    factorBetas,
+    factorDominance: detectFactorDominance(pca),
+    marginalRiskContribution: mrc,
+    componentVaR,
+    volatilityContagion,
+    crossSectorDependency,
+    correlationBreakdown: breakdown,
+    portfolioFragilityScore: Number((Math.min(1, volatilityContagion * 1.15 + eigenRisk.concentration * 0.8) * 100).toFixed(2))
   };
 }

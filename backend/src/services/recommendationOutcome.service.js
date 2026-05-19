@@ -1,12 +1,14 @@
 import supabase from "./supabase.service.js";
 import { getHistoricalCandles } from "./marketData.service.js";
 import { logError, logEvent } from "./telemetry.service.js";
+import { applyExponentialBackoff, delayHistoricalRetry } from "./historicalRequestLimiter.service.js";
 
 const TRACKING_VERSION = "outcome-v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EXPIRY_DAYS = 30;
 const MAX_BATCH_SIZE = 100;
 const OUTCOME_CONCURRENCY = 2;
+const unavailableSymbols = new Map();
 
 class OutcomeTrackingError extends Error {
   constructor(message, code, details = {}) {
@@ -86,10 +88,26 @@ function withJitter(minMs = 60, maxMs = 180) {
   return new Promise((resolve) => setTimeout(resolve, jitter));
 }
 
-async function mapWithConcurrency(items, worker, concurrency = OUTCOME_CONCURRENCY) {
+function markTemporarilyUnavailable(symbol, retryAfterMs) {
+  unavailableSymbols.set(String(symbol || "").toUpperCase(), Date.now() + retryAfterMs);
+}
+
+function skipRecentlyFailedSymbols(symbol) {
+  const key = String(symbol || "").toUpperCase();
+  const nextAt = unavailableSymbols.get(key);
+  if (!nextAt) return false;
+  if (nextAt <= Date.now()) {
+    unavailableSymbols.delete(key);
+    return false;
+  }
+  return true;
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const resolvedConcurrency = Number(concurrency || OUTCOME_CONCURRENCY);
   let cursor = 0;
   const results = [];
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }).map(async () => {
+  const runners = Array.from({ length: Math.min(resolvedConcurrency, items.length) }).map(async () => {
     while (cursor < items.length) {
       const index = cursor++;
       results[index] = await worker(items[index], index);
@@ -275,9 +293,13 @@ export async function syncRecommendationOutcomes({ limit = MAX_BATCH_SIZE, onlyO
   const auditMap = new Map((audits || []).map((a) => [a.recommendation_id, a]));
   const updates = [];
 
-  await mapWithConcurrency(outcomes, async (outcome) => {
+  await mapWithConcurrency(outcomes, 2, async (outcome) => {
     const recStartedAt = Date.now();
     try {
+      if (skipRecentlyFailedSymbols(outcome.symbol)) {
+        logEvent("recommendation.outcome.symbol_skipped", { symbol: outcome.symbol, reason: "recent_historical_failures" });
+        return;
+      }
       await withJitter();
       const audit = auditMap.get(outcome.recommendation_id);
       if (!audit) {
@@ -289,6 +311,7 @@ export async function syncRecommendationOutcomes({ limit = MAX_BATCH_SIZE, onlyO
       const candlesRaw = await getHistoricalCandles(outcome.symbol, { days, interval: "1d" });
       const candles = (candlesRaw || []).map(normalizeCandle).sort((a, b) => a.timestamp - b.timestamp);
       if (!candles.length) {
+        markTemporarilyUnavailable(outcome.symbol, 10 * 60 * 1000);
         throw new OutcomeTrackingError("No candles available for tracking", "MISSING_CANDLES", {
           recommendation_id: outcome.recommendation_id
         });
@@ -315,6 +338,7 @@ export async function syncRecommendationOutcomes({ limit = MAX_BATCH_SIZE, onlyO
         processing_latency_ms: Date.now() - recStartedAt
       });
     } catch (error) {
+      await delayHistoricalRetry(applyExponentialBackoff(250, 1));
       if (error instanceof OutcomeTrackingError && error.code === "IMPOSSIBLE_STATE") {
         logEvent("recommendation.outcome.calculation_failure", {
           recommendation_id: outcome.recommendation_id,
@@ -344,6 +368,10 @@ export async function syncRecommendationOutcomes({ limit = MAX_BATCH_SIZE, onlyO
       });
     }
   });
+
+  if (unavailableSymbols.size > 0) {
+    logEvent("recommendation.outcome.unavailable_symbols", { count: unavailableSymbols.size });
+  }
 
   if (updates.length > 0) {
     const { error: writeError } = await supabase

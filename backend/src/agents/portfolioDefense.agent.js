@@ -28,6 +28,12 @@ import {
   persistHistoricalMarketReturns
 } from "../services/historicalMarketData.service.js";
 import { enqueueQuantJob } from "../services/quantWorkerQueue.service.js";
+import {
+  trackDefenseCycleRuntime,
+  trackPortfolioDefenseSuccess,
+  trackSchedulerExecution
+} from "../services/portfolioTelemetry.service.js";
+import { markPortfolioDefenseExecution } from "../services/portfolioDefenseHealth.service.js";
 
 function buildReturnMap(historicalRows = []) {
   return historicalRows.reduce((acc, row) => {
@@ -53,7 +59,11 @@ function portfolioReturns(holdings = [], returnMap = {}) {
 }
 
 export async function runPortfolioDefenseCycle() {
+  const cycleStartedAt = Date.now();
+  console.log("🚨 PORTFOLIO DEFENSE AGENT RUNNING");
+  trackSchedulerExecution("portfolio_defense_cycle.started");
   const surveillance = await monitorPortfolioEvery10Minutes();
+  console.log("📊 Surveillance loaded");
   const holdings = surveillance.holdings || [];
 
   const factorSnapshots = await Promise.all(holdings.map((h) => buildHistoricalFactorSnapshot(h.ticker)));
@@ -73,9 +83,11 @@ export async function runPortfolioDefenseCycle() {
     returnMap
   }));
   const correlation = correlationJob.result;
+  console.log("🧠 Correlation analysis complete");
 
   const stressJob = await enqueueQuantJob("stress", { holdings }, async () => generateStressScenarioReport(holdings));
   const stress = stressJob.result;
+  console.log("🔥 Stress testing complete");
 
   const outlookByTicker = await Promise.all(
     factorSnapshots.map(async (s) => {
@@ -157,6 +169,7 @@ export async function runPortfolioDefenseCycle() {
   const rankedThreats = rankPortfolioThreats(surveillance.alerts || []);
   const urgent = detectUrgentPortfolioChanges(rankedThreats);
   const defensePlan = generatePortfolioDefensePlan(rankedThreats);
+  console.log("🚨 Portfolio alerts generated");
 
   await storeDecisionReasoning({
     userId: "system",
@@ -186,7 +199,7 @@ export async function runPortfolioDefenseCycle() {
     recalibratedWeight: adaptive.strategyWeight
   });
 
-  return {
+  const result = {
     flow: {
       fetchHistoricalData: true,
       buildReturnSeries: true,
@@ -215,6 +228,14 @@ export async function runPortfolioDefenseCycle() {
     defensePlan,
     urgent
   };
+  trackDefenseCycleRuntime(Date.now() - cycleStartedAt);
+  trackPortfolioDefenseSuccess({
+    holdings: holdings.length,
+    urgentAlerts: urgent.hasUrgentChanges
+  });
+  markPortfolioDefenseExecution();
+  console.log("✅ Portfolio defense cycle completed");
+  return result;
 }
 
 export async function runPortfolioDefenseForHolding(holding, regime, threat) {
@@ -222,6 +243,7 @@ export async function runPortfolioDefenseForHolding(holding, regime, threat) {
 }
 
 export function initializePortfolioDefenseAgent() {
+  console.log("🛡️ Portfolio Defense Agent Initialized");
   schedulePortfolioSurveillance();
 }
 

@@ -5,6 +5,18 @@ import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./shar
 import { withProviderGuard, isProviderAuthFailure } from "./providerHealth.service.js";
 import { logError, logEvent, logMetric } from "./telemetry.service.js";
 import {
+  applyExponentialBackoff,
+  delayHistoricalRetry,
+  queueHistoricalRequest,
+  shouldSkipProvider,
+  logHistoricalLimiterTelemetry
+} from "./historicalRequestLimiter.service.js";
+import {
+  detectRecentlyFetchedData,
+  getCachedHistoricalData,
+  storeHistoricalData
+} from "./historicalDataCache.service.js";
+import {
   CANONICAL_METRIC_REGISTRY,
   CANONICAL_SEMANTICS_VERSION,
   normalizeMetric,
@@ -111,6 +123,7 @@ const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
 const HTTP_PROVIDER_TIMEOUT_MS = 5000;
 const YAHOO_TIMEOUT_MS = 3500;
+const providerFailureScore = new Map();
 
 // Re-export canonical registry for legacy consumers
 export const FUNDAMENTAL_METRIC_CANONICALIZATION_MAP = CANONICAL_METRIC_REGISTRY;
@@ -1422,6 +1435,11 @@ export async function getHistoricalCandles(symbol, options = {}) {
   const cacheKey = `HISTORICAL_${upperSymbol}_${days}_${interval}`;
 
   return withRequestCoalescing(cacheKey, async () => {
+    if (detectRecentlyFetchedData(upperSymbol, days, interval)) {
+      const fastCache = getCachedHistoricalData(upperSymbol, days, interval);
+      if (Array.isArray(fastCache) && fastCache.length > 0) return fastCache;
+    }
+
     const cached = await getHybridCache(cacheKey, "HIGH");
     if (cached) return Array.isArray(cached) ? cached : [];
 
@@ -1435,42 +1453,76 @@ export async function getHistoricalCandles(symbol, options = {}) {
       interval
     };
 
+    const providerState = (provider) => ({
+      failureScore: providerFailureScore.get(provider) || 0,
+      successRate: Math.max(0.1, 1 - ((providerFailureScore.get(provider) || 0) / 10)),
+      avgLatencyMs: 800 + ((providerFailureScore.get(provider) || 0) * 250)
+    });
+
     const candles = await getOrPopulateSharedCache(
       cacheKey,
       CACHE_GROUP_HISTORICAL,
       ttlSecondsForQuality("HIGH"),
       async () => {
         // ── HISTORICAL PROVIDER 1: Yahoo ─────────────────────────────
-        const symbolsToTry = buildSymbolVariants(upperSymbol);
-        for (const sym of symbolsToTry) {
-          try {
-            const tempHistory = await withProviderGuard("yahoo", async () =>
-              withTimeout(retry(() => yahooFinance.historical(sym, queryOptions), 1, 500), YAHOO_TIMEOUT_MS)
-            );
-            if (Array.isArray(tempHistory) && tempHistory.length >= 20) {
-              const cleaned = tempHistory.filter(isValidHistoricalCandle);
-              if (cleaned.length >= 20) {
-                console.log(`[HISTORICAL] source=yahoo symbol=${sym} candles=${cleaned.length}`);
-                return cleaned;
+        if (!shouldSkipProvider(providerState("yahoo"))) {
+          const symbolsToTry = buildSymbolVariants(upperSymbol);
+          for (const sym of symbolsToTry) {
+            try {
+              const tempHistory = await queueHistoricalRequest("yahoo", () =>
+                withProviderGuard("yahoo", async () =>
+                  withTimeout(retry(() => yahooFinance.historical(sym, queryOptions), 1, 500), YAHOO_TIMEOUT_MS)
+                )
+              );
+              if (Array.isArray(tempHistory) && tempHistory.length >= 20) {
+                const cleaned = tempHistory.filter(isValidHistoricalCandle);
+                if (cleaned.length >= 20) {
+                  providerFailureScore.set("yahoo", Math.max(0, (providerFailureScore.get("yahoo") || 0) - 1));
+                  console.log(`[HISTORICAL] source=yahoo symbol=${sym} candles=${cleaned.length}`);
+                  return cleaned;
+                }
+                logMetric("provider.historical_candles.filtered_invalid", tempHistory.length - cleaned.length, { symbol: sym });
               }
-              logMetric("provider.historical_candles.filtered_invalid", tempHistory.length - cleaned.length, { symbol: sym });
+            } catch (error) {
+              providerFailureScore.set("yahoo", (providerFailureScore.get("yahoo") || 0) + 1);
+              await delayHistoricalRetry(applyExponentialBackoff(250, providerFailureScore.get("yahoo") || 1));
+              logProviderError("yahoo", { stage: "historical", symbol: sym }, error);
             }
-          } catch (error) {
-            logProviderError("yahoo", { stage: "historical", symbol: sym }, error);
           }
+        } else {
+          logEvent("provider.historical.skipped", { provider: "yahoo", symbol: upperSymbol, reason: "failure_score" });
         }
 
         // ── HISTORICAL PROVIDER 2: TwelveData ────────────────────────
-        console.log(`[HISTORICAL] Yahoo exhausted for ${upperSymbol}. Trying TwelveData.`);
-        const tdCandles = await twelveDataHistoricalFetch(upperSymbol, Math.min(days, 365));
-        if (tdCandles && tdCandles.length >= 20) return tdCandles;
+        if (!shouldSkipProvider(providerState("twelvedata"))) {
+          console.log(`[HISTORICAL] Yahoo exhausted for ${upperSymbol}. Trying TwelveData.`);
+          const tdCandles = await queueHistoricalRequest("twelvedata", () =>
+            twelveDataHistoricalFetch(upperSymbol, Math.min(days, 365))
+          );
+          if (tdCandles && tdCandles.length >= 20) {
+            providerFailureScore.set("twelvedata", Math.max(0, (providerFailureScore.get("twelvedata") || 0) - 1));
+            return tdCandles;
+          }
+          providerFailureScore.set("twelvedata", (providerFailureScore.get("twelvedata") || 0) + 1);
+          await delayHistoricalRetry(applyExponentialBackoff(300, providerFailureScore.get("twelvedata") || 1));
+        }
 
         // ── HISTORICAL PROVIDER 3: Alpha Vantage ─────────────────────
-        console.log(`[HISTORICAL] TwelveData exhausted for ${upperSymbol}. Trying Alpha Vantage.`);
-        const alphaCandles = await alphaHistoricalFetch(upperSymbol, Math.min(days, 365));
-        if (alphaCandles && alphaCandles.length >= 20) return alphaCandles;
+        if (!shouldSkipProvider(providerState("alpha_vantage"))) {
+          console.log(`[HISTORICAL] TwelveData exhausted for ${upperSymbol}. Trying Alpha Vantage.`);
+          const alphaCandles = await queueHistoricalRequest("alpha_vantage", () =>
+            alphaHistoricalFetch(upperSymbol, Math.min(days, 365))
+          );
+          if (alphaCandles && alphaCandles.length >= 20) {
+            providerFailureScore.set("alpha_vantage", Math.max(0, (providerFailureScore.get("alpha_vantage") || 0) - 1));
+            return alphaCandles;
+          }
+          providerFailureScore.set("alpha_vantage", (providerFailureScore.get("alpha_vantage") || 0) + 1);
+          await delayHistoricalRetry(applyExponentialBackoff(350, providerFailureScore.get("alpha_vantage") || 1));
+        }
 
         // ── All providers exhausted ───────────────────────────────────
+        logHistoricalLimiterTelemetry();
         logEvent("provider.historical.all_exhausted", { symbol: upperSymbol, days });
         console.warn(`[HISTORICAL] All providers exhausted for ${upperSymbol}. Returning empty.`);
         return [];
@@ -1483,6 +1535,7 @@ export async function getHistoricalCandles(symbol, options = {}) {
 
     if (Array.isArray(candles) && candles.length > 0) {
       await setHybridCache(cacheKey, CACHE_GROUP_HISTORICAL, candles, "HIGH");
+      storeHistoricalData(upperSymbol, days, interval, candles);
     } else {
       // Emit telemetry on cache write skip (empty result)
       logEvent("cache.write.skipped", { cacheKey, reason: "empty_historical_result" });

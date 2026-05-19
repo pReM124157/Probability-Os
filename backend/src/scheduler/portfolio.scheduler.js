@@ -3,6 +3,7 @@ import { runAutoMonitor } from "../agents/autoMonitor.agent.js";
 import { runPortfolioDefenseCycle } from "../agents/portfolioDefense.agent.js";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+import { preventSchedulerOverlap, staggerSchedulerExecution } from "../services/schedulerStagger.service.js";
 
 export function startPortfolioScheduler() {
   console.log("⏰ Portfolio Scheduler Started");
@@ -22,7 +23,10 @@ export function startPortfolioScheduler() {
   });
 
   cron.schedule("*/10 * * * *", async () => {
+    if (!preventSchedulerOverlap("portfolio_surveillance", 2 * 60 * 1000)) return;
+    await staggerSchedulerExecution("portfolio_surveillance", async () => {});
     await runWithSchedulerLease("scheduler:portfolio_surveillance_10m", async ({ traceId }) => {
+      console.log("⏰ Surveillance Scheduler Triggered");
       logEvent("scheduler.portfolio_surveillance.started", { traceId });
       await runPortfolioDefenseCycle();
       logEvent("scheduler.portfolio_surveillance.completed", { traceId });

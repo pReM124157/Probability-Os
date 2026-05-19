@@ -31,6 +31,11 @@ export function calculateInstitutionalDistributionProbability({
   return Number(score.toFixed(4));
 }
 
+export function detectInstitutionalDistribution(input = {}) {
+  const probability = calculateInstitutionalDistributionProbability(input);
+  return { detected: probability >= 0.6, probability };
+}
+
 export function calculateMomentumDecayCurve({ momentumSeries = [] } = {}) {
   if (momentumSeries.length < 3) return 0;
   const x0 = Number(momentumSeries[momentumSeries.length - 3] || 0);
@@ -38,6 +43,27 @@ export function calculateMomentumDecayCurve({ momentumSeries = [] } = {}) {
   const x2 = Number(momentumSeries[momentumSeries.length - 1] || 0);
   const decay = (x0 - x1) + (x1 - x2);
   return Number(decay.toFixed(4));
+}
+
+export function detectMomentumExhaustion({ momentumSeries = [], trendMaturityScore = 0, volatilityExpansion = 0 } = {}) {
+  const decay = calculateMomentumDecayCurve({ momentumSeries });
+  const score = calculateTrendExhaustionProbability({ trendMaturityScore, momentumDecay: decay, volatilityExpansion });
+  return { exhausted: score >= 0.58, score, decay };
+}
+
+export function detectLiquidityBreakdown({ liquidityStress = 0.2, spreadShock = 0.1 } = {}) {
+  const score = clamp(liquidityStress * 0.7 + spreadShock * 0.3, 0, 1);
+  return { breakdown: score >= 0.62, score: Number(score.toFixed(4)) };
+}
+
+export function detectTrendDecay({ momentumSeries = [] } = {}) {
+  const decay = calculateMomentumDecayCurve({ momentumSeries });
+  return { decaying: decay > 0.25, score: Number(clamp(decay, 0, 1).toFixed(4)) };
+}
+
+export function detectVolatilityExpansion({ currentVolatility = 0.2, baselineVolatility = 0.18 } = {}) {
+  const pct = calculateVolatilityExpansion(currentVolatility, baselineVolatility);
+  return { expanding: pct > 20, expansionPct: pct };
 }
 
 export function calculateTrendExhaustionProbability({ trendMaturityScore = 0, momentumDecay = 0, volatilityExpansion = 0 } = {}) {
@@ -68,6 +94,10 @@ export function calculateOptimalExitPath({ sellPercent = 0, liquidityRisk = 0.2 
   if (sellPercent >= 0.25) return "PARTIAL_EXIT";
   if (sellPercent >= 0.1) return "TRIM";
   return "HOLD";
+}
+
+export function calculateOptimalExitTrajectory(input = {}) {
+  return calculateOptimalExitPath(input);
 }
 
 export function detectTrendFailure(holding = {}) {
@@ -106,6 +136,14 @@ export function calculateDynamicSellAllocation(context = {}) {
   if (weakness > 0.28) return Math.max(0.1, Math.min(0.15, raw));
 
   return 0;
+}
+
+export function calculatePortfolioHeatReductionFromExit({ sellWeight = 0, positionVolatility = 0.2, positionBeta = 1 } = {}) {
+  return calculatePortfolioHeatReduction({ sellWeight, positionVolatility, positionBeta });
+}
+
+export function calculateExitUrgency({ weaknessScore = 0.2, regimeDanger = 0.2, liquidityStress = 0.2 } = {}) {
+  return Number(clamp(weaknessScore * 0.45 + regimeDanger * 0.35 + liquidityStress * 0.2, 0, 1).toFixed(4));
 }
 
 export function calculateProfitLockingAllocation(metrics = {}) {
