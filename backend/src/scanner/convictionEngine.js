@@ -102,9 +102,9 @@ export function computeConvictionScore({
     { test: () => true, score: 3.8 }
   ]);
   const volumeScore = scoreFromBands(toNumber(volumeRatio), [
-    { test: (v) => v >= 2.0, score: 9.5 },
-    { test: (v) => v >= 1.5, score: 8.4 },
-    { test: (v) => v >= 1.1, score: 6.9 },
+    { test: (v) => v >= 1.8, score: 9.5 },
+    { test: (v) => v >= 1.2, score: 8.4 },
+    { test: (v) => v >= 1.0, score: 6.9 },
     { test: (v) => v >= 0.8, score: 5.4 },
     { test: () => true, score: 3.6 }
   ]);

@@ -2,27 +2,33 @@ export async function rankingAgent(stockData) {
   try {
     const {
       ticker,
+      symbol,
       confidenceScore = 0,
       riskScore = 5,
-      financialScore = 8,
-      technicalScore = 7
+      financialScore = 80,
+      technicalScore = 70
     } = stockData;
+    const resolvedTicker = ticker || symbol || "UNKNOWN";
+    const confidence100 = Number(confidenceScore) || 0;
+    const risk100 = Math.max(0, Math.min(100, (Number(riskScore) || 0) * 10));
+    const financial100 = Number(financialScore) || 0;
+    const technical100 = Number(technicalScore) || 0;
     let rankScore =
-      (confidenceScore * 0.40) +
-      (financialScore * 0.25) +
-      (technicalScore * 0.20) +
-      ((10 - riskScore) * 0.15);
+      (confidence100 * 0.40) +
+      (financial100 * 0.25) +
+      (technical100 * 0.20) +
+      ((100 - risk100) * 0.15);
     let priority = "LOW";
-    if (rankScore >= 8) {
+    if (rankScore >= 80) {
       priority = "HIGH";
-    } else if (rankScore >= 6) {
+    } else if (rankScore >= 60) {
       priority = "MEDIUM";
     }
     return {
-      ticker,
+      ticker: resolvedTicker,
       rankScore: Number(rankScore.toFixed(1)),
       priority,
-      summary: `${ticker} ranked as ${priority} priority opportunity`
+      summary: `${resolvedTicker} ranked as ${priority} priority opportunity`
     };
   } catch (error) {
     console.error("Ranking Agent Error:", error.message);

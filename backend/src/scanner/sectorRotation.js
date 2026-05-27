@@ -11,13 +11,15 @@ function sectorBiasToRank(bias) {
 
 export async function buildSectorRotation({ rankedStocks = [], marketSectorSnapshot = {} }) {
   const sectorMomentum = await getSectorMomentum();
-  if (sectorMomentum?.unavailable) return [];
+  if (!sectorMomentum || sectorMomentum?.unavailable) return [];
   const sectorMap = new Map();
 
-  Object.entries(sectorMomentum).forEach(([sector, data]) => {
+  const safeSectorMomentum = (sectorMomentum && typeof sectorMomentum === "object") ? sectorMomentum : {};
+  Object.entries(safeSectorMomentum).forEach(([sector, data]) => {
+    if (!data) return;
     sectorMap.set(sector, {
       sector,
-      bias: data.bias,
+      bias: data.bias || "NEUTRAL",
       strength: Number(data.strength || 0),
       marketChange: 0,
       leaders: [],
@@ -49,7 +51,8 @@ export async function buildSectorRotation({ rankedStocks = [], marketSectorSnaps
     sectorMap.set("IT", it);
   }
 
-  rankedStocks.forEach((stock) => {
+  const safeRanked = Array.isArray(rankedStocks) ? rankedStocks : [];
+  safeRanked.forEach((stock) => {
     const sector = normalizeSector(stock.sector);
     const existing = sectorMap.get(sector) || {
       sector,

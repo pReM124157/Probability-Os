@@ -111,6 +111,26 @@ function calcWindowFilter(rows, window) {
   return rows.filter((r) => new Date(r.recommendation_created_at).getTime() >= cutoff);
 }
 
+function isProductionRecommendationRow(row) {
+  const audit = row?.recommendation_audit || {};
+  const blob = JSON.stringify({
+    recommendation_id: row?.recommendation_id,
+    symbol: row?.symbol,
+    audit_symbol: audit?.symbol,
+    generated_by: audit?.generated_by,
+    provider_metadata: audit?.provider_metadata
+  }).toUpperCase();
+
+  if (blob.includes("TEST")) return false;
+  if (blob.includes("TRIAL")) return false;
+  if (blob.includes("MANUAL.TEST")) return false;
+  if (blob.includes("MANUAL_TEST")) return false;
+  if (blob.includes("COPILOT.DELIVERY")) return false;
+  if (blob.includes("PRODUCTION.DELIVERY.VERIFICATION")) return false;
+
+  return true;
+}
+
 async function fetchJoinedOutcomeRows() {
   const { data: outcomes, error } = await supabase
     .from("recommendation_outcomes")
@@ -122,7 +142,7 @@ async function fetchJoinedOutcomeRows() {
   const ids = rows.map((r) => r.recommendation_id);
   const { data: audits, error: auditError } = await supabase
     .from("recommendation_audit")
-    .select("recommendation_id,confidence,recommendation_type,action,sector,market_regime")
+    .select("recommendation_id,symbol,confidence,recommendation_type,action,sector,market_regime,generated_by,provider_metadata,telegram_delivery_status")
     .in("recommendation_id", ids);
   if (auditError) throw new StatisticalValidationError("Failed to fetch recommendation audit rows", "FETCH_FAILED", { auditError });
 
@@ -297,7 +317,7 @@ async function persistGrades(rows) {
 export async function runStatisticalValidation({ calculationWindow = "ALL_TIME" } = {}) {
   const startedAt = Date.now();
   try {
-    const rows = await fetchJoinedOutcomeRows();
+    const rows = (await fetchJoinedOutcomeRows()).filter(isProductionRecommendationRow);
     const scopedRows = calcWindowFilter(rows, calculationWindow);
     if (scopedRows.length < MINIMUM_REQUIRED_DATASET_SIZE) {
       const response = {
@@ -320,46 +340,67 @@ export async function runStatisticalValidation({ calculationWindow = "ALL_TIME" 
     const calibrationPayload = computeCalibration(rows);
     const strategyPayload = computeStrategyPerformance(rows);
 
-    if (calibrationPayload.length === 0) {
-      throw new StatisticalValidationError("No confidence buckets with sufficient samples", "INSUFFICIENT_CALIBRATION_DATA");
-    }
-    if (strategyPayload.length === 0) {
-      throw new StatisticalValidationError("No strategy groups with sufficient samples", "INSUFFICIENT_STRATEGY_DATA");
-    }
+    const persistJobs = [
+      supabase.from("recommendation_statistics").insert([statsPayload])
+    ];
 
-    const [{ error: statsError }, { error: calError }, { error: stratError }] = await Promise.all([
-      supabase.from("recommendation_statistics").insert([statsPayload]),
-      supabase.from("confidence_calibration").insert(calibrationPayload),
-      supabase.from("strategy_performance").insert(strategyPayload)
-    ]);
-
-    if (statsError || calError || stratError) {
-      throw new StatisticalValidationError("Failed to persist statistical outputs", "PERSISTENCE_FAILED", {
-        statsError,
-        calError,
-        stratError
+    if (calibrationPayload.length > 0) {
+      persistJobs.push(supabase.from("confidence_calibration").insert(calibrationPayload));
+    } else {
+      logEvent("statistics.calibration.insufficient_data", {
+        calculation_window: calculationWindow,
+        reason: "NO_CONFIDENCE_BUCKETS_AFTER_FILTERING",
+        source_recommendation_count: statsPayload.source_recommendation_count
       });
     }
 
-    const calibrationDrift = mean(calibrationPayload.map((r) => Number(r.calibration_error)));
-    logEvent("statistics.calibration.updated", {
-      total_recommendations: statsPayload.total_recommendations,
-      calculation_window: calculationWindow,
-      win_rate: statsPayload.win_rate,
-      expectancy: statsPayload.expectancy,
-      sharpe_ratio: statsPayload.sharpe_ratio,
-      calibration_drift: calibrationDrift,
-      processing_latency_ms: Date.now() - startedAt
-    });
-    logEvent("statistics.strategy.updated", {
-      total_recommendations: statsPayload.total_recommendations,
-      calculation_window: calculationWindow,
-      win_rate: statsPayload.win_rate,
-      expectancy: statsPayload.expectancy,
-      sharpe_ratio: statsPayload.sharpe_ratio,
-      calibration_drift: calibrationDrift,
-      processing_latency_ms: Date.now() - startedAt
-    });
+    if (strategyPayload.length > 0) {
+      persistJobs.push(supabase.from("strategy_performance").insert(strategyPayload));
+    } else {
+      logEvent("statistics.strategy.insufficient_data", {
+        calculation_window: calculationWindow,
+        reason: "NO_STRATEGY_GROUPS_AFTER_FILTERING",
+        source_recommendation_count: statsPayload.source_recommendation_count
+      });
+    }
+
+    const persistResults = await Promise.all(persistJobs);
+    const persistError = persistResults.find((r) => r?.error)?.error;
+
+    if (persistError) {
+      throw new StatisticalValidationError("Failed to persist statistical outputs", "PERSISTENCE_FAILED", {
+        persistError
+      });
+    }
+
+    const calibrationDrift = calibrationPayload.length > 0
+      ? mean(calibrationPayload.map((r) => Number(r.calibration_error)))
+      : null;
+    if (calibrationPayload.length > 0) {
+      logEvent("statistics.calibration.updated", {
+        total_recommendations: statsPayload.total_recommendations,
+        calculation_window: calculationWindow,
+        win_rate: statsPayload.win_rate,
+        expectancy: statsPayload.expectancy,
+        sharpe_ratio: statsPayload.sharpe_ratio,
+        calibration_drift: calibrationDrift,
+        calibration_buckets: calibrationPayload.length,
+        processing_latency_ms: Date.now() - startedAt
+      });
+    }
+
+    if (strategyPayload.length > 0) {
+      logEvent("statistics.strategy.updated", {
+        total_recommendations: statsPayload.total_recommendations,
+        calculation_window: calculationWindow,
+        win_rate: statsPayload.win_rate,
+        expectancy: statsPayload.expectancy,
+        sharpe_ratio: statsPayload.sharpe_ratio,
+        calibration_drift: calibrationDrift,
+        strategy_groups: strategyPayload.length,
+        processing_latency_ms: Date.now() - startedAt
+      });
+    }
     logEvent("statistics.validation.completed", {
       total_recommendations: statsPayload.total_recommendations,
       calculation_window: calculationWindow,

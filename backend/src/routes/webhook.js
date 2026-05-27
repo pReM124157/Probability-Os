@@ -23,11 +23,155 @@ router.get("/razorpay", (req, res) => {
   res.send("✅ Razorpay Webhook endpoint is active and reachable.");
 });
 
-async function notifyTelegram(chatId, message, options = {}) {
+function formatDateLabel(value) {
+  const ts = value ? new Date(value) : null;
+  if (!ts || Number.isNaN(ts.getTime())) return null;
+  return ts.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+
+function getDeliveryCheckpoint(eventRow = {}) {
+  const delivery = eventRow?.payload_preview?._delivery || {};
+  return {
+    status: String(delivery.status || "PENDING").toUpperCase(),
+    attempts: Number(delivery.attempts || 0),
+    messageId: delivery.message_id ? String(delivery.message_id) : null,
+    sentAt: delivery.sent_at || null,
+    error: delivery.error || null,
+    lastAttemptAt: delivery.last_attempt_at || null
+  };
+}
+
+function withDeliveryCheckpoint(payloadPreview, patch) {
+  return {
+    ...(payloadPreview || {}),
+    _delivery: {
+      ...((payloadPreview || {})._delivery || {}),
+      ...patch
+    }
+  };
+}
+
+function buildSubscriptionLifecycleMessage(kind, context = {}) {
+  const renewalDate = formatDateLabel(context.subscriptionEnd);
+
+  if (kind === "subscription.activated") {
+    return [
+      "✅ SUBSCRIPTION ACTIVATED",
+      "Plan: Finsight Pro",
+      "Status: Active",
+      "Access Enabled:",
+      "• Live Signals",
+      "• Institutional Reports",
+      "• Trade Lifecycle Updates",
+      renewalDate ? "Renewal Date:" : null,
+      renewalDate
+    ].filter(Boolean).join("\n");
+  }
+
+  if (kind === "subscription.cancelled") {
+    return [
+      "❌ SUBSCRIPTION CANCELLED",
+      "Your premium access has been disabled.",
+      "Status: Cancelled"
+    ].join("\n");
+  }
+
+  if (kind === "invoice.payment_failed" || kind === "payment.failed") {
+    return [
+      "⚠️ SUBSCRIPTION EXPIRING",
+      "Renew to continue receiving institutional intelligence.",
+      "Status: Grace Period",
+      "We will retry the payment automatically."
+    ].join("\n");
+  }
+
+  return null;
+}
+
+async function getSubscriptionEventRecord(eventId) {
+  const { data, error } = await supabase
+    .from("subscription_events")
+    .select("event_id,event_type,subscription_id,telegram_chat_id,payload_preview,processed_at")
+    .eq("event_id", eventId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function persistSubscriptionDeliveryCheckpoint(eventId, eventRow, patch) {
+  const payloadPreview = withDeliveryCheckpoint(eventRow?.payload_preview, patch);
+  const { data, error } = await supabase
+    .from("subscription_events")
+    .update({ payload_preview: payloadPreview })
+    .eq("event_id", eventId)
+    .select();
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0 ? data[0] : { ...(eventRow || {}), payload_preview: payloadPreview };
+}
+
+async function deliverSubscriptionLifecycleMessage({ eventId, eventType, chatId, message }) {
+  if (!message || !chatId) return { status: "SKIPPED", eventId };
+
+  const eventRow = await getSubscriptionEventRecord(eventId);
+  const checkpoint = getDeliveryCheckpoint(eventRow);
+  if (checkpoint.status === "SENT") {
+    return { status: "SENT", eventId, messageId: checkpoint.messageId, skipped: true };
+  }
+
+  const nextAttempts = checkpoint.attempts + 1;
+  const claimedAt = new Date().toISOString();
+  const claimedRow = await persistSubscriptionDeliveryCheckpoint(eventId, eventRow, {
+    status: "RETRY_SCHEDULED",
+    attempts: nextAttempts,
+    last_attempt_at: claimedAt,
+    error: null
+  });
+
   try {
-    await bot.telegram.sendMessage(chatId, message, options);
+    console.log("=== STARTING TELEGRAM DELIVERY ===");
+    console.log("SUBSCRIPTION_EVENT_ID", eventId);
+    console.log("SUBSCRIPTION_EVENT_TYPE", eventType);
+    console.log("TELEGRAM_SEND_START", new Date().toISOString());
+    const response = await bot.telegram.sendMessage(chatId, message);
+    console.log("TELEGRAM_SEND_SUCCESS", new Date().toISOString());
+    console.log("=== TELEGRAM DELIVERY SUCCESS ===");
+    console.log("✅ Subscription alert sent to Telegram", {
+      chatId,
+      messageId: response?.message_id || null,
+      eventId,
+      eventType
+    });
+
+    await persistSubscriptionDeliveryCheckpoint(eventId, claimedRow, {
+      status: "SENT",
+      attempts: nextAttempts,
+      message_id: response?.message_id ? String(response.message_id) : null,
+      sent_at: new Date().toISOString(),
+      error: null
+    });
+
+    logEvent("subscription.delivery.sent", {
+      eventId,
+      eventType,
+      chatId,
+      attempts: nextAttempts,
+      messageId: response?.message_id || null
+    });
+
+    return { status: "SENT", eventId, messageId: response?.message_id || null };
   } catch (err) {
-    console.error("[WEBHOOK NOTIFY FAIL]", { chatId, message: err?.message });
+    await persistSubscriptionDeliveryCheckpoint(eventId, claimedRow, {
+      status: "FAILED",
+      attempts: nextAttempts,
+      error: String(err?.message || "UNKNOWN_DELIVERY_ERROR").slice(0, 500)
+    });
+    console.error("[WEBHOOK NOTIFY FAIL]", { chatId, eventId, eventType, message: err?.message });
+    throw err;
   }
 }
 
@@ -89,10 +233,16 @@ async function markEventProcessed(eventId, eventType, subscriptionId, chatId, pa
       chatId: chatId || null
     });
     console.log(`[WEBHOOK IDEMPOTENCY] Skipping duplicate event ${eventId}`);
-    return false;
+    return {
+      shouldProcessEvent: false,
+      eventRow: await getSubscriptionEventRecord(eventId)
+    };
   }
   if (error) throw error;
-  return true;
+  return {
+    shouldProcessEvent: true,
+    eventRow: await getSubscriptionEventRecord(eventId)
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,27 +259,33 @@ async function handleSubscriptionActivated(payload, eventId) {
   const chatId = await getChatIdSafe(sub);
   if (!chatId) return console.log(`[WEBHOOK MISSING CHAT] Activated: ${sub?.id}`);
 
-  if (!(await markEventProcessed(eventId, "subscription.activated", sub?.id, chatId, payload))) return;
+  const eventState = await markEventProcessed(eventId, "subscription.activated", sub?.id, chatId, payload);
 
   const subscriptionEnd = new Date(Date.now() + THIRTY_DAYS_MS).toISOString();
 
-  // Must use upsert, not update, so we guarantee creation even if /subscribe row was lost
-  const { error } = await supabase.from("subscribers").upsert(
-    {
-      telegram_chat_id: chatId,
-      razorpay_subscription_id: sub.id,
-      is_pro: true,
-      status: "active",
-      plan: "PRO",
-      subscription_started_at: new Date().toISOString(),
-      subscription_end: subscriptionEnd,
-      expires_at: subscriptionEnd
-    },
-    { onConflict: "telegram_chat_id" }
-  );
-  if (error) throw error;
+  if (eventState.shouldProcessEvent) {
+    const { error } = await supabase.from("subscribers").upsert(
+      {
+        telegram_chat_id: chatId,
+        razorpay_subscription_id: sub.id,
+        is_pro: true,
+        status: "active",
+        plan: "PRO",
+        subscription_started_at: new Date().toISOString(),
+        subscription_end: subscriptionEnd,
+        expires_at: subscriptionEnd
+      },
+      { onConflict: "telegram_chat_id" }
+    );
+    if (error) throw error;
+  }
 
-  await notifyTelegram(chatId, "🎉 Subscription Activated! You are now on FinSight Pro.");
+  await deliverSubscriptionLifecycleMessage({
+    eventId,
+    eventType: "subscription.activated",
+    chatId,
+    message: buildSubscriptionLifecycleMessage("subscription.activated", { subscriptionEnd })
+  });
 }
 
 /**
@@ -145,7 +301,8 @@ async function handlePaymentCaptured(payload, eventId) {
 
   if (!chatId || !paymentId) return;
 
-  if (!(await markEventProcessed(eventId, "payment.captured", subscriptionId, chatId, payload))) return;
+  const eventState = await markEventProcessed(eventId, "payment.captured", subscriptionId, chatId, payload);
+  if (!eventState.shouldProcessEvent) return;
 
   const { error } = await supabase.from("payments").insert({
     id: paymentId,
@@ -172,7 +329,8 @@ async function handleRenewal(payload, eventId, eventType) {
 
   if (!chatId) return console.log(`[WEBHOOK MISSING CHAT] Renewal: ${subId}`);
 
-  if (!(await markEventProcessed(eventId, eventType, subId, chatId, payload))) return;
+  const eventState = await markEventProcessed(eventId, eventType, subId, chatId, payload);
+  if (!eventState.shouldProcessEvent) return;
 
   const subscriptionEnd = new Date(Date.now() + THIRTY_DAYS_MS).toISOString();
 
@@ -204,21 +362,28 @@ async function handleSubscriptionCancelled(payload, eventId) {
   const chatId = await getChatIdSafe(sub);
 
   if (!chatId) return;
-  if (!(await markEventProcessed(eventId, "subscription.cancelled", sub?.id, chatId, payload))) return;
+  const eventState = await markEventProcessed(eventId, "subscription.cancelled", sub?.id, chatId, payload);
 
-  const { error } = await supabase.from("subscribers").upsert(
-    {
-      telegram_chat_id: chatId,
-      is_pro: false,
-      status: "cancelled",
-      plan: "FREE"
-      // we do NOT nullify razorpay_subscription_id so history is kept
-    },
-    { onConflict: "telegram_chat_id" }
-  );
-  if (error) throw error;
+  if (eventState.shouldProcessEvent) {
+    const { error } = await supabase.from("subscribers").upsert(
+      {
+        telegram_chat_id: chatId,
+        is_pro: false,
+        status: "cancelled",
+        plan: "FREE"
+        // we do NOT nullify razorpay_subscription_id so history is kept
+      },
+      { onConflict: "telegram_chat_id" }
+    );
+    if (error) throw error;
+  }
 
-  await notifyTelegram(chatId, "❌ Your FinSight Pro subscription has been cancelled.");
+  await deliverSubscriptionLifecycleMessage({
+    eventId,
+    eventType: "subscription.cancelled",
+    chatId,
+    message: buildSubscriptionLifecycleMessage("subscription.cancelled")
+  });
 }
 
 /**
@@ -231,27 +396,30 @@ async function handlePaymentFailed(payload, eventId) {
   const chatId = await getChatIdSafe(invoice, subId);
 
   if (!chatId) return;
-  if (!(await markEventProcessed(eventId, "invoice.payment_failed", subId, chatId, payload))) return;
+  const eventState = await markEventProcessed(eventId, "invoice.payment_failed", subId, chatId, payload);
 
   const graceExpiry = new Date(Date.now() + GRACE_PERIOD_MS).toISOString();
-  const { error } = await supabase.from("subscribers").upsert(
-    {
-      telegram_chat_id: chatId,
-      status: "grace",
-      is_pro: true,
-      plan: "PRO",
-      expires_at: graceExpiry,
-      subscription_end: graceExpiry
-    },
-    { onConflict: "telegram_chat_id" }
-  );
-  if (error) throw error;
+  if (eventState.shouldProcessEvent) {
+    const { error } = await supabase.from("subscribers").upsert(
+      {
+        telegram_chat_id: chatId,
+        status: "grace",
+        is_pro: true,
+        plan: "PRO",
+        expires_at: graceExpiry,
+        subscription_end: graceExpiry
+      },
+      { onConflict: "telegram_chat_id" }
+    );
+    if (error) throw error;
+  }
 
-  await notifyTelegram(
+  await deliverSubscriptionLifecycleMessage({
+    eventId,
+    eventType: "invoice.payment_failed",
     chatId,
-    `⚠️ *Payment failed*\n\nWe'll retry automatically.\nYou still have access for 48 hours.\nPlease update your payment method to avoid interruption.`,
-    { parse_mode: "Markdown" }
-  );
+    message: buildSubscriptionLifecycleMessage("invoice.payment_failed", { subscriptionEnd: graceExpiry })
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -15,17 +15,17 @@ describe("integration: fresh migration replay safety", () => {
       .map((file) => ({ file, sql: readMigration(file) }))
       .filter(({ sql }) => /create table if not exists public\.recommendation_audit/i.test(sql));
     expect(createDefs.length).toBe(1);
-    expect(createDefs[0].file).toBe("20260518_recommendation_audit_foundation.sql");
+    expect(createDefs[0].file).toBe("202605180001_recommendation_audit_foundation.sql");
     expect(createDefs[0].sql).toMatch(/recommendation_id text unique not null/i);
   });
 
   it("keeps required infrastructure tables and indexes declared", () => {
-    const backtesting = readMigration("20260519_backtesting_engine.sql");
-    const adaptive = readMigration("20260519_adaptive_intelligence_engine.sql");
-    const analytics = readMigration("20260519_public_analytics_layer.sql");
-    const surveillance = readMigration("20260519_portfolio_surveillance_engine.sql");
-    const adaptiveV2 = readMigration("20260519_adaptive_portfolio_intelligence_v2.sql");
-    const realQuant = readMigration("20260519_real_quantitative_pipeline.sql");
+    const backtesting = readMigration("202605190003_backtesting_engine.sql");
+    const adaptive = readMigration("202605190001_adaptive_intelligence_engine.sql");
+    const analytics = readMigration("202605190005_public_analytics_layer.sql");
+    const surveillance = readMigration("202605190004_portfolio_surveillance_engine.sql");
+    const adaptiveV2 = readMigration("202605190002_adaptive_portfolio_intelligence_v2.sql");
+    const realQuant = readMigration("202605190006_real_quantitative_pipeline.sql");
 
     expect(backtesting).toMatch(/create table if not exists public\.backtest_runs/i);
     expect(backtesting).toMatch(/create index if not exists backtest_runs_created_at_desc_idx/i);

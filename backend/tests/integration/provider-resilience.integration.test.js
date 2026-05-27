@@ -1,40 +1,44 @@
-/**
- * INTEGRATION TEST — Provider Resilience & Fallback Cascade
- * Validates the core requirements for the hardened institutional multi-provider stack.
- */
+import { vi } from "vitest";
+vi.unmock("../../src/services/marketData.service.js");
+vi.unmock("../../src/services/telemetry.service.js");
+vi.unmock("../../src/services/supabase.service.js");
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getLiveMarketData, getCompanyOverview, dataMetrics, getHistoricalCandles } from "../../src/services/marketData.service.js";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { getLiveMarketData, getCompanyOverview, dataMetrics, getHistoricalCandles, yahooFinance, resetYahooCircuitBreakerForTest } from "../../src/services/marketData.service.js";
 import { DATA_AVAILABILITY_STATES } from "../../src/services/dataAvailability.service.js";
 import { invalidateCacheGroup } from "../../src/services/sharedCache.service.js";
 import { recoverProviderHealth, resetProviderHealthForTest } from "../../src/services/providerHealth.service.js";
 import supabase from "../../src/services/supabase.service.js";
 
-const mockYahooInstance = vi.hoisted(() => ({
-  quote: vi.fn(),
-  quoteSummary: vi.fn(),
-  historical: vi.fn(),
-}));
-
-// Mock external provider APIs to simulate failures
-vi.mock("yahoo-finance2", () => {
-  return {
-    default: vi.fn(() => mockYahooInstance)
-  };
-});
+const mockYahooInstance = {
+  quote: vi.spyOn(yahooFinance, "quote"),
+  quoteSummary: vi.spyOn(yahooFinance, "quoteSummary"),
+  historical: vi.spyOn(yahooFinance, "historical"),
+};
 
 // Since node fetch is global, we can intercept fetch calls to mock fallback providers
 const originalFetch = global.fetch;
 
 describe("Institutional Provider Resilience (Failover & Graceful Degradation)", () => {
+  beforeAll(async () => {
+    // Hard reset all provider health before this file starts
+    resetProviderHealthForTest("yahoo");
+    resetProviderHealthForTest("alpha_vantage");
+    resetProviderHealthForTest("twelvedata");
+    resetProviderHealthForTest("finnhub");
+    resetYahooCircuitBreakerForTest();
+  });
+
   beforeEach(async () => {
     mockYahooInstance.quote.mockReset();
     mockYahooInstance.quoteSummary.mockReset();
     mockYahooInstance.historical.mockReset();
     // Reset caches and provider health states before each run
-    await invalidateCacheGroup("MARKET_LIVE");
-    await invalidateCacheGroup("MARKET_OVERVIEW_VERSIONED");
-    await invalidateCacheGroup("MARKET_HISTORICAL");
+    await invalidateCacheGroup("live_market_data");
+    await invalidateCacheGroup("historical_candles");
+    await invalidateCacheGroup("market_snapshots");
+    await supabase.from("shared_cache").delete().neq("cache_key", "_nonexistent_");
+
     // Force clear provider health in DB
     await supabase.from("provider_health").update({ cooldown_until: null, consecutive_failures: 0 }).in("provider", ["yahoo", "alpha_vantage", "twelvedata", "finnhub"]);
     
@@ -48,6 +52,7 @@ describe("Institutional Provider Resilience (Failover & Graceful Degradation)", 
     resetProviderHealthForTest("alpha_vantage");
     resetProviderHealthForTest("twelvedata");
     resetProviderHealthForTest("finnhub");
+    resetYahooCircuitBreakerForTest();
     
     // Reset metrics
     dataMetrics.yahooFail = 0;

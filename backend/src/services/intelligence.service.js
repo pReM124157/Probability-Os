@@ -39,15 +39,32 @@ const SECTOR_CACHE_KEY = "SECTOR_MOMENTUM_V2";
 const SECTOR_CACHE_GROUP = "sector_momentum";
 const SECTOR_TTL_SECONDS = 4 * 60 * 60;
 const SECTOR_CONSTITUENTS = {
-  IT: ["TCS", "INFY", "HCLTECH", "WIPRO", "TECHM"],
-  BANK: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"],
-  AUTO: ["MARUTI", "TATAMOTORS", "M&M", "BAJAJ-AUTO", "EICHERMOT"],
-  FMCG: ["HINDUNILVR", "ITC", "NESTLEIND", "BRITANNIA", "TATACONSUM"],
-  PHARMA: ["SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "LUPIN"],
-  ENERGY: ["RELIANCE", "ONGC", "BPCL", "IOC", "GAIL"],
-  METAL: ["TATASTEEL", "JSWSTEEL", "HINDALCO", "VEDL", "SAIL"],
-  REALTY: ["DLF", "GODREJPROP", "OBEROIRLTY", "LODHA", "PRESTIGE"]
+  LIQUID_TOP5: ["RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY"]
 };
+
+function pLimit(concurrency) {
+  let activeCount = 0;
+  const queue = [];
+
+  const next = () => {
+    if (activeCount >= concurrency || queue.length === 0) return;
+    activeCount++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve(fn())
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        activeCount--;
+        next();
+      });
+  };
+
+  return (fn) =>
+    new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      next();
+    });
+}
 
 function toNum(v) {
   const n = Number(v);
@@ -148,8 +165,11 @@ export async function getSectorMomentum() {
     SECTOR_CACHE_GROUP,
     SECTOR_TTL_SECONDS,
     async () => {
+      const limit = pLimit(3);
       const entries = await Promise.all(
-        Object.entries(SECTOR_CONSTITUENTS).map(async ([sector, symbols]) => [sector, await computeSectorMetrics(sector, symbols)])
+        Object.entries(SECTOR_CONSTITUENTS).map(([sector, symbols]) =>
+          limit(async () => [sector, await computeSectorMetrics(sector, symbols)])
+        )
       );
       const result = {};
       entries.forEach(([sector, metrics]) => {

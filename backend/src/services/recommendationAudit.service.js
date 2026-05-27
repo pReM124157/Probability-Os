@@ -58,6 +58,7 @@ const recommendationAuditSchema = z.object({
   reasoningSnapshot: z.any().optional().nullable(),
   indicatorSnapshot: z.any().optional().nullable(),
   marketSnapshot: z.any().optional().nullable(),
+  marketRegimeSnapshot: z.any().optional().nullable(),
   providerMetadata: z.any().optional().nullable(),
   analysisVersion: z.string().optional().nullable(),
   generatedBy: z.string().optional().nullable(),
@@ -82,7 +83,14 @@ function normalizeRecommendationAuditPayload(payload = {}) {
     symbol: String(payload.symbol || "").toUpperCase().trim(),
     exchange: payload.exchange ?? null,
     recommendationType: String(payload.recommendationType || "").toUpperCase().trim(),
-    action: String(payload.action || "").toUpperCase().trim(),
+    action: (() => {
+      const raw = String(payload.action || "").toUpperCase().trim();
+      if (["BUY", "SELL", "HOLD", "AVOID"].includes(raw)) return raw;
+      if (raw.includes("BUY") || raw.includes("ACCUMULATE")) return "BUY";
+      if (raw.includes("SELL") || raw.includes("EXIT") || raw.includes("TRIM")) return "SELL";
+      if (raw.includes("AVOID") || raw.includes("WAIT") || raw.includes("BLOCK")) return "AVOID";
+      return "HOLD";
+    })(),
     confidence: safeNumber(payload.confidence, "confidence"),
     conviction: payload.conviction ?? null,
     entryPrice: safeNumber(payload.entryPrice, "entryPrice"),
@@ -101,6 +109,7 @@ function normalizeRecommendationAuditPayload(payload = {}) {
     reasoningSnapshot: boundedJson(payload.reasoningSnapshot, "reasoningSnapshot"),
     indicatorSnapshot: boundedJson(payload.indicatorSnapshot, "indicatorSnapshot"),
     marketSnapshot: boundedJson(payload.marketSnapshot, "marketSnapshot"),
+    marketRegimeSnapshot: boundedJson(payload.marketRegimeSnapshot, "marketRegimeSnapshot"),
     providerMetadata: boundedJson(payload.providerMetadata, "providerMetadata"),
     analysisVersion: payload.analysisVersion ?? "v1",
     generatedBy: payload.generatedBy ?? "master.agent",
@@ -112,6 +121,11 @@ function normalizeRecommendationAuditPayload(payload = {}) {
   if (!parsed.success) {
     throw new RecommendationAuditError("Recommendation audit validation failed", "VALIDATION_FAILED", {
       issues: parsed.error.issues
+    });
+  }
+  if (parsed.data.action === "HOLD" || parsed.data.recommendationType === "HOLD") {
+    throw new RecommendationAuditError("Rejected/HOLD signal is not auditable", "VALIDATION_FAILED", {
+      issues: [{ path: ["action"], message: "HOLD recommendations must not reach audit pipeline" }]
     });
   }
   return parsed.data;
@@ -131,14 +145,25 @@ export async function insertRecommendationAudit(payload) {
   try {
     const normalized = normalizeRecommendationAuditPayload(payload);
     const recommendationId = buildRecommendationId(normalized);
-    logEvent("recommendation.audit.replay_generated", {
-      symbol: normalized.symbol,
-      recommendation_id: recommendationId,
-      action: normalized.action,
-      confidence: normalized.confidence,
-      validation_status: "valid",
-      provider_sources: normalized.providerMetadata || {}
-    });
+
+    // Deduplication: check if same symbol + action exists today
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const { data: existing } = await supabase
+      .from("recommendation_audit")
+      .select("recommendation_id")
+      .eq("symbol", normalized.symbol)
+      .eq("action", normalized.action)
+      .gte("created_at", todayStart.toISOString())
+      .limit(1);
+    if (existing && existing.length > 0) {
+      logEvent("recommendation.audit.duplicate_skipped", {
+        symbol: normalized.symbol,
+        action: normalized.action,
+        existingId: existing[0].recommendation_id
+      });
+      return { recommendation_id: existing[0].recommendation_id, duplicate: true };
+    }
 
     const row = {
       recommendation_id: recommendationId,
@@ -164,6 +189,7 @@ export async function insertRecommendationAudit(payload) {
       reasoning_snapshot: normalized.reasoningSnapshot,
       indicator_snapshot: normalized.indicatorSnapshot,
       market_snapshot: normalized.marketSnapshot,
+      // market_regime_snapshot: normalized.marketRegimeSnapshot, // column not in schema
       provider_metadata: normalized.providerMetadata,
       analysis_version: normalized.analysisVersion,
       generated_by: normalized.generatedBy,
@@ -175,6 +201,13 @@ export async function insertRecommendationAudit(payload) {
     const insertPromise = supabase.from("recommendation_audit").insert([row]);
     const { error } = await withTimeout(insertPromise, AUDIT_INSERT_TIMEOUT_MS, "recommendation audit insert");
     if (error) {
+      console.error({
+        table: "recommendation_audit",
+        payload: row,
+        postgresError: error,
+        failingColumn: error?.details || error?.hint || null,
+        recommendationId
+      });
       throw new RecommendationAuditError("Recommendation audit insert failed", "INSERT_FAILED", { error });
     }
 
@@ -186,6 +219,14 @@ export async function insertRecommendationAudit(payload) {
       provider_sources: normalized.providerMetadata || {},
       confidence: normalized.confidence,
       action: normalized.action
+    });
+    logEvent("recommendation.audit.replay_generated", {
+      symbol: normalized.symbol,
+      recommendation_id: recommendationId,
+      action: normalized.action,
+      confidence: normalized.confidence,
+      validation_status: "valid",
+      provider_sources: normalized.providerMetadata || {}
     });
 
     await initializeOutcomeForRecommendation({

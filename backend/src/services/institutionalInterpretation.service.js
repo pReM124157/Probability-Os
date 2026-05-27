@@ -3,6 +3,9 @@
  * Converts raw metrics → weighted institutional intelligence
  * Bloomberg x institutional PM briefing grade output
  */
+import { safeArray } from "../utils/safeArray.js";
+
+export const MIN_DEPLOYABLE_CONFIDENCE = 55;
 
 // ─── CONVICTION CLASSIFIER ────────────────────────────────────────────────────
 
@@ -16,10 +19,25 @@ export function classifyInstitutionalConfidence(score) {
   return { label: "NON-DEPLOYABLE", tier: 1 };
 }
 
+function parseInstitutionalMetricNumber(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const cleaned = String(v)
+    .replace(/[%₹,$]/g, "")
+    .replace(/,/g, "")
+    .trim();
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // ─── FUNDAMENTAL QUALITY SCORE ────────────────────────────────────────────────
 
 export function computeFundamentalQualityScore({ roe, profitMargin, revenueGrowth, earningsGrowth, debtEquity, pe }) {
-  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const n = (v) => {
+    const num = parseInstitutionalMetricNumber(v);
+    if (num === null) return null;
+    return Math.max(-300, Math.min(300, num));
+  };
   const roeN = n(roe);
   const marginN = n(profitMargin);
   const revGN = n(revenueGrowth);
@@ -167,8 +185,13 @@ export function computeBalanceSheetInterpretation({ debtEquity, sector }) {
 // ─── GROWTH INTERPRETATION ────────────────────────────────────────────────────
 
 export function computeGrowthInterpretation({ revenueGrowth, earningsGrowth }) {
-  const revN = Number(revenueGrowth);
-  const epsN = Number(earningsGrowth);
+  const clamp = (v) => {
+    const num = parseInstitutionalMetricNumber(v);
+    if (num === null) return null;
+    return Math.max(-300, Math.min(300, num));
+  };
+  const revN = clamp(revenueGrowth);
+  const epsN = clamp(earningsGrowth);
   const hasRev = Number.isFinite(revN);
   const hasEps = Number.isFinite(epsN);
 
@@ -213,26 +236,75 @@ export function computeInstitutionalFactorWeights({
   roe, profitMargin, debtEquity, revenueGrowth, earningsGrowth,
   technicalTrend, technicalMomentum, volumeConfirmation,
   sectorAlignment, relativeStrength,
-  adaptiveScore, replayStatus, calibrationStatus, driftStatus
+  adaptiveScore, replayStatus, calibrationStatus, driftStatus,
+  trendLabel, momentumLabel, volumeLabel, relativeStrengthLabel, entryStrategy
 }) {
-  const n = (v, def = 0) => (Number.isFinite(Number(v)) ? Number(v) : def);
+  const parseMetricNumber = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    const cleaned = String(v)
+      .replace(/[%₹,$,]/g, "")
+      .replace(/,/g, "")
+      .trim();
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const n = (v, def = 0) => {
+    const parsed = parseMetricNumber(v);
+    return parsed === null ? def : parsed;
+  };
+  const nf = (v) => parseMetricNumber(v);
   const positive_drivers = [];
   const negative_drivers = [];
 
   // Fundamentals (max 35 pts)
-  const roeScore = Math.min(n(roe) / 30 * 12, 12);
-  const marginScore = Math.min(n(profitMargin) / 20 * 8, 8);
-  const growthScore = Math.min((n(earningsGrowth) + n(revenueGrowth)) / 40 * 10, 10);
-  const leverageScore = n(debtEquity) <= 0.5 ? 5 : n(debtEquity) <= 1.5 ? 3 : 0;
-  const fundamentalTotal = Math.max(0, roeScore + marginScore + growthScore + leverageScore);
-  if (fundamentalTotal >= 20) positive_drivers.push(`Fundamentals: Strong composite (${fundamentalTotal.toFixed(1)}/35)`);
-  else if (fundamentalTotal < 10) negative_drivers.push(`Fundamentals: Weak composite (${fundamentalTotal.toFixed(1)}/35)`);
+  const fundamentalInputs = [roe, profitMargin, debtEquity, revenueGrowth, earningsGrowth];
+  const availableFundamentalFields = fundamentalInputs.filter((v) => parseMetricNumber(v) !== null).length;
+  const fundamentalCoverage = Number(((availableFundamentalFields / fundamentalInputs.length) * 100).toFixed(0));
+  let fundamentalTotal = 0;
+  if (availableFundamentalFields < 3) {
+    negative_drivers.push("Fundamental data coverage insufficient for institutional scoring");
+  } else {
+    const roeN = nf(roe);
+    const marginN = nf(profitMargin);
+    const deN = nf(debtEquity);
+    const revN = nf(revenueGrowth);
+    const epsN = nf(earningsGrowth);
+    const roeScore = roeN === null ? 0 : Math.min((roeN / 30) * 12, 12);
+    const marginScore = marginN === null ? 0 : Math.min((marginN / 20) * 8, 8);
+    const growthInputs = [revN, epsN].filter((v) => v !== null);
+    const growthRaw = growthInputs.length ? (growthInputs.reduce((a, b) => a + b, 0) / growthInputs.length) : 0;
+    const growthScore = Math.min((growthRaw / 20) * 10, 10);
+    const leverageScore = deN === null ? 0 : (deN <= 0.5 ? 5 : deN <= 1.5 ? 3 : 0);
+    fundamentalTotal = Math.max(0, roeScore + marginScore + growthScore + leverageScore);
+    if (fundamentalTotal >= 20) positive_drivers.push(`Fundamentals: Strong composite (${fundamentalTotal.toFixed(1)}/35)`);
+    else if (fundamentalTotal < 10) negative_drivers.push(`Fundamentals: Weak composite (${fundamentalTotal.toFixed(1)}/35)`);
+  }
 
   // Technicals (max 30 pts)
   const trendScore = n(technicalTrend, 0);
   const momScore = n(technicalMomentum, 0);
   const volScore = n(volumeConfirmation, 0);
-  const technicalTotal = Math.min(trendScore + momScore + volScore, 30);
+  let technicalTotal = Math.min(trendScore + momScore + volScore, 30);
+  const neutralishRegime =
+    String(trendLabel || "").toUpperCase().includes("NEUTRAL") ||
+    String(momentumLabel || "").toUpperCase().includes("SIDEWAYS") ||
+    String(entryStrategy || "").toUpperCase().includes("WAIT");
+  const momentumWeak = String(momentumLabel || "").toUpperCase().includes("SIDEWAYS");
+  const volumeState = String(volumeLabel || "").toUpperCase();
+  const relStrengthState = String(relativeStrengthLabel || "").toUpperCase();
+  const volumeNormal = volumeState === "NORMAL";
+  const volumeWeak = volumeState.includes("LOW");
+  const relStrengthWeak = relStrengthState.includes("UNDERPERFORM");
+  if (neutralishRegime && technicalTotal > 18) {
+    technicalTotal = 18;
+    negative_drivers.push("Technical score adjusted for neutral/sideways executable regime");
+  }
+  if ((momentumWeak || volumeNormal || volumeWeak || relStrengthWeak) && technicalTotal > 22) {
+    technicalTotal = 22;
+    negative_drivers.push("Technical score capped pending stronger momentum/volume confirmation");
+  }
   if (technicalTotal >= 18) positive_drivers.push(`Technicals: Constructive regime (${technicalTotal.toFixed(1)}/30)`);
   else if (technicalTotal < 10) negative_drivers.push(`Technicals: Weak regime (${technicalTotal.toFixed(1)}/30)`);
 
@@ -260,6 +332,9 @@ export function computeInstitutionalFactorWeights({
       execution: parseFloat(executionTotal.toFixed(1)),
       intelligence: parseFloat(intelTotal.toFixed(1)),
       total: parseFloat(total.toFixed(1))
+    },
+    data_coverage: {
+      fundamentals: fundamentalCoverage
     },
     positive_drivers,
     negative_drivers,
@@ -290,7 +365,7 @@ export function buildInstitutionalFundamentalNarrative({ rawMetrics, adaptiveSco
       `Current ${conviction.label} verdict is driven by ${isBearish ? "weak technical regime" : "insufficient system confidence"} — not deterioration in company quality.`
     ].join(" ");
   } else if (quality.score >= 70 && !isNonDeployable) {
-    institutional_conclusion = `Strong fundamental foundation supports deployment. Conviction class: ${conviction.label}.`;
+    institutional_conclusion = `Strong fundamental foundation supports watchlist eligibility, but deployment remains governed by execution, reliability, and final conviction gates. Conviction class: ${conviction.label}.`;
   } else if (quality.score < 50) {
     institutional_conclusion = `Fundamental quality is below institutional threshold. Technical and adaptive factors cannot compensate for weak business quality.`;
   } else {
@@ -316,8 +391,8 @@ export function buildInstitutionalFundamentalNarrative({ rawMetrics, adaptiveSco
 
 export function buildEvidenceConstraintSummary({ replayStatus, calibrationStatus, driftStatus, benchmarkStatus }) {
   const constraints = [];
-  if (replayStatus !== "AVAILABLE") constraints.push("limited replay depth");
-  if (calibrationStatus !== "AVAILABLE") constraints.push("incomplete calibration data");
+  if (replayStatus !== "AVAILABLE") constraints.push("historical validation depth is still expanding");
+  if (calibrationStatus !== "AVAILABLE") constraints.push("execution confidence remains under observation");
   if (driftStatus !== "AVAILABLE") constraints.push("drift monitoring not yet active");
   if (benchmarkStatus !== "AVAILABLE") constraints.push("incomplete benchmark context for the current regime window");
 
@@ -333,20 +408,20 @@ export function buildEvidenceConstraintSummary({ replayStatus, calibrationStatus
 export function buildGovernanceExplanation({ replayStatus, adaptiveScore, isLive, tradabilityHold, eventRisk, calibrationStatus }) {
   const reasons = [];
 
-  if (replayStatus !== "AVAILABLE") reasons.push("replay reliability insufficient — historical win-rate data below institutional minimum");
-  if (!isLive) reasons.push("post-open liquidity not confirmed — market is closed or price is non-executable");
+  if (replayStatus !== "AVAILABLE") reasons.push("historical validation depth is still expanding");
+  if (!isLive) reasons.push("live execution not confirmed — live feed delayed, stale, or price non-executable");
   const score = Number(adaptiveScore);
-  if (Number.isFinite(score) && score < 55) reasons.push(`adaptive confidence ${Math.round(score)}/100 below institutional deployment threshold (55)`);
+  if (Number.isFinite(score) && score < MIN_DEPLOYABLE_CONFIDENCE) reasons.push(`final conviction ${Math.round(score)}/100 below institutional deployment threshold (${MIN_DEPLOYABLE_CONFIDENCE})`);
   if (tradabilityHold) reasons.push("technical tradability conditions not satisfied — trend, momentum, and volume unconfirmed");
   if (eventRisk === "HIGH" || eventRisk === "CRITICAL") reasons.push(`active ${eventRisk.toLowerCase()} event risk override in effect`);
-  if (calibrationStatus !== "AVAILABLE") reasons.push("confidence calibration quality is insufficient for capital deployment");
+  if (calibrationStatus !== "AVAILABLE") reasons.push("execution confidence remains under observation");
 
   if (!reasons.length) return null;
 
   return {
     blocked: true,
     reasons,
-    formatted: `Trade deployment blocked because:\n${reasons.map((r) => `• ${r}`).join("\n")}`
+    formatted: `Trade deployment blocked because:\n${safeArray(reasons).map((r) => `• ${r}`).join("\n")}`
   };
 }
 
@@ -356,11 +431,11 @@ export function buildDecisionTrace({ replayStatus, adaptiveScore, technicalTrend
   const trace = [];
   const score = Number(adaptiveScore);
 
-  if (replayStatus !== "AVAILABLE") trace.push("Replay reliability below institutional threshold");
-  if (Number.isFinite(score) && score < 55) trace.push(`Adaptive confidence ${Math.round(score)}/100 below deployment minimum (55)`);
-  if (!isLive) trace.push("Non-executable market state — live price not confirmed");
+  if (replayStatus !== "AVAILABLE") trace.push("Historical validation depth is still expanding");
+  if (Number.isFinite(score) && score < MIN_DEPLOYABLE_CONFIDENCE) trace.push(`Final conviction ${Math.round(score)}/100 below deployment minimum (${MIN_DEPLOYABLE_CONFIDENCE})`);
+  if (!isLive) trace.push("Live execution not confirmed — verified live price/liquidity unavailable");
   if (tradabilityHold) trace.push("Technical trend bearish or unconfirmed");
-  if (calibrationStatus !== "AVAILABLE") trace.push("Statistical calibration insufficient");
+  if (calibrationStatus !== "AVAILABLE") trace.push("Execution confidence remains under observation");
   if (fundamentalScore >= 70) trace.push(`Fundamental quality remains strong (${Math.round(fundamentalScore)}/100)`);
   else if (fundamentalScore < 50) trace.push(`Fundamental quality below institutional threshold (${Math.round(fundamentalScore)}/100)`);
 

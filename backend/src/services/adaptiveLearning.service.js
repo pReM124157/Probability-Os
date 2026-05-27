@@ -79,8 +79,10 @@ export function adaptPositionSizing({ baseSize = 1, reliability = 0.6, degradati
   return Number(clamp(score, 0.2, 1.5).toFixed(6));
 }
 
+let _adaptiveSchemaMissingColumns = new Set();
+
 export async function storeDecisionOutcome(outcome = {}) {
-  const row = {
+  const baseRow = {
     strategy_type: outcome.strategyType || "DEFENSIVE_EXIT",
     regime: outcome.regime || "UNKNOWN",
     confidence_score: Number(outcome.confidenceScore || 0),
@@ -90,12 +92,33 @@ export async function storeDecisionOutcome(outcome = {}) {
     exit_quality: Number(outcome.exitQuality || 0),
     unrealized_profit_captured: Number(outcome.unrealizedProfitCaptured || 0),
     downside_avoided: Number(outcome.downsideAvoided || 0),
-    trend_state: outcome.trendState || "UNKNOWN",
     sector: outcome.sector || "UNKNOWN",
     volatility_regime: outcome.volatilityRegime || "UNKNOWN"
   };
+
+  // Conditionally include trend_state only if column is known to exist
+  const row = _adaptiveSchemaMissingColumns.has("trend_state")
+    ? baseRow
+    : { ...baseRow, trend_state: outcome.trendState || "UNKNOWN" };
+
   const { error } = await supabase.from("adaptive_learning_memory").insert(row);
-  if (error) console.warn("[ADAPTIVE] storeDecisionOutcome failed:", error.message);
+
+  if (error) {
+    // Detect missing column schema errors and retry without that column
+    const msg = String(error.message || "").toLowerCase();
+    if (msg.includes("trend_state") && msg.includes("column")) {
+      if (!_adaptiveSchemaMissingColumns.has("trend_state")) {
+        console.warn("[ADAPTIVE] trend_state column missing — applying schema fallback. Run migration to add it.");
+        _adaptiveSchemaMissingColumns.add("trend_state");
+      }
+      // Retry without the missing column
+      const { error: retryErr } = await supabase.from("adaptive_learning_memory").insert(baseRow);
+      if (retryErr) console.warn("[ADAPTIVE] storeDecisionOutcome retry failed:", retryErr.message);
+      return baseRow;
+    }
+    console.warn("[ADAPTIVE] storeDecisionOutcome failed:", error.message);
+  }
+
   return row;
 }
 

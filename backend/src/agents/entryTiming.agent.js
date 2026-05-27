@@ -110,6 +110,13 @@ export async function analyzeEntryTiming({
         }
 
         // Initialize variables
+        const indicators = technicalData || {};
+        const technicals = marketData || {};
+        const atrCompression =
+          indicators?.atrCompression ??
+          technicals?.atrCompression ??
+          1;
+
         let strategy = "AVOID ENTRY";
         let idealEntryZone = "Avoid";
         let stopLoss = "-";
@@ -118,6 +125,9 @@ export async function analyzeEntryTiming({
         let entryUrgency = "VERY LOW";
         let reasoning = "Unable to generate reliable entry signal due to missing or invalid market data.";
         let finalExecutionAdvice = "Maintain caution and monitor price action.";
+        let adxProxy = null;
+        let trendStrength = 0;
+        let momentumConfirmed = false;
 
         if (activePrice > 0) {
             const rsi = Number(technicalData?.rsi || 0);
@@ -145,12 +155,12 @@ export async function analyzeEntryTiming({
                 (trend === "BULLISH" ? 1.0 : -0.5) +
                 (volumeRatio > 1.3 ? 0.8 : volumeRatio < 0.9 ? -0.5 : 0) +
                 (rsi >= 48 && rsi <= 68 ? 0.8 : rsi > 75 ? -1.2 : rsi < 35 ? -0.4 : 0);
-            const trendStrength = Number(momentumScore || 5);
+            trendStrength = Number(momentumScore || 5);
             const atrPct = activePrice > 0 ? atr / activePrice : 0;
-            const atrCompression = atrPct > 0 && atrPct <= 0.012;
+            const atrCompressionSignal = atrPct > 0 && atrPct <= 0.012;
             const volatilityExpansion = atrPct >= 0.025;
-            const adxProxy = Math.max(10, Math.min(45, 10 + (trendStrength * 3) + (volumeRatio > 1.2 ? 4 : 0)));
-            const momentumConfirmed = trend === "BULLISH" && trendStrength >= 6 && volumeRatio >= 1.1 && rsi >= 50;
+            adxProxy = Math.max(10, Math.min(45, 10 + (trendStrength * 3) + (volumeRatio > 1.2 ? 4 : 0)));
+            momentumConfirmed = (trend === "BULLISH" || trend === "NEUTRAL") && trendStrength >= 5 && volumeRatio >= 0.8 && rsi >= 45;
 
             const stopAnchor = Math.max(
                 support,
@@ -176,12 +186,16 @@ export async function analyzeEntryTiming({
                 atr *
                 continuationProbability *
                 historicalExtension *
-                (volatilityExpansion ? 1.2 : atrCompression ? 0.78 : 1);
+                (volatilityExpansion ? 1.2 : atrCompressionSignal ? 0.78 : 1);
             const resistanceProjection = Math.max(resistance, activePrice + (atr * (1.2 + continuationProbability)));
             const computedTargetBase = Math.max(resistanceProjection, activePrice + projectedMove);
-            const computedTarget = atrCompression
-                ? Math.min(computedTargetBase, activePrice + (1.8 * atr))
-                : computedTargetBase;
+            const strongTrend = trendStrength >= 18;
+            const moderateTrend = trendStrength >= 10;
+            const regimeMultiplier = strongTrend ? 2.4 : moderateTrend ? 1.8 : 1.35;
+            const compressionMultiplier = strongTrend ? regimeMultiplier : Math.max(1.35, regimeMultiplier * 0.92);
+            const computedTarget = atrCompressionSignal
+                ? Math.max(computedTargetBase, activePrice + (compressionMultiplier * atr))
+                : Math.max(computedTargetBase, activePrice + (regimeMultiplier * atr));
             const riskPerShare = activePrice - validStop;
             const rewardPerShare = computedTarget - activePrice;
             const rr = riskPerShare > 0 ? rewardPerShare / riskPerShare : 0;
@@ -189,7 +203,7 @@ export async function analyzeEntryTiming({
             const entryLower = Math.max(validStop + (0.4 * atr), Math.min(activePrice, sma20, sma50) - (0.25 * atr));
             const entryUpper = Math.max(entryLower, Math.min(activePrice + (0.4 * atr), resistance));
 
-            if (setupScore < 4.8 || rr < 1.2 || trend === "BEARISH" || atrCompression || adxProxy < 20) {
+            if (setupScore < 3.5 || rr < 1.1 || (trend === "BEARISH" && rr < 1.5) || adxProxy < 12) {
                 strategy = "AVOID ENTRY";
                 entryUrgency = "VERY LOW";
                 idealEntryZone = "Avoid";
@@ -211,7 +225,7 @@ export async function analyzeEntryTiming({
                 })} Risk-reward is not compelling enough for fresh deployment.`;
                 finalExecutionAdvice = `Avoid entry until price reclaims ${formatPrice(Math.max(sma20, sma50))} with better volume support.`;
             }
-            else if (setupScore < 6.8 || rr < 2.0) {
+            else if (setupScore < 5.0 || rr < 1.5) {
                 strategy = "CAUTIOUS ENTRY";
                 entryUrgency = "MEDIUM";
                 idealEntryZone = formatRange(entryLower, entryUpper);
@@ -278,7 +292,7 @@ export async function analyzeEntryTiming({
             reasoning,
             finalExecutionAdvice,
             atrCompression,
-            adxProxy: Number(adxProxy.toFixed(1)),
+            adxProxy: Number.isFinite(adxProxy) ? Number(adxProxy.toFixed(1)) : null,
             trendStrength: Number(trendStrength.toFixed(1)),
             momentumConfirmed
         };

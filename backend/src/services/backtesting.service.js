@@ -101,6 +101,24 @@ function stratMatch(recoType, wanted) {
   return a.includes(b);
 }
 
+function isProductionBacktestRow(row) {
+  const blob = JSON.stringify({
+    recommendation_id: row?.recommendation_id,
+    symbol: row?.symbol,
+    generated_by: row?.generated_by,
+    provider_metadata: row?.provider_metadata
+  }).toUpperCase();
+
+  if (blob.includes("TEST")) return false;
+  if (blob.includes("TRIAL")) return false;
+  if (blob.includes("MANUAL.TEST")) return false;
+  if (blob.includes("MANUAL_TEST")) return false;
+  if (blob.includes("COPILOT.DELIVERY")) return false;
+  if (blob.includes("PRODUCTION.DELIVERY.VERIFICATION")) return false;
+
+  return true;
+}
+
 function gradeFromMetrics({ cagr = 0, sharpe = 0, drawdown = -100, consistency = 0, alpha = 0 }) {
   const score = (cagr * 0.25) + (sharpe * 15) + (Math.max(drawdown, -50) * 0.3) + (consistency * 12) + (alpha * 0.2);
   if (score >= 55) return "A+";
@@ -113,7 +131,7 @@ function gradeFromMetrics({ cagr = 0, sharpe = 0, drawdown = -100, consistency =
 async function loadRecommendations({ strategy, startDate, endDate, universe }) {
   let q = supabase
     .from("recommendation_audit")
-    .select("recommendation_id,symbol,action,recommendation_type,confidence,entry_price,target_price,stop_loss,horizon,sector,market_regime,created_at")
+    .select("recommendation_id,symbol,action,recommendation_type,confidence,entry_price,target_price,stop_loss,horizon,sector,market_regime,created_at,generated_by,provider_metadata")
     .gte("created_at", `${dateOnly(startDate)}T00:00:00.000Z`)
     .lte("created_at", `${dateOnly(endDate)}T23:59:59.999Z`)
     .order("created_at", { ascending: true });
@@ -134,8 +152,32 @@ async function loadRecommendations({ strategy, startDate, endDate, universe }) {
   }
 
   const allowed = new Set((outcomeRows || []).map((row) => row.recommendation_id));
-  const filtered = rows.filter((r) => allowed.has(r.recommendation_id));
-  return filtered.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  const filtered = rows.filter((r) => {
+    if (!allowed.has(r.recommendation_id)) return false;
+    if (!isProductionBacktestRow(r)) return false;
+
+    const action = String(r.action || "").toUpperCase();
+    if (!(action === "BUY" || action === "SELL")) return false;
+
+    return stratMatch(r.recommendation_type || r.action, strategy);
+  });
+
+  const deduped = [];
+  const seen = new Set();
+
+  for (const row of filtered.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())) {
+    const day = dateOnly(row.created_at);
+    const symbol = String(row.symbol || "").toUpperCase().replace(/\\.(NS|BO)$/i, "");
+    const action = String(row.action || "").toUpperCase();
+    const strategyKey = String(row.recommendation_type || row.action || strategy || "").toUpperCase();
+    const key = `${day}|${symbol}|${action}|${strategyKey}`;
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped;
 }
 
 function pickExitDate(horizon, createdAt) {
@@ -315,19 +357,73 @@ export async function runHistoricalReplay({ strategy, startDate, endDate, univer
   if (!recs.length) throw new BacktestingError("No recommendations for replay", "NO_DATA");
 
   const trades = [];
+  const skippedTrades = [];
+
   for (const reco of recs) {
-    const createdAt = toTs(reco.created_at, "created_at");
-    const days = Math.max(40, Math.ceil((Date.now() - createdAt.getTime()) / DAY_MS) + 5);
-    const candles = await getHistoricalCandles(reco.symbol, { days, interval: "1d" });
-    const trade = simulateTradeExecution(reco, candles, {});
-    trades.push(trade);
-    logEvent("backtest.trade.executed", { backtest_id: backtestId, symbol: trade.symbol, return_pct: trade.return_pct });
+    try {
+      const createdAt = toTs(reco.created_at, "created_at");
+      const days = Math.max(40, Math.ceil((Date.now() - createdAt.getTime()) / DAY_MS) + 5);
+      const candles = await getHistoricalCandles(reco.symbol, { days, interval: "1d" });
+      const trade = simulateTradeExecution(reco, candles, {});
+      trades.push(trade);
+      logEvent("backtest.trade.executed", {
+        backtest_id: backtestId,
+        symbol: trade.symbol,
+        return_pct: trade.return_pct
+      });
+    } catch (error) {
+      skippedTrades.push({
+        recommendation_id: reco.recommendation_id,
+        symbol: reco.symbol,
+        reason: error?.code || error?.message || "UNKNOWN_BACKTEST_SKIP"
+      });
+      logEvent("backtest.trade.skipped", {
+        backtest_id: backtestId,
+        recommendation_id: reco.recommendation_id,
+        symbol: reco.symbol,
+        reason: error?.code || error?.message || "UNKNOWN_BACKTEST_SKIP"
+      });
+    }
+  }
+
+  if (!trades.length) {
+    throw new BacktestingError("Replay produced no valid trades after filtering/skips", "EMPTY_VALID_TRADES", {
+      recommendations_loaded: recs.length,
+      skipped_trades: skippedTrades.length
+    });
   }
 
   const equityCurve = buildEquityCurve(trades, initialCapital);
   if (!equityCurve.length) throw new BacktestingError("Replay produced empty equity curve", "EMPTY_EQUITY_CURVE");
-  const bench = await computeBenchmarkComparison({ equityCurve, startDate, endDate, benchmark });
-  logEvent("backtest.benchmark.computed", { backtest_id: backtestId, benchmark: bench.benchmark, alpha: bench.alpha, beta: bench.beta });
+  let bench;
+  try {
+    bench = await computeBenchmarkComparison({ equityCurve, startDate, endDate, benchmark });
+    logEvent("backtest.benchmark.computed", {
+      backtest_id: backtestId,
+      benchmark: bench.benchmark,
+      alpha: bench.alpha,
+      beta: bench.beta
+    });
+  } catch (error) {
+    const strategyReturn = equityCurve[equityCurve.length - 1]?.cumulative_return || 0;
+    bench = {
+      benchmark,
+      benchmark_curve: [],
+      benchmark_return: 0,
+      alpha: strategyReturn,
+      beta: null,
+      excess_return: strategyReturn,
+      unavailable: true,
+      error: error?.message || "BENCHMARK_UNAVAILABLE"
+    };
+
+    logEvent("backtest.benchmark.unavailable", {
+      backtest_id: backtestId,
+      benchmark,
+      reason: error?.message || "BENCHMARK_UNAVAILABLE",
+      fallback_alpha: strategyReturn
+    });
+  }
 
   const metrics = computeInstitutionalMetrics({
     trades,
@@ -370,6 +466,9 @@ export async function runHistoricalReplay({ strategy, startDate, endDate, univer
       rolling_cagr: rolling.rollingCagr,
       rolling_sharpe: rolling.rollingSharpe,
       benchmark: bench.benchmark,
+      benchmark_unavailable: Boolean(bench.unavailable),
+      benchmark_error: bench.error || null,
+      skipped_trades: skippedTrades,
       generated_at: new Date().toISOString()
     },
     calculation_version: `${REPLAY_VERSION}|${EXECUTION_VERSION}|${METRICS_VERSION}`,

@@ -13,6 +13,9 @@
     "dev": "npm run test && node src/server.js",
     "test": "node tests/safety.test.js",
     "test:integration": "vitest run tests/integration --reporter=verbose",
+    "validate:phase1": "node scripts/validation/generatePhase1Inventory.mjs",
+    "validate:baseline": "npm run test && npm run test:integration && npm run validate:phase1",
+    "validate:institutional": "node scripts/validation/runInstitutionalValidation.mjs",
     "dataset:report": "node -e \"import('./src/services/datasetMaturity.service.js').then(async (m)=>{console.log(JSON.stringify(await m.buildDatasetMaturityReport(),null,2));})\"",
     "dataset:enrich": "node -e \"import('./src/services/datasetMaturity.service.js').then(async (m)=>{console.log(JSON.stringify(await m.runHistoricalDatasetEnrichment({}),null,2));})\""
   },

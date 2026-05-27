@@ -1,0 +1,2052 @@
+{
+  "generatedAt": "2026-05-27T06:50:39.594Z",
+  "routes": [
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/models"
+    },
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/drift"
+    },
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/recommendations/:id"
+    },
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/trust"
+    },
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/regimes"
+    },
+    {
+      "file": "src/routes/adaptive.routes.js",
+      "method": "GET",
+      "path": "/leaderboard"
+    },
+    {
+      "file": "src/routes/analytics.routes.js",
+      "method": "GET",
+      "path": "/global"
+    },
+    {
+      "file": "src/routes/analytics.routes.js",
+      "method": "GET",
+      "path": "/sectors"
+    },
+    {
+      "file": "src/routes/analytics.routes.js",
+      "method": "GET",
+      "path": "/strategies"
+    },
+    {
+      "file": "src/routes/analytics.routes.js",
+      "method": "GET",
+      "path": "/calibration"
+    },
+    {
+      "file": "src/routes/analytics.routes.js",
+      "method": "GET",
+      "path": "/report/latest"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/latest"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/runs"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/strategies/ranking"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/:id/equity"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/:id/trades"
+    },
+    {
+      "file": "src/routes/backtesting.routes.js",
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "file": "src/routes/infra.routes.js",
+      "method": "GET",
+      "path": "/providers"
+    },
+    {
+      "file": "src/routes/infra.routes.js",
+      "method": "GET",
+      "path": "/providers/:provider"
+    },
+    {
+      "file": "src/routes/infra.routes.js",
+      "method": "GET",
+      "path": "/portfolio-defense-health"
+    },
+    {
+      "file": "src/routes/infra.routes.js",
+      "method": "GET",
+      "path": "/ops/health"
+    },
+    {
+      "file": "src/routes/infra.routes.js",
+      "method": "GET",
+      "path": "/ops/circuit-breakers"
+    },
+    {
+      "file": "src/routes/webhook.js",
+      "method": "GET",
+      "path": "/razorpay"
+    },
+    {
+      "file": "src/routes/webhook.js",
+      "method": "POST",
+      "path": "/razorpay"
+    }
+  ],
+  "schedulers": [
+    {
+      "file": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "cron": "0 */6 * * *"
+    },
+    {
+      "file": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "cron": "0 * * * *"
+    },
+    {
+      "file": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "cron": "20 2 * * *"
+    },
+    {
+      "file": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "cron": "30 3 * * 0"
+    },
+    {
+      "file": "src/scheduler/backtesting.scheduler.js",
+      "cron": "15 18 * * *"
+    },
+    {
+      "file": "src/scheduler/backtesting.scheduler.js",
+      "cron": "0 8 * * 0"
+    },
+    {
+      "file": "src/scheduler/backtesting.scheduler.js",
+      "cron": "0 7 1 * *"
+    },
+    {
+      "file": "src/scheduler/dailyHook.scheduler.js",
+      "cron": "0 2 * * *"
+    },
+    {
+      "file": "src/scheduler/macroReport.scheduler.js",
+      "cron": "30 2 * * 1-5"
+    },
+    {
+      "file": "src/scheduler/macroReport.scheduler.js",
+      "cron": "0 12 * * 5"
+    },
+    {
+      "file": "src/scheduler/macroReport.scheduler.js",
+      "cron": "30 3,5,7,9 * * 1-5"
+    },
+    {
+      "file": "src/scheduler/monitor.job.js",
+      "cron": "0 8 * * *"
+    },
+    {
+      "file": "src/scheduler/monitor.job.js",
+      "cron": "0 0 * * *"
+    },
+    {
+      "file": "src/scheduler/monitor.job.js",
+      "cron": "30 8 * * *"
+    },
+    {
+      "file": "src/scheduler/portfolio.scheduler.js",
+      "cron": "0 */6 * * *"
+    },
+    {
+      "file": "src/scheduler/portfolio.scheduler.js",
+      "cron": "*/10 * * * *"
+    },
+    {
+      "file": "src/scheduler/publicAnalytics.scheduler.js",
+      "cron": "0 */6 * * *"
+    },
+    {
+      "file": "src/scheduler/publicAnalytics.scheduler.js",
+      "cron": "0 0 * * *"
+    },
+    {
+      "file": "src/scheduler/publicAnalytics.scheduler.js",
+      "cron": "0 7 * * 1"
+    },
+    {
+      "file": "src/scheduler/recommendationDelivery.scheduler.js",
+      "cron": "*/2 * * * *"
+    },
+    {
+      "file": "src/scheduler/recommendationTracking.scheduler.js",
+      "cron": "*/30 9-16 * * 1-5"
+    },
+    {
+      "file": "src/scheduler/recommendationTracking.scheduler.js",
+      "cron": "15 1 * * *"
+    },
+    {
+      "file": "src/scheduler/spikeHook.scheduler.js",
+      "cron": "30 8 * * *"
+    },
+    {
+      "file": "src/scheduler/statisticalValidation.scheduler.js",
+      "cron": "5 * * * *"
+    },
+    {
+      "file": "src/scheduler/statisticalValidation.scheduler.js",
+      "cron": "40 1 * * *"
+    },
+    {
+      "file": "src/scheduler/subscriptionLifecycle.scheduler.js",
+      "cron": "0 * * * *"
+    },
+    {
+      "file": "src/scheduler/subscriptionReconciliation.scheduler.js",
+      "cron": "*/5 * * * *"
+    }
+  ],
+  "telegramHandlers": [
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "command",
+      "trigger": "start"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "command",
+      "trigger": "subscribe"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "on",
+      "trigger": "text"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "command",
+      "trigger": "cancel"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "on",
+      "trigger": "text"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "command",
+      "trigger": "status"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "action",
+      "trigger": "cancel_now"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "action",
+      "trigger": "cancel_later"
+    },
+    {
+      "file": "src/services/telegram.service.js",
+      "type": "on",
+      "trigger": "text"
+    }
+  ],
+  "dbTablesReferenced": [
+    "adaptive_learning_memory",
+    "adaptive_model_state",
+    "adaptive_recommendation_scores",
+    "alert_memory",
+    "analytics_snapshots",
+    "backtest_runs",
+    "backtest_trade_log",
+    "confidence_calibration",
+    "distributed_state",
+    "execution_audit_logs",
+    "historical_market_returns",
+    "holdings",
+    "learning_memory",
+    "model_drift_events",
+    "monte_carlo_results",
+    "payments",
+    "performance_logs",
+    "portfolio_alerts",
+    "portfolio_covariance_matrix",
+    "portfolio_history",
+    "portfolio_positions",
+    "provider_health",
+    "queue_health_metrics",
+    "reasoning_audit_logs",
+    "recommendation_audit",
+    "recommendation_outcomes",
+    "recommendation_statistics",
+    "sector_performance",
+    "shared_cache",
+    "strategy_leaderboard",
+    "strategy_performance",
+    "subscribers",
+    "subscription_events",
+    "test_table"
+  ],
+  "envKeysReferenced": [
+    "ADMIN_API_TOKEN",
+    "ALPHA_VANTAGE_API_KEY",
+    "BACKTEST_ROUTE_RPM",
+    "BACKTEST_SLIPPAGE_BPS",
+    "BACKTEST_TXN_COST_BPS",
+    "CORS_ALLOWED_ORIGINS",
+    "FINNHUB_API_KEY",
+    "GROQ_API_KEY",
+    "GROQ_API_KEY_BACKUP",
+    "INTERNAL_API_TOKEN",
+    "NEWS_API_KEY",
+    "PORT",
+    "RATE_LIMIT_PER_MIN",
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_KEY_SECRET",
+    "RAZORPAY_PLAN_ID",
+    "RAZORPAY_WEBHOOK_SECRET",
+    "REDIS_URL",
+    "RESEND_API_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_URL",
+    "TARGET_EMAIL",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_LEASE_REQUIRED",
+    "TWELVEDATA_API_KEY"
+  ],
+  "agents": [
+    "src/agents/alert.agent.js",
+    "src/agents/autoMonitor.agent.js",
+    "src/agents/capital.agent.js",
+    "src/agents/decision.agent.js",
+    "src/agents/entryTiming.agent.js",
+    "src/agents/eventRisk.agent.js",
+    "src/agents/exitSignal.agent.js",
+    "src/agents/explainability.agent.js",
+    "src/agents/financial.agent.js",
+    "src/agents/learning.agent.js",
+    "src/agents/master.agent.js",
+    "src/agents/performance.agent.js",
+    "src/agents/performanceTracker.agent.js",
+    "src/agents/portfolioAgent.js",
+    "src/agents/portfolioDefense.agent.js",
+    "src/agents/portfolioHealth.agent.js",
+    "src/agents/portfolioReview.agent.js",
+    "src/agents/positionSizing.agent.js",
+    "src/agents/ranking.agent.js",
+    "src/agents/rebalance.engine.js",
+    "src/agents/rebalancer.agent.js",
+    "src/agents/rebalancing.agent.js",
+    "src/agents/research.agent.js",
+    "src/agents/risk.agent.js",
+    "src/agents/scanner.agent.js",
+    "src/agents/sectorScanner.agent.js",
+    "src/agents/technical.agent.js",
+    "src/agents/valuation.agent.js"
+  ],
+  "scanners": [
+    "src/scanner/convictionEngine.js",
+    "src/scanner/institutionalFlows.js",
+    "src/scanner/marketOverview.js",
+    "src/scanner/morningScheduler.js",
+    "src/scanner/newsEngine.js",
+    "src/scanner/scannerFormatter.js",
+    "src/scanner/sectorRotation.js",
+    "src/scanner/signalGuards.js",
+    "src/scanner/stockRanker.js",
+    "src/scanner/volatilityEngine.js",
+    "src/scanner/watchlistEngine.js"
+  ],
+  "queues": [
+    "src/queues/_base.queue.js",
+    "src/queues/adaptiveLearning.queue.js",
+    "src/queues/correlation.queue.js",
+    "src/queues/monteCarlo.queue.js",
+    "src/queues/optimization.queue.js",
+    "src/queues/portfolioDefense.queue.js",
+    "src/queues/stressTesting.queue.js"
+  ],
+  "services": [
+    "src/services/adaptiveIntelligence.service.js",
+    "src/services/adaptiveLearning.service.js",
+    "src/services/alert.service.js",
+    "src/services/alertMemory.service.js",
+    "src/services/backtesting.service.js",
+    "src/services/benchmark.service.js",
+    "src/services/canonicalSemantics.service.js",
+    "src/services/chat.service.js",
+    "src/services/claude.service.js",
+    "src/services/confidenceCalibration.service.js",
+    "src/services/dataAvailability.service.js",
+    "src/services/datasetMaturity.service.js",
+    "src/services/distributedState.service.js",
+    "src/services/driftDetection.service.js",
+    "src/services/email.service.js",
+    "src/services/executionSafety.service.js",
+    "src/services/exitIntelligence.service.js",
+    "src/services/historicalDataCache.service.js",
+    "src/services/historicalMarketData.service.js",
+    "src/services/historicalRequestLimiter.service.js",
+    "src/services/history.service.js",
+    "src/services/holiday.service.js",
+    "src/services/infrastructure.service.js",
+    "src/services/institutionalInterpretation.service.js",
+    "src/services/institutionalStatus.service.js",
+    "src/services/intelligence.service.js",
+    "src/services/macroDelivery.service.js",
+    "src/services/macroIntelligence.service.js",
+    "src/services/marketData.service.js",
+    "src/services/metaScoring.service.js",
+    "src/services/multiAssetIntelligence.service.js",
+    "src/services/news.service.js",
+    "src/services/portfolioAlert.service.js",
+    "src/services/portfolioCommandParser.service.js",
+    "src/services/portfolioDefenseHealth.service.js",
+    "src/services/portfolioMath.service.js",
+    "src/services/portfolioMemory.service.js",
+    "src/services/portfolioOptimization.service.js",
+    "src/services/portfolioSurveillance.service.js",
+    "src/services/portfolioSurvival.service.js",
+    "src/services/portfolioTelemetry.service.js",
+    "src/services/premarket.service.js",
+    "src/services/presentationAbstraction.service.js",
+    "src/services/probabilisticForecast.service.js",
+    "src/services/profitExhaustion.service.js",
+    "src/services/providerHealth.service.js",
+    "src/services/publicAnalytics.service.js",
+    "src/services/quantCorrelation.service.js",
+    "src/services/quantWorkerQueue.service.js",
+    "src/services/queueHealth.service.js",
+    "src/services/reasoningAudit.service.js",
+    "src/services/recommendationAudit.service.js",
+    "src/services/recommendationDelivery.service.js",
+    "src/services/recommendationOutcome.service.js",
+    "src/services/regimeIntelligence.service.js",
+    "src/services/schedulerLease.service.js",
+    "src/services/schedulerStagger.service.js",
+    "src/services/sharedCache.service.js",
+    "src/services/statisticalValidation.service.js",
+    "src/services/stressTesting.service.js",
+    "src/services/subscriptionLifecycleScheduling.service.js",
+    "src/services/subscriptionReconciliation.service.js",
+    "src/services/supabase.service.js",
+    "src/services/targetProjection.service.js",
+    "src/services/telegram.service.js",
+    "src/services/telegramFormatter.service.js",
+    "src/services/telemetry.service.js",
+    "src/services/telemetryAggregator.service.js",
+    "src/services/usage.service.js"
+  ],
+  "thirdPartyDomainsReferenced": [
+    "api.telegram.org",
+    "api.twelvedata.com",
+    "date.nager.at",
+    "finnhub.io",
+    "localhost",
+    "newsapi.org",
+    "www.alphavantage.co"
+  ],
+  "dependencyEdges": [
+    {
+      "from": "src/agents/alert.agent.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/agents/autoMonitor.agent.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/agents/autoMonitor.agent.js",
+      "to": "src/agents/rebalance.engine.js"
+    },
+    {
+      "from": "src/agents/autoMonitor.agent.js",
+      "to": "src/agents/alert.agent.js"
+    },
+    {
+      "from": "src/agents/autoMonitor.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/decision.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/entryTiming.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/entryTiming.agent.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/agents/eventRisk.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/eventRisk.agent.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/agents/explainability.agent.js",
+      "to": "src/core/agentSchemas.js"
+    },
+    {
+      "from": "src/agents/explainability.agent.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/agents/financial.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/learning.agent.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/risk.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/premarket.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/portfolioAgent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/portfolioReview.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/decision.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/rebalancing.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/ranking.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/capital.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/entryTiming.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/technical.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/valuation.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/exitSignal.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/positionSizing.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/rebalancer.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/portfolioMemory.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/core/portfolioFormatter.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/performanceTracker.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/recommendationAudit.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/agents/eventRisk.agent.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/intelligence.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/utils/confidence.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/news.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/tools/registry.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/agents/master.agent.js",
+      "to": "src/core/tickerContracts.js"
+    },
+    {
+      "from": "src/agents/performance.agent.js",
+      "to": "src/services/history.service.js"
+    },
+    {
+      "from": "src/agents/performance.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/performanceTracker.agent.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/agents/performanceTracker.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/exitIntelligence.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioSurveillance.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioAlert.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/quantCorrelation.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/stressTesting.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/probabilisticForecast.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/adaptiveLearning.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioOptimization.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/confidenceCalibration.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioSurvival.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/reasoningAudit.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/historicalMarketData.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/quantWorkerQueue.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioTelemetry.service.js"
+    },
+    {
+      "from": "src/agents/portfolioDefense.agent.js",
+      "to": "src/services/portfolioDefenseHealth.service.js"
+    },
+    {
+      "from": "src/agents/portfolioReview.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/portfolioReview.agent.js",
+      "to": "src/services/institutionalStatus.service.js"
+    },
+    {
+      "from": "src/agents/research.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/risk.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/risk.agent.js",
+      "to": "src/core/agentSchemas.js"
+    },
+    {
+      "from": "src/agents/risk.agent.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/agents/master.agent.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/marketOverview.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/newsEngine.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/sectorRotation.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/institutionalFlows.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/watchlistEngine.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/stockRanker.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/scannerFormatter.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/signalGuards.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/scanner/convictionEngine.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/agents/scanner.agent.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/agents/sectorScanner.agent.js",
+      "to": "src/agents/scanner.agent.js"
+    },
+    {
+      "from": "src/agents/technical.agent.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/agents/valuation.agent.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/agents/valuation.agent.js",
+      "to": "src/core/agentSchemas.js"
+    },
+    {
+      "from": "src/agents/valuation.agent.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/services/claude.service.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/agents/master.agent.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/routes/webhook.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/routes/analytics.routes.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/routes/backtesting.routes.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/routes/adaptive.routes.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/routes/infra.routes.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/app.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/core/analysisContext.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/core/analysisContext.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/core/analysisContext.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/core/messageBuilder.js",
+      "to": "src/core/user.js"
+    },
+    {
+      "from": "src/queues/_base.queue.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/queues/adaptiveLearning.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/adaptiveLearning.queue.js",
+      "to": "src/services/adaptiveLearning.service.js"
+    },
+    {
+      "from": "src/queues/correlation.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/correlation.queue.js",
+      "to": "src/services/quantCorrelation.service.js"
+    },
+    {
+      "from": "src/queues/monteCarlo.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/monteCarlo.queue.js",
+      "to": "src/services/probabilisticForecast.service.js"
+    },
+    {
+      "from": "src/queues/optimization.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/optimization.queue.js",
+      "to": "src/services/portfolioOptimization.service.js"
+    },
+    {
+      "from": "src/queues/portfolioDefense.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/portfolioDefense.queue.js",
+      "to": "src/agents/portfolioDefense.agent.js"
+    },
+    {
+      "from": "src/queues/stressTesting.queue.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/queues/stressTesting.queue.js",
+      "to": "src/services/stressTesting.service.js"
+    },
+    {
+      "from": "src/routes/adaptive.routes.js",
+      "to": "src/services/adaptiveIntelligence.service.js"
+    },
+    {
+      "from": "src/routes/adaptive.routes.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/routes/analytics.routes.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/routes/analytics.routes.js",
+      "to": "src/services/publicAnalytics.service.js"
+    },
+    {
+      "from": "src/routes/analytics.routes.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/routes/backtesting.routes.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/routes/backtesting.routes.js",
+      "to": "src/services/backtesting.service.js"
+    },
+    {
+      "from": "src/routes/backtesting.routes.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/routes/infra.routes.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/routes/infra.routes.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/routes/infra.routes.js",
+      "to": "src/services/portfolioDefenseHealth.service.js"
+    },
+    {
+      "from": "src/routes/infra.routes.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/routes/infra.routes.js",
+      "to": "src/utils/circuitBreakerDecay.js"
+    },
+    {
+      "from": "src/routes/payment.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/routes/payment.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/routes/payment.js",
+      "to": "src/services/subscriptionReconciliation.service.js"
+    },
+    {
+      "from": "src/routes/webhook.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/routes/webhook.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/routes/webhook.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scanner/marketOverview.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/scanner/marketOverview.js",
+      "to": "src/scanner/newsEngine.js"
+    },
+    {
+      "from": "src/scanner/morningScheduler.js",
+      "to": "src/agents/scanner.agent.js"
+    },
+    {
+      "from": "src/scanner/newsEngine.js",
+      "to": "src/services/news.service.js"
+    },
+    {
+      "from": "src/scanner/scannerFormatter.js",
+      "to": "src/utils/time.js"
+    },
+    {
+      "from": "src/scanner/scannerFormatter.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/scanner/scannerFormatter.js",
+      "to": "src/scanner/signalGuards.js"
+    },
+    {
+      "from": "src/scanner/sectorRotation.js",
+      "to": "src/services/intelligence.service.js"
+    },
+    {
+      "from": "src/scanner/sectorRotation.js",
+      "to": "src/scanner/convictionEngine.js"
+    },
+    {
+      "from": "src/scanner/stockRanker.js",
+      "to": "src/scanner/convictionEngine.js"
+    },
+    {
+      "from": "src/scanner/stockRanker.js",
+      "to": "src/scanner/volatilityEngine.js"
+    },
+    {
+      "from": "src/scanner/stockRanker.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/scanner/volatilityEngine.js",
+      "to": "src/scanner/convictionEngine.js"
+    },
+    {
+      "from": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "to": "src/services/adaptiveIntelligence.service.js"
+    },
+    {
+      "from": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "to": "src/services/driftDetection.service.js"
+    },
+    {
+      "from": "src/scheduler/adaptiveIntelligence.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/backtesting.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/backtesting.scheduler.js",
+      "to": "src/services/backtesting.service.js"
+    },
+    {
+      "from": "src/scheduler/backtesting.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/core/user.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/scanner/morningScheduler.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/utils/time.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/utils/pipelineShape.js"
+    },
+    {
+      "from": "src/scheduler/dailyHook.scheduler.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/services/macroIntelligence.service.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/services/macroDelivery.service.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/utils/pipelineShape.js"
+    },
+    {
+      "from": "src/scheduler/macroReport.scheduler.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/scanner/morningScheduler.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/agents/risk.agent.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/agents/portfolioAgent.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/agents/rebalancing.agent.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/alert.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/email.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/agents/performanceTracker.agent.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/agents/master.agent.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/alertMemory.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/monitor.job.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/agents/autoMonitor.agent.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/agents/portfolioDefense.agent.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/utils/pipelineShape.js"
+    },
+    {
+      "from": "src/scheduler/portfolio.scheduler.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/scheduler/publicAnalytics.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/publicAnalytics.scheduler.js",
+      "to": "src/services/publicAnalytics.service.js"
+    },
+    {
+      "from": "src/scheduler/publicAnalytics.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationDelivery.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationDelivery.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationDelivery.scheduler.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationDelivery.scheduler.js",
+      "to": "src/services/recommendationDelivery.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationTracking.scheduler.js",
+      "to": "src/services/recommendationOutcome.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationTracking.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationTracking.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/recommendationTracking.scheduler.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/scheduler/spikeHook.scheduler.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/scheduler/spikeHook.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/spikeHook.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/statisticalValidation.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/statisticalValidation.scheduler.js",
+      "to": "src/services/statisticalValidation.service.js"
+    },
+    {
+      "from": "src/scheduler/statisticalValidation.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionLifecycle.scheduler.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionLifecycle.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionLifecycle.scheduler.js",
+      "to": "src/services/subscriptionLifecycleScheduling.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionLifecycle.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionReconciliation.scheduler.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionReconciliation.scheduler.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionReconciliation.scheduler.js",
+      "to": "src/services/subscriptionReconciliation.service.js"
+    },
+    {
+      "from": "src/scheduler/subscriptionReconciliation.scheduler.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/server.js",
+      "to": "src/agents/portfolioDefense.agent.js"
+    },
+    {
+      "from": "src/server.js",
+      "to": "src/services/infrastructure.service.js"
+    },
+    {
+      "from": "src/server.js",
+      "to": "src/services/schedulerStagger.service.js"
+    },
+    {
+      "from": "src/server.js",
+      "to": "src/workers/index.js"
+    },
+    {
+      "from": "src/services/adaptiveIntelligence.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/adaptiveIntelligence.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/adaptiveIntelligence.service.js",
+      "to": "src/services/driftDetection.service.js"
+    },
+    {
+      "from": "src/services/adaptiveIntelligence.service.js",
+      "to": "src/services/metaScoring.service.js"
+    },
+    {
+      "from": "src/services/adaptiveLearning.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/alert.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/alertMemory.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/alertMemory.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/alertMemory.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/backtesting.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/backtesting.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/backtesting.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/backtesting.service.js",
+      "to": "src/services/benchmark.service.js"
+    },
+    {
+      "from": "src/services/benchmark.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/canonicalSemantics.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/chat.service.js",
+      "to": "src/services/distributedState.service.js"
+    },
+    {
+      "from": "src/services/claude.service.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/services/claude.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/claude.service.js",
+      "to": "src/core/agentSchemas.js"
+    },
+    {
+      "from": "src/services/claude.service.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/services/dataAvailability.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/datasetMaturity.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/datasetMaturity.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/datasetMaturity.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/distributedState.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/distributedState.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/executionSafety.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/executionSafety.service.js",
+      "to": "src/services/distributedState.service.js"
+    },
+    {
+      "from": "src/services/executionSafety.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/exitIntelligence.service.js",
+      "to": "src/services/portfolioMath.service.js"
+    },
+    {
+      "from": "src/services/exitIntelligence.service.js",
+      "to": "src/services/profitExhaustion.service.js"
+    },
+    {
+      "from": "src/services/exitIntelligence.service.js",
+      "to": "src/services/targetProjection.service.js"
+    },
+    {
+      "from": "src/services/historicalMarketData.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/historicalMarketData.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/historicalRequestLimiter.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/infrastructure.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/infrastructure.service.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/services/infrastructure.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/institutionalInterpretation.service.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/services/institutionalStatus.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/institutionalStatus.service.js",
+      "to": "src/services/holiday.service.js"
+    },
+    {
+      "from": "src/services/institutionalStatus.service.js",
+      "to": "src/services/providerHealth.service.js"
+    },
+    {
+      "from": "src/services/institutionalStatus.service.js",
+      "to": "src/services/portfolioDefenseHealth.service.js"
+    },
+    {
+      "from": "src/services/institutionalStatus.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/intelligence.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/intelligence.service.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/services/intelligence.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/macroDelivery.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/macroDelivery.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/macroDelivery.service.js",
+      "to": "src/core/user.js"
+    },
+    {
+      "from": "src/services/macroIntelligence.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/macroIntelligence.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/macroIntelligence.service.js",
+      "to": "src/services/telegramFormatter.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/holiday.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/providerHealth.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/historicalRequestLimiter.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/utils/circuitBreakerDecay.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/historicalDataCache.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/canonicalSemantics.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/services/dataAvailability.service.js"
+    },
+    {
+      "from": "src/services/marketData.service.js",
+      "to": "src/utils/priceValidation.js"
+    },
+    {
+      "from": "src/services/news.service.js",
+      "to": "src/services/sharedCache.service.js"
+    },
+    {
+      "from": "src/services/news.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/portfolioAlert.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/portfolioAlert.service.js",
+      "to": "src/services/alert.service.js"
+    },
+    {
+      "from": "src/services/portfolioDefenseHealth.service.js",
+      "to": "src/services/providerHealth.service.js"
+    },
+    {
+      "from": "src/services/portfolioMemory.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/portfolioMemory.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/regimeIntelligence.service.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/exitIntelligence.service.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/portfolioMath.service.js"
+    },
+    {
+      "from": "src/services/portfolioSurveillance.service.js",
+      "to": "src/services/portfolioAlert.service.js"
+    },
+    {
+      "from": "src/services/portfolioTelemetry.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/presentationAbstraction.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/probabilisticForecast.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/profitExhaustion.service.js",
+      "to": "src/services/portfolioMath.service.js"
+    },
+    {
+      "from": "src/services/providerHealth.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/providerHealth.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/publicAnalytics.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/publicAnalytics.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/quantCorrelation.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/quantWorkerQueue.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/queueHealth.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/queueHealth.service.js",
+      "to": "src/queues/_base.queue.js"
+    },
+    {
+      "from": "src/services/reasoningAudit.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/recommendationAudit.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/recommendationAudit.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/recommendationAudit.service.js",
+      "to": "src/services/recommendationOutcome.service.js"
+    },
+    {
+      "from": "src/services/recommendationDelivery.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/recommendationDelivery.service.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/services/recommendationDelivery.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/recommendationDelivery.service.js",
+      "to": "src/services/telegramFormatter.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/historicalRequestLimiter.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/services/recommendationOutcome.service.js",
+      "to": "src/services/telegramFormatter.service.js"
+    },
+    {
+      "from": "src/services/schedulerLease.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/schedulerLease.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/sharedCache.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/sharedCache.service.js",
+      "to": "src/services/distributedState.service.js"
+    },
+    {
+      "from": "src/services/sharedCache.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/statisticalValidation.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/statisticalValidation.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/subscriptionLifecycleScheduling.service.js",
+      "to": "src/services/telegram.service.js"
+    },
+    {
+      "from": "src/services/subscriptionLifecycleScheduling.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/subscriptionLifecycleScheduling.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/subscriptionReconciliation.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/subscriptionReconciliation.service.js",
+      "to": "src/core/user.js"
+    },
+    {
+      "from": "src/services/subscriptionReconciliation.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/agents/master.agent.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/safety.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/router.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/validator.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/user.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/messageBuilder.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/analysisRunner.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/tickerContracts.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/agents/scanner.agent.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/agents/sectorScanner.agent.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/agents/portfolioReview.agent.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/scanner/scannerFormatter.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/scanner/signalGuards.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/portfolioMemory.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/routes/payment.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/usage.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/chat.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/utils/time.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/portfolioFormatter.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/core/analysisContext.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/portfolioCommandParser.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/distributedState.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/schedulerLease.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/presentationAbstraction.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/institutionalInterpretation.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/institutionalStatus.service.js"
+    },
+    {
+      "from": "src/services/telegram.service.js",
+      "to": "src/services/subscriptionReconciliation.service.js"
+    },
+    {
+      "from": "src/services/telemetryAggregator.service.js",
+      "to": "src/services/telemetry.service.js"
+    },
+    {
+      "from": "src/services/usage.service.js",
+      "to": "src/services/supabase.service.js"
+    },
+    {
+      "from": "src/test_agent.js",
+      "to": "src/agents/master.agent.js"
+    },
+    {
+      "from": "src/tests/pipeline.regression.test.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/tests/pipeline.regression.test.js",
+      "to": "src/utils/priceValidation.js"
+    },
+    {
+      "from": "src/tests/pipeline.regression.test.js",
+      "to": "src/utils/circuitBreakerDecay.js"
+    },
+    {
+      "from": "src/tests/pipeline.regression.test.js",
+      "to": "src/utils/pipelineShape.js"
+    },
+    {
+      "from": "src/tests/pipeline.regression.test.js",
+      "to": "src/services/telemetryAggregator.service.js"
+    },
+    {
+      "from": "src/tests/scanner.formatter.test.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/tests/scanner.formatter.test.js",
+      "to": "src/utils/priceValidation.js"
+    },
+    {
+      "from": "src/tools/registry.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/utils/pipelineShape.js",
+      "to": "src/utils/safeArray.js"
+    },
+    {
+      "from": "src/workers/historical.worker.js",
+      "to": "src/services/quantWorkerQueue.service.js"
+    },
+    {
+      "from": "src/workers/historical.worker.js",
+      "to": "src/services/marketData.service.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/monteCarlo.queue.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/stressTesting.queue.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/correlation.queue.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/optimization.queue.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/adaptiveLearning.queue.js"
+    },
+    {
+      "from": "src/workers/index.js",
+      "to": "src/queues/portfolioDefense.queue.js"
+    },
+    {
+      "from": "src/workers/portfolioDefense.worker.js",
+      "to": "src/services/quantWorkerQueue.service.js"
+    },
+    {
+      "from": "src/workers/portfolioDefense.worker.js",
+      "to": "src/agents/portfolioDefense.agent.js"
+    },
+    {
+      "from": "src/workers/stressTesting.worker.js",
+      "to": "src/services/quantWorkerQueue.service.js"
+    },
+    {
+      "from": "src/workers/stressTesting.worker.js",
+      "to": "src/services/stressTesting.service.js"
+    }
+  ]
+}

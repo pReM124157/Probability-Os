@@ -19,6 +19,7 @@
 import Razorpay from 'razorpay';
 import supabase from '../services/supabase.service.js';
 import { logEvent, logError } from '../services/telemetry.service.js';
+import { fetchProviderSubscription, reconcileSubscriberEntitlement } from '../services/subscriptionReconciliation.service.js';
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -37,6 +38,28 @@ export async function createSubscriptionLink(chatId) {
   const planId = process.env.RAZORPAY_PLAN_ID;
   if (!planId) {
     throw new Error('RAZORPAY_PLAN_ID environment variable is not set');
+  }
+
+  const { data: existingSubscriber, error: existingSubscriberError } = await supabase
+    .from('subscribers')
+    .select('telegram_chat_id,status,plan,is_pro,expires_at,subscription_end,cancel_at_period_end,razorpay_subscription_id,last_payment_at')
+    .eq('telegram_chat_id', chatId.toString())
+    .maybeSingle();
+
+  if (existingSubscriberError) {
+    throw existingSubscriberError;
+  }
+
+  const reconciledSubscriber = await reconcileSubscriberEntitlement(chatId.toString(), existingSubscriber);
+  if (reconciledSubscriber?.razorpay_subscription_id) {
+    const existingSubscription = await fetchProviderSubscription(reconciledSubscriber.razorpay_subscription_id).catch(() => null);
+    if (String(existingSubscription?.status || '').toLowerCase() === 'active') {
+      return {
+        url: existingSubscription.short_url,
+        subscriptionId: existingSubscription.id,
+        alreadyActive: true
+      };
+    }
   }
 
   // Create a Razorpay Subscription object
@@ -84,7 +107,8 @@ export async function createSubscriptionLink(chatId) {
   // short_url is the hosted payment page Razorpay provides
   return {
     url: subscription.short_url,
-    subscriptionId: subscription.id
+    subscriptionId: subscription.id,
+    alreadyActive: false
   };
 }
 

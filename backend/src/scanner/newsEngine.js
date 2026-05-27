@@ -28,8 +28,9 @@ function classifyHeadline(title) {
 }
 
 export function buildMarketNewsIntel(headlines = []) {
+  const safeHeadlines = Array.isArray(headlines) ? headlines : [];
   const counts = { POSITIVE: 0, NEGATIVE: 0, NEUTRAL: 0 };
-  headlines.forEach((headline) => {
+  safeHeadlines.forEach((headline) => {
     counts[classifyHeadline(headline)] += 1;
   });
 
@@ -42,8 +43,8 @@ export function buildMarketNewsIntel(headlines = []) {
 
   return {
     sentiment,
-    headlineCount: headlines.length,
-    topHeadlines: headlines.slice(0, 5),
+    headlineCount: safeHeadlines.length,
+    topHeadlines: safeHeadlines.slice(0, 5),
     counts
   };
 }

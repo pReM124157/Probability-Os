@@ -27,12 +27,15 @@ import {
 } from "../services/intelligence.service.js";
 
 import { generateTieredAnalysis } from "../services/claude.service.js";
+import { safeArray, safeObject } from "../utils/safeArray.js";
+import { normalizeConfidenceScore } from "../utils/confidence.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { fetchCompanyNews } from "../services/news.service.js";
 import { executeTool } from "../tools/registry.js";
 import { buildAnalysisContext, buildDecisionContext } from "../core/analysisContext.js";
 import { getOrPopulateSharedCache, getSharedCache } from "../services/sharedCache.service.js";
 import { logEvent, logMetric } from "../services/telemetry.service.js";
+import { MIN_DEPLOYABLE_CONFIDENCE } from "../services/institutionalInterpretation.service.js";
 import {
   validateAnalysisReadiness,
   ANALYSIS_READINESS
@@ -276,9 +279,9 @@ function computeWeightedConfidence({
   trendScore = clamp(trendScore, 1, 10);
 
   const volumeScore = scoreFromBands(volumeRatio, [
-    { test: (v) => v >= 2.0, score: 10 },
-    { test: (v) => v >= 1.5, score: 8 },
-    { test: (v) => v >= 1.1, score: 6 },
+    { test: (v) => v >= 1.8, score: 10 },
+    { test: (v) => v >= 1.2, score: 8 },
+    { test: (v) => v >= 1.0, score: 6 },
     { test: (v) => v >= 0.8, score: 5 },
     { test: () => true, score: 3 }
   ]);
@@ -333,10 +336,10 @@ function deriveDecisionFromConfidence(score, technical, riskLevel) {
   const trend = technical?.trend || "UNKNOWN";
   const rsi = toNumber(technical?.rsi);
 
-  if (score >= 7.2 && trend === "BULLISH" && rsi >= 48 && riskLevel !== "HIGH") {
+  if (score >= 60 && trend === "BULLISH" && rsi >= 48 && riskLevel !== "HIGH") {
     return "BUY";
   }
-  if (score <= 4.2 && (trend === "BEARISH" || rsi >= 74 || riskLevel === "HIGH")) {
+  if (score <= 42 && (trend === "BEARISH" || rsi >= 74 || riskLevel === "HIGH")) {
     return "SELL";
   }
   return "HOLD";
@@ -374,7 +377,7 @@ function buildDeterministicDecisionReason({
         : `Valuation is fuller at ${pe.toFixed(1)}x earnings`
       : "Valuation data is limited";
 
-  return `${ticker} has RSI at ${rsi.toFixed(0)} and is ${priceVsMA50 >= 0 ? "trading above" : "trading below"} the 50DMA by ${Math.abs(priceVsMA50).toFixed(1)}%. Volume is ${volumeRatio.toFixed(2)}x average, relative strength is ${safeString(relStrength?.status || "neutral vs index").toLowerCase()}, and sector bias is ${sectorBias.toLowerCase().replace(/_/g, " ")}. ${valuationText}; ROE is ${roe.toFixed(1)}% and revenue growth is ${revenueGrowth.toFixed(1)}%. ${directionText} Weighted conviction is ${weightedConfidence.toFixed(1)}/10.`;
+  return `${ticker} has RSI at ${rsi.toFixed(0)} and is ${priceVsMA50 >= 0 ? "trading above" : "trading below"} the 50DMA by ${Math.abs(priceVsMA50).toFixed(1)}%. Volume is ${volumeRatio.toFixed(2)}x average, relative strength is ${safeString(relStrength?.status || "neutral vs index").toLowerCase()}, and sector bias is ${sectorBias.toLowerCase().replace(/_/g, " ")}. ${valuationText}; ROE is ${roe.toFixed(1)}% and revenue growth is ${revenueGrowth.toFixed(1)}%. ${directionText} Weighted conviction is ${weightedConfidence.toFixed(0)}/100.`;
 }
 
 function buildVerifiedAnalysisFailure(ticker, details = {}) {
@@ -411,51 +414,159 @@ function applyInstitutionalTradabilityValidation({
 }) {
   const reasons = [];
   let nextRecommendation = normalizeRecommendationLabel(recommendation) || "HOLD";
-  let nextConfidence = toNumber(confidenceScore);
-  let conviction = nextConfidence >= 8 ? "HIGH" : nextConfidence >= 6 ? "MEDIUM" : "LOW";
-  const isWeakTrend = trend !== "BULLISH" || trendStrength < 6;
+  let nextConfidence = normalizeConfidenceScore(confidenceScore, { assumeScale: "auto" });
+  let conviction = nextConfidence >= 80 ? "HIGH" : nextConfidence >= 60 ? "MEDIUM" : "LOW";
+  const isWeakTrend = trend === "BEARISH" || trendStrength < 4;
+  const isStrongTrend = trendStrength >= 18;
+  const isModerateTrend = trendStrength >= 10;
+  const minRR = isStrongTrend ? 1.8 : isModerateTrend ? 1.35 : 1.15;
+  const minConfidence = isStrongTrend ? 68 : isModerateTrend ? 58 : 52;
   const isSideways = Boolean(atrCompression) || toNumber(adxProxy) < 20 || isWeakTrend;
 
-  if (rr < 1.5 && nextConfidence < 8) {
+  if (rr < minRR && nextConfidence < minConfidence) {
     nextRecommendation = "HOLD";
     conviction = "LOW";
-    nextConfidence = Math.min(nextConfidence, 5.8);
+    nextConfidence = Math.min(nextConfidence, Math.max(52, minConfidence - 4));
     reasons.push("Insufficient reward asymmetry for institutional-grade setup.");
   }
 
   const highConvictionLabels = new Set(["STRONG BUY", "HIGH CONVICTION BUY", "AGGRESSIVE BUY"]);
   if (highConvictionLabels.has(nextRecommendation)) {
-    const allowHighConviction = rr >= 2 && trendStrength >= 7 && Boolean(momentumConfirmed);
+    const allowHighConviction = rr >= 1.8 && trendStrength >= 7 && Boolean(momentumConfirmed);
     if (!allowHighConviction) {
-      nextRecommendation = rr >= 1.5 && trend === "BULLISH" ? "BUY" : "HOLD";
-      reasons.push("High-conviction label removed: setup lacks required R/R, trend strength, or momentum confirmation.");
+      nextRecommendation = rr >= 1.3 ? "BUY" : "HOLD";
+      reasons.push("High-conviction label removed: setup lacks required R/R (1.8+), trend strength, or momentum confirmation.");
     }
   }
 
   if (isSideways) {
-    nextConfidence = Math.min(nextConfidence, 6.4);
+    nextConfidence = Math.min(nextConfidence, 68);
     if (nextRecommendation.includes("AGGRESSIVE")) {
       nextRecommendation = "BUY";
     }
-    if (rr < 2 || isWeakTrend) {
+    if (rr < minRR) {
       nextRecommendation = "HOLD";
     }
-    reasons.push("Low volatility / weak trend regime detected; aggressive targeting suppressed.");
+    reasons.push("Low volatility / weak trend regime detected; deployment aggressiveness reduced.");
   }
 
-  if (rr < 1.5 && nextRecommendation.includes("BUY")) {
+  if (rr < minRR && nextRecommendation.includes("BUY")) {
     nextRecommendation = "HOLD";
   }
 
   nextRecommendation = nextRecommendation || "HOLD";
-  nextConfidence = clamp(nextConfidence, 1, 10);
+  nextConfidence = clamp(nextConfidence, 1, 100);
 
+  const decisionSnapshot = {
+    action: nextRecommendation,
+    confidence: nextConfidence,
+    rrRatio: rr
+  };
+  console.log("[RECOMMENDATION FILTER]", decisionSnapshot);
+
+  const strongSetup = rr >= minRR && nextConfidence >= minConfidence;
   return {
     recommendation: nextRecommendation,
     confidenceScore: nextConfidence,
-    conviction: conviction === "HIGH" && nextConfidence < 8 ? "MEDIUM" : conviction,
-    holdBias: nextRecommendation === "HOLD",
+    conviction: conviction === "HIGH" && nextConfidence < 80 ? "MEDIUM" : conviction,
+    holdBias: nextRecommendation === "HOLD" && !strongSetup,
     reasons
+  };
+}
+
+function buildRejectedSignalPacket({
+  ticker,
+  validationResult,
+  rrRatio,
+  activePrice,
+  isLive,
+  liveMarketData,
+  marketNote,
+  risk,
+  finalDecision,
+  technical,
+  valuation,
+  entryTiming,
+  exitSignal,
+  news,
+  relStrength,
+  sectorData,
+  intelligenceSignals,
+  adjustedConfidence,
+  isPartialData,
+  eventRisk,
+  tradability,
+  weightedSignals
+}) {
+  const marketStatus = liveMarketData?.marketStatus || {};
+  const confidenceEvidence = {
+    adaptiveConfidenceScore: Number(adjustedConfidence || validationResult?.confidence || 0),
+    contributionMap: {
+      technicalTrend: Number((weightedSignals?.components?.trendScore || 0) * 10),
+      technicalMomentum: Number((weightedSignals?.components?.rsiScore || 0) * 10),
+      volumeConfirmation: Number((weightedSignals?.components?.volumeScore || 0) * 10),
+      sectorAlignment: Number((weightedSignals?.components?.sectorScore || 0) * 10),
+      relativeStrength: Number((weightedSignals?.components?.relStrengthScore || 0) * 10),
+      fundamentalQuality: Number((weightedSignals?.components?.fundamentals || 0) * 10),
+      valuationSupport: Number((weightedSignals?.components?.valuation || 0) * 10),
+      dataQuality: isPartialData ? 35 : 80
+    },
+    penalties: {
+      partialDataPenalty: isPartialData ? -10 : 0,
+      degradedExecutionPenalty: !isLive ? -15 : 0,
+      eventRiskPenalty: (eventRisk?.eventRisk === "HIGH" || eventRisk?.eventRisk === "CRITICAL") ? -20 : 0,
+      tradabilityPenalty: tradability?.holdBias ? -15 : 0
+    },
+    warnings: [
+      ...(isPartialData ? ["PARTIAL_DATA"] : []),
+      ...(!isLive ? ["NON_EXECUTABLE_LIVE_PRICE"] : []),
+      ...((eventRisk?.eventRisk === "HIGH" || eventRisk?.eventRisk === "CRITICAL") ? ["EVENT_RISK_OVERRIDE"] : []),
+      ...(tradability?.holdBias ? ["TRADABILITY_HOLD_BIAS"] : [])
+    ]
+  };
+
+  const institutionalEvidence = {
+    replay: { status: "INSUFFICIENT_REPLAY_DEPTH" },
+    calibration: { status: "INSUFFICIENT_DATA" },
+    drift: { status: "NOT_AVAILABLE_IN_THIS_PATH" },
+    benchmark: { status: "NOT_AVAILABLE_IN_THIS_PATH" },
+    marketRegime: {
+      state: marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED",
+      sectorBias: sectorData?.bias || "NEUTRAL",
+      relativeStrength: relStrength?.status || "NEUTRAL"
+    }
+  };
+
+  return {
+    status: "WATCHLIST",
+    approved: false,
+    deploymentBlocked: true,
+    deploymentStatus: "RESTRICTED",
+    recommendation: "WAIT — DEPLOYMENT RESTRICTED",
+    rejectionReason: validationResult?.reason || "validation_rejected",
+    stock: ticker,
+    rrRatio: Number(rrRatio || 0),
+    confidence: Number(adjustedConfidence || validationResult?.confidence || 0),
+    validation: validationResult,
+    risk,
+    decision: finalDecision,
+    technical,
+    valuation,
+    entryTiming,
+    exitSignal,
+    action: "HOLD",
+    isLive,
+    marketNote,
+    isMarketOpen: Boolean(liveMarketData?.isMarketOpen),
+    currentPrice: Number(activePrice || 0),
+    news,
+    intelligence: {
+      relativeStrength: relStrength || { status: "NEUTRAL" },
+      sector: sectorData || { bias: "NEUTRAL" },
+      signals: safeArray(intelligenceSignals)
+    },
+    confidenceEvidence,
+    institutionalEvidence
   };
 }
 
@@ -548,8 +659,35 @@ async function generateTopOpportunities() {
   };
 
   try {
-    const stocks = await Promise.all(TOP_OPS_UNIVERSE.map(async (sym) => {
+    const stocks = await Promise.all(safeArray(TOP_OPS_UNIVERSE).map(async (sym) => {
       const tech = await technicalAgent(sym);
+      const ticker = sym.split('.')[0];
+      
+      if (!tech || !tech.currentPrice) return null;
+
+      // Volatility & R/R Setup
+      const { buildVolatilitySetup } = await import("../scanner/volatilityEngine.js");
+      const volatilitySetup = buildVolatilitySetup({
+        ticker,
+        currentPrice: tech.currentPrice,
+        technicalData: tech
+      });
+
+      const stopDistance = tech.currentPrice - volatilitySetup.stopLoss;
+
+      // RIGOROUS PURIFICATION FILTERS (PHASE 8)
+      if (
+        volatilitySetup.rr < 1.5 ||
+        tech.currentPrice <= 0 ||
+        isNaN(tech.currentPrice) ||
+        tech.volumeRatio < 0.5 ||
+        tech.trend === "BEARISH" ||
+        (stopDistance / tech.currentPrice) > 0.08 ||
+        tech.score < 5
+      ) {
+        return null;
+      }
+
       let score = 0;
       
       // 1. Trend/Momentum
@@ -563,19 +701,19 @@ async function generateTopOpportunities() {
       if (tech.rsi > 55 && tech.rsi < 70) score += 2;
       if (tech.rsi < 40) score += 1; 
 
-      const ticker = sym.split('.')[0];
       return {
         ticker,
         name: NAME_MAP[ticker] || ticker,
         score,
         rsi: tech.rsi,
         trend: tech.trend,
-        currentPrice: tech.currentPrice
+        currentPrice: tech.currentPrice,
+        rr: volatilitySetup.rr
       };
     }));
 
     const ranked = stocks
-      .filter(s => s.currentPrice > 0)
+      .filter(s => s !== null && s.currentPrice > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
 
@@ -613,20 +751,23 @@ What matters: Stick to strength, avoid mixed setups.
  * Handles caching and rate control for Top Opportunities.
  */
 async function getTopOpportunities() {
-  const cacheKey = "TOP_OPPORTUNITIES_V1";
-  const cached = await getSharedCache(cacheKey);
-  logMetric("master.top_ops.cache_hit", cached ? 1 : 0);
-  if (cached) return cached;
   try {
-    return await getOrPopulateSharedCache(
-      cacheKey,
-      "master_top_opportunities",
-      3600,
-      async () => generateTopOpportunities(),
-      { lockOwner: "master.top_ops", fillLockTtlSeconds: 60, waitMs: 5000 }
-    );
+    // Do not use cached legacy top-opportunity blobs here.
+    // Always reuse the hardened scanner delivery path.
+    const { scannerAgent } = await import("./scanner.agent.js");
+    const { formatInstitutionalScannerReport } = await import("../scanner/scannerFormatter.js");
+    const { validateSignal } = await import("../scanner/signalGuards.js");
+    const opportunities = await scannerAgent();
+    const safeOpportunities = Array.isArray(opportunities)
+      ? opportunities
+      : (opportunities?.recommendations || []);
+    const approvedSignals = safeOpportunities.filter((signal) => signal?.approved === true && validateSignal(signal).approved);
+    if (!approvedSignals.length) {
+      return formatInstitutionalScannerReport([]);
+    }
+    return formatInstitutionalScannerReport(approvedSignals);
   } catch {
-    return "Top Opportunities — India\nScanning universe...\nWhat matters: Data analysis in progress.";
+    return "Top Opportunities — India\nScanner unavailable right now.\nWhat matters: Try /scanner in a few minutes.";
   }
 }
 
@@ -653,6 +794,8 @@ Add a stock to start tracking.`.trim();
 export async function masterAgent(input, options = {}) {
   try {
     const strictValidation = options?.strictValidation === true;
+    const skipAudit = options?.skipAudit === true;
+    const skipPerformanceLog = options?.skipPerformanceLog === true;
     // Check if it's a conversation mode request
     if (input && input.mode === "conversation") {
       const { userQuery, isPro = false } = input;
@@ -794,11 +937,11 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
 
         const positions = Array.isArray(portfolioData?.positions) ? portfolioData.positions : [];
         const reduceTickers = new Set(
-          holdingReviews
+          safeArray(holdingReviews)
             .filter((h) => h.action === "REDUCE")
             .map((h) => h.symbol)
         );
-        const filteredPositions = positions.filter((p) => !reduceTickers.has(p.ticker));
+        const filteredPositions = safeArray(positions).filter((p) => !reduceTickers.has(p.ticker));
         let deployed = 0;
         for (const p of filteredPositions) {
           deployed += Number(p.actual_cost || 0);
@@ -840,8 +983,8 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
           });
         }
 
-        const currentLines = holdingReviews.length
-          ? holdingReviews.map((h) =>
+        const currentLines = safeArray(holdingReviews).length
+          ? safeArray(holdingReviews).map((h) =>
               `${h.action === "REDUCE" ? "🔴" : "🟢"} ${h.symbol}\n` +
               `• Status: ${h.action}\n` +
               `• Live Price: ${h.livePrice ? fmtINR(h.livePrice) : "Unavailable"}\n` +
@@ -851,8 +994,8 @@ Tone: A sharp trader texting insights. Professional, fast, non-AI.
             ).join("\n")
           : "No existing holdings found for this account.";
 
-        const newLines = filteredPositions.length
-          ? filteredPositions.map((p) =>
+        const newLines = safeArray(filteredPositions).length
+          ? safeArray(filteredPositions).map((p) =>
               `📈 ${p.ticker}\n` +
               `• Live Price: ${fmtINR(p.live_price)}\n` +
               `• Suggested Shares: ${p.shares}\n` +
@@ -1013,7 +1156,7 @@ over aggressive short-term growth.
       if (isPortfolioConversation && input?.chatId) {
         try {
           const holdings = await getPortfolio(String(input.chatId));
-          holdings.forEach((h) => {
+          safeArray(holdings).forEach((h) => {
             if (h?.symbol) tickers.add(String(h.symbol).split(".")[0].toUpperCase());
           });
         } catch (err) {}
@@ -1039,7 +1182,7 @@ over aggressive short-term growth.
           ? `
 VERIFIED YAHOO FINANCE DATA
 (Use ONLY these values)
-${Object.entries(verifiedMarketData)
+${Object.entries(safeObject(verifiedMarketData))
   .map(([ticker, d]) =>
     `${ticker}:
 Price = ₹${d.price}
@@ -1231,13 +1374,13 @@ CRITICAL RULES:
       ? { strength: 0, bias: "NEUTRAL", message: "Sector momentum unavailable." }
       : (sectorMap[normalizeSectorKey(stockData.Sector)] || { strength: 0, bias: "NEUTRAL" });
     
-    const intelligenceSignals = generateSignals({
+    const intelligenceSignals = safeArray(generateSignals({
       roe: parseFloat(stockData.ReturnOnEquityTTM) || 0,
       revenueGrowth: parseFloat(stockData.QuarterlyRevenueGrowthYOY) || 0,
       pe: parseFloat(stockData.PERatio) || 0,
       priceAboveMA200: technical.priceAboveMA200 || false,
       volumeSpike: technical.isVolumeSpike || false
-    });
+    }));
 
     const weightedSignals = computeWeightedConfidence({
       technical,
@@ -1285,7 +1428,7 @@ CRITICAL RULES:
       adjustedConfidence += 0.4;
     }
     
-    adjustedConfidence = clamp(adjustedConfidence, 1, 10);
+    adjustedConfidence = normalizeConfidenceScore(adjustedConfidence, { assumeScale: "0_10" });
     
     if (marketStatus.isPreMarket) {
       marketNote = "⏳ Pre-market (opens soon)";
@@ -1296,11 +1439,11 @@ CRITICAL RULES:
     // CRITICAL: Adjust confidence if data is degraded but ALLOW analysis
     if (!isLive) {
       console.log(`[DEGRADED MODE] ${ticker}. Source: ${liveMarketData.priceSource}. Proceeding with caution.`);
-      adjustedConfidence = Math.min(adjustedConfidence, 6.2);
+      adjustedConfidence = Math.min(adjustedConfidence, 85);
     }
 
-    // Ensure score stays within 1-10 range
-    adjustedConfidence = clamp(adjustedConfidence, 1, 10);
+    // Ensure score stays within 0-100 range
+    adjustedConfidence = clamp(adjustedConfidence, 1, 100);
 
     // PHASE 3.5: Pre-Market Intelligence (ROI Upgrade)
     let preMarket = null;
@@ -1315,7 +1458,7 @@ CRITICAL RULES:
 
     // Adjust for Data Completeness
     if (liveMarketData.completeness === "PARTIAL") {
-      adjustedConfidence = Math.min(adjustedConfidence, 5);
+      adjustedConfidence = Math.min(adjustedConfidence, 50);
       marketNote = marketNote ? `${marketNote}\n⚠ Limited data source — confidence reduced` : "⚠ Limited data source";
     }
 
@@ -1354,18 +1497,125 @@ CRITICAL RULES:
       adxProxy: entryTiming.adxProxy
     });
 
-    finalDecision.finalDecision = tradability.recommendation === "SELL" ? "SELL" : tradability.recommendation;
-    finalDecision.recommendation = tradability.recommendation;
+    // Normalize LLM action to valid audit values
+    const _normalizeAction = (raw) => {
+      const r = String(raw || "").toUpperCase().trim();
+      if (["BUY", "SELL", "HOLD", "AVOID"].includes(r)) return r;
+      if (r.includes("BUY") || r.includes("ACCUMULATE") || r.includes("LONG")) return "BUY";
+      if (r.includes("SELL") || r.includes("EXIT") || r.includes("TRIM") || r.includes("REDUCE")) return "SELL";
+      if (r.includes("AVOID") || r.includes("WAIT") || r.includes("BLOCK") || r.includes("DEFER")) return "AVOID";
+      return "HOLD";
+    };
+    const _normalizedAction = tradability.recommendation === "SELL" ? "SELL" : _normalizeAction(tradability.recommendation);
+    finalDecision.finalDecision = _normalizedAction;
+    finalDecision.recommendation = _normalizedAction;
     finalDecision.finalConfidenceScore = tradability.confidenceScore;
     if (tradability.reasons.length > 0) {
       finalDecision.reason = `${finalDecision.reason} ${tradability.reasons.join(" ")}`.trim();
     }
     finalDecision.conviction = tradability.conviction;
+    const signal = {
+      action: finalDecision.finalDecision,
+      entry: activePrice,
+      target: parseCurrency(entryTiming.initialTarget),
+      stopLoss: parseCurrency(entryTiming.stopLoss),
+      confidence: finalDecision.finalConfidenceScore,
+      rrRatio: parseCurrency(entryTiming.rewardRiskRatio),
+      strategy: entryTiming.strategy
+    };
+    console.log("=== SIGNAL GENERATED ===");
+    console.log(JSON.stringify(signal, null, 2));
+    const _rr = parseCurrency(entryTiming.rewardRiskRatio);
+    const _conf = tradability.confidenceScore;
+    const _strongSetup = _rr >= 1.5 && _conf >= 60;
+    const _isApproved = tradability.recommendation !== "HOLD" || _strongSetup;
+    // Upgrade HOLD to BUY when setup is institutionally strong
+    if (_strongSetup && tradability.recommendation === "HOLD") {
+      tradability.recommendation = "BUY";
+      finalDecision.finalDecision = "BUY";
+      finalDecision.recommendation = "BUY";
+    }
+    const validationResult = {
+      approved: _isApproved,
+      status: _isApproved ? "APPROVED" : "REJECTED",
+      action: tradability.recommendation,
+      confidence: _conf,
+      reason: tradability.reasons.join(" ") || null,
+      holdBias: tradability.holdBias,
+      rrRatio: _rr
+    };
+    
+    // Live session telemetry log formats
+    const candidateLogStr = `symbol: ${ticker}, volumeRatio: ${technical?.volumeRatio || 0}, confidence: ${Number(finalDecision.finalConfidenceScore)}, rrRatio: ${parseCurrency(entryTiming.rewardRiskRatio) || 0}, trendStrength: ${entryTiming.trendStrength || technical?.score || 0}, momentumConfirmed: ${!!entryTiming.momentumConfirmed}, executionStatus: ${isLive ? (finalDecision.finalDecision || "HOLD") : ((finalDecision.finalDecision === "BUY" || finalDecision.finalDecision === "SELL") ? "PENDING_EXECUTION" : "HOLD")}, marketRegime: ${marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED"}`;
+
+    console.log(`[LIVE SIGNAL CANDIDATE] ${candidateLogStr}`);
+
+    if (entryTiming.momentumConfirmed) {
+      console.log(`[LIVE MOMENTUM CONFIRMED] symbol: ${ticker}`);
+    }
+    if (technical?.volumeRatio >= 1.0) {
+      console.log(`[LIVE VOLUME CONFIRMED] symbol: ${ticker}, volumeRatio: ${technical.volumeRatio}`);
+    }
+
+    console.log("=== VALIDATION RESULT ===");
+    console.log(validationResult);
+    if (validationResult.approved) {
+      console.log(`[LIVE SIGNAL APPROVED] ${candidateLogStr}`);
+      console.log("=== SIGNAL APPROVED ===");
+    } else {
+      console.log(`[LIVE SIGNAL REJECTED] ${candidateLogStr}`);
+      console.log("=== SIGNAL REJECTED ===");
+      console.log(validationResult.reason);
+      
+      // Live filter rejection stats counters
+      if (technical?.volumeRatio < 1.0) {
+        logMetric("rejected_low_volume", 1, { symbol: ticker });
+      }
+      if (parseCurrency(entryTiming.rewardRiskRatio) < 1.2) {
+        logMetric("rejected_rr", 1, { symbol: ticker });
+      }
+      if (Number(finalDecision.finalConfidenceScore) < MIN_DEPLOYABLE_CONFIDENCE) {
+        logMetric("rejected_low_confidence", 1, { symbol: ticker });
+      }
+      if (marketStatus.isMarketOpen === false) {
+        logMetric("rejected_market_regime", 1, { symbol: ticker });
+      }
+      if (!isLive) {
+        logMetric("rejected_execution_unavailable", 1, { symbol: ticker });
+      }
+    }
 
     if (tradability.holdBias) {
       entryTiming.strategy = "WAIT";
       entryTiming.entryUrgency = "LOW";
       entryTiming.finalExecutionAdvice = "No-trade preferred until payoff asymmetry and trend quality improve.";
+    }
+
+    if (!validationResult.approved) {
+      return buildRejectedSignalPacket({
+        ticker,
+        validationResult,
+        rrRatio: parseCurrency(entryTiming.rewardRiskRatio),
+        activePrice,
+        isLive,
+        liveMarketData,
+        marketNote,
+        risk,
+        finalDecision,
+        technical,
+        valuation,
+        entryTiming,
+        exitSignal,
+        news,
+        relStrength,
+        sectorData,
+        intelligenceSignals,
+        adjustedConfidence,
+        isPartialData,
+        eventRisk,
+        tradability,
+        weightedSignals
+      });
     }
 
     // PHASE 4: Strategic Allocation (Portfolio, Ranking, Capital, Rebalancing)
@@ -1376,6 +1626,8 @@ CRITICAL RULES:
 
     const ranking = await rankingAgent({
       ...stockData,
+      ticker,
+      symbol: ticker,
       confidenceScore: adjustedConfidence,
       riskScore:
         risk.riskLevel === "LOW"
@@ -1387,6 +1639,8 @@ CRITICAL RULES:
 
     const capital = await capitalAgent({
       ...stockData,
+      ticker,
+      symbol: ticker,
       priority: ranking.priority,
       confidenceScore: adjustedConfidence,
       riskLevel: risk.riskLevel
@@ -1394,6 +1648,8 @@ CRITICAL RULES:
 
     const rebalancing = await rebalancingAgent({
       ...stockData,
+      ticker,
+      symbol: ticker,
       finalDecision: finalDecision.finalDecision,
       suggestedAllocation: capital.suggestedAllocation
     });
@@ -1472,7 +1728,7 @@ CRITICAL RULES:
       rebalancer.reason = `Exit signal (${exitSignal.signal}) takes precedence over allocation maintenance.`;
 
       // Downgrade conviction to reflect high-risk exit priority
-      finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 4);
+      finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 40);
     }
 
     // Ensure consistency: If decision is SELL, exit signal must reflect it
@@ -1494,7 +1750,7 @@ CRITICAL RULES:
       positionSizing.conviction = "LOW";
       positionSizing.allocation = "0%";
       
-      finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 3);
+      finalDecision.finalConfidenceScore = Math.min(finalDecision.finalConfidenceScore, 30);
     }
 
     const exit = generateExitSignal(normalizedExitTriggers, parseCurrency(entryTiming.stopLoss));
@@ -1523,7 +1779,8 @@ CRITICAL RULES:
     );
 
     // PERSISTENCE: Log recommendation for future performance tracking
-    await logRecommendation({
+    if (!skipPerformanceLog) {
+      await logRecommendation({
       symbol: ticker,
       decision: finalDecision.finalDecision,
       confidence: finalDecision.finalConfidenceScore,
@@ -1554,15 +1811,16 @@ CRITICAL RULES:
         liveData: liveMarketData?.priceSource || null,
         overview: stockData?.source || "yahoo"
       }
-    });
+      });
+    }
 
     // AUDIT FOUNDATION: immutable recommendation audit insertion (bounded + fail-safe)
     const auditPayload = {
       symbol: ticker,
       exchange: "NSE",
       recommendationType: finalDecision.finalDecision || "HOLD",
-      action: finalDecision.finalDecision || "HOLD",
-      confidence: Number((finalDecision.finalConfidenceScore || 0) * 10),
+      action: isLive ? (finalDecision.finalDecision || "HOLD") : ((finalDecision.finalDecision === "BUY" || finalDecision.finalDecision === "SELL") ? "PENDING_EXECUTION" : "HOLD"),
+      confidence: Number(finalDecision.finalConfidenceScore || 0),
       conviction: finalDecision.conviction || "MEDIUM",
       entryPrice: activePrice,
       stopLoss: parseCurrency(entryTiming.stopLoss),
@@ -1599,6 +1857,13 @@ CRITICAL RULES:
         changePercent: liveMarketData?.changePercent || 0,
         marketNote
       },
+      marketRegimeSnapshot: {
+        volatilityRegime: technical?.volatility || "MEDIUM",
+        indexMomentum: technical?.trend || "NEUTRAL",
+        sectorBreadth: sectorData?.bias || "NEUTRAL",
+        advancingDecliningRatio: relStrength?.status || "NEUTRAL",
+        volumeParticipation: technical?.volumeRatio || 1.0
+      },
       providerMetadata: {
         liveSource: liveMarketData?.priceSource || null,
         priceField: liveMarketData?.priceField || null,
@@ -1610,22 +1875,15 @@ CRITICAL RULES:
       telegramChatId: options?.telegramChatId ? String(options.telegramChatId) : null
     };
 
-    try {
-      await Promise.race([
-        insertRecommendationAudit(auditPayload),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("recommendation audit timeout")), 2200))
-      ]);
-    } catch (auditError) {
-      logEvent("recommendation.audit.insert_failure", {
-        symbol: ticker,
-        recommendation_id: null,
-        latency_ms: null,
-        validation_status: "unknown",
-        provider_sources: auditPayload.providerMetadata,
-        confidence: auditPayload.confidence,
-        action: auditPayload.action
-      });
-      console.error(`[AUDIT ERROR] ${ticker}:`, auditError.message);
+    if (!skipAudit) {
+      try {
+        await Promise.race([
+          insertRecommendationAudit(auditPayload),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("recommendation audit timeout")), 2200))
+        ]);
+      } catch (auditError) {
+        console.error(`[AUDIT ERROR] ${ticker}:`, auditError.message);
+      }
     }
 
     // FINAL EXECUTION SAFETY CHECK
@@ -1662,10 +1920,10 @@ CRITICAL RULES:
     const confidenceEvidence = {
       status: "AVAILABLE",
       modelScale: "0_100",
-      adaptiveConfidenceScore: Number((finalDecision.finalConfidenceScore || 0) * 10),
+      adaptiveConfidenceScore: Number(finalDecision.finalConfidenceScore || 0),
       reliabilityClass:
-        (finalDecision.finalConfidenceScore || 0) >= 7 ? "HIGH" :
-        (finalDecision.finalConfidenceScore || 0) >= 5 ? "MEDIUM" : "LOW",
+        (finalDecision.finalConfidenceScore || 0) >= 70 ? "HIGH" :
+        (finalDecision.finalConfidenceScore || 0) >= 50 ? "MEDIUM" : "LOW",
       sampleSufficiency: "UNKNOWN",
       contributionMap: {
         technicalTrend: Number((weightedSignals?.components?.trendScore || 0) * 10),
@@ -1731,7 +1989,8 @@ CRITICAL RULES:
       },
       confidenceEvidence,
       institutionalEvidence,
-      action: isLive ? (finalDecision.finalDecision || "HOLD") : "Wait for market open confirmation",
+      validation: validationResult,
+      action: isLive ? (finalDecision.finalDecision || "HOLD") : ((finalDecision.finalDecision === "BUY" || finalDecision.finalDecision === "SELL") ? "PENDING_EXECUTION" : "HOLD"),
       nextStep: marketStatus.isWeekend ? "Re-evaluate on Monday after open" : 
                 (marketStatus.isPostMarket ? "Monitor tomorrow's open" : 
                 (marketStatus.isPreMarket ? "Wait for market open" : 

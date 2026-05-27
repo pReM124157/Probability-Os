@@ -47,7 +47,12 @@ export const runPortfolioMonitor = async (leaseContext = {}) => {
     try {
       leaseContext.assertLease?.();
       const { stockData } = await buildAnalysisContext(holding.symbol);
-      const result = await masterAgent(stockData, { strictValidation: true });
+      const result = await masterAgent(stockData, {
+        strictValidation: true,
+        skipAudit: true,
+        skipPerformanceLog: true,
+        context: "portfolio_monitor"
+      });
       const exitSignal = result.exitSignal || {};
       const eventRisk = result.eventRisk || {};
       

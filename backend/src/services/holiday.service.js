@@ -16,6 +16,21 @@ let holidayCache = {
   year: null,
   dates: new Set()
 };
+let holidayFallbackActive = false;
+
+function logHolidayFallback(reason = "fallback") {
+  if (!holidayFallbackActive) {
+    holidayFallbackActive = true;
+    console.warn(`[HOLIDAY] fallback activated (${reason})`);
+  }
+}
+
+function clearHolidayFallback() {
+  if (holidayFallbackActive) {
+    holidayFallbackActive = false;
+    console.log("[HOLIDAY] API recovery detected");
+  }
+}
 
 export async function fetchIndianHolidays(year) {
   try {
@@ -29,7 +44,7 @@ export async function fetchIndianHolidays(year) {
     }
     const text = await res.text();
     if (!text || !text.trim()) {
-      console.log("HOLIDAY API FAIL -> using fallback");
+      logHolidayFallback("empty_response");
       const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
       return new Set(fallbackDates);
     }
@@ -38,7 +53,7 @@ export async function fetchIndianHolidays(year) {
     try {
       data = JSON.parse(text);
     } catch (err) {
-      console.log("HOLIDAY API FAIL -> using fallback");
+      logHolidayFallback("invalid_json");
       const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
       return new Set(fallbackDates);
     }
@@ -61,12 +76,12 @@ export async function fetchIndianHolidays(year) {
       year,
       dates: finalDates
     };
+    clearHolidayFallback();
 
     return finalDates;
 
   } catch (err) {
-    console.error("HOLIDAY API ERROR:", err);
-    console.log("HOLIDAY API FAIL -> using fallback");
+    logHolidayFallback(err?.message || "request_failed");
     const fallbackDates = NSE_HOLIDAYS_FALLBACK[year] || [];
     return new Set(fallbackDates);
   }

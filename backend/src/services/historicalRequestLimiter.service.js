@@ -90,6 +90,8 @@ export function detectRepeatedProviderFailures(failures = []) {
 }
 
 export function detectProviderExhaustion(providerState = {}) {
+  // Threshold of 6 means a provider needs 6 consecutive failures before suppression.
+  // This prevents over-aggressive blacklisting from temporary timeout spikes.
   return Number(providerState?.failureScore || 0) >= 6;
 }
 
@@ -103,8 +105,10 @@ export function calculateProviderHealth(providerState = {}) {
 export function shouldSkipProvider(providerState = {}) {
   const exhausted = detectProviderExhaustion(providerState);
   const health = calculateProviderHealth(providerState);
-  return exhausted || health < 0.25;
+  // Raised skip floor from 0.25→0.2 to give providers more retries before suppression
+  return exhausted || health < 0.2;
 }
+
 
 export function logHistoricalLimiterTelemetry() {
   logEvent("historical.limiter.load", { load: calculateHistoricalLoad() });

@@ -2,14 +2,17 @@ export async function capitalAgent(stockData) {
   try {
     const {
       ticker,
+      symbol,
       priority = "LOW",
       confidenceScore = 0,
       riskLevel = "HIGH"
     } = stockData;
+    const resolvedTicker = ticker || symbol || "UNKNOWN";
+    const confidence100 = Number(confidenceScore) || 0;
 
     let allocation = 5;
 
-    if (priority === "HIGH" && confidenceScore >= 8) {
+    if (priority === "HIGH" && confidence100 >= 80) {
       allocation = 20;
     } else if (priority === "MEDIUM") {
       allocation = 10;
@@ -22,7 +25,7 @@ export async function capitalAgent(stockData) {
     allocation = Math.max(allocation, 2);
 
     return {
-      ticker,
+      ticker: resolvedTicker,
       suggestedAllocation: `${allocation}%`,
       summary: `Recommended portfolio allocation: ${allocation}%`
     };

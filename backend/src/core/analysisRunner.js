@@ -5,7 +5,7 @@ export async function runAnalysisSafe(symbol, agent) {
     if (!result) throw new Error("Empty result");
     return { ok: true, text: result };
   } catch (err) {
-    console.error("[ANALYSIS ERROR]", err);
+    console.error("[ANALYSIS ERROR FULL]", err?.message, err?.stack);
     return {
       ok: false,
       message: "⚠️ Live market data is currently unavailable.\nTry again in a few minutes."

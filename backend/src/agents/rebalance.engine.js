@@ -6,7 +6,8 @@ export function generateRebalanceAdvice(portfolio) {
     };
   }
 
-  let total = portfolio.reduce((sum, stock) => sum + stock.investedAmount, 0);
+  let total = portfolio.reduce((sum, stock) => sum + (Number(stock.investedAmount) || 0), 0);
+  const safeTotalValue = Number(total || 0);
 
   let sectorMap = {};
   let biggestStock = null;
@@ -18,7 +19,7 @@ export function generateRebalanceAdvice(portfolio) {
       sectorMap[sector] = 0;
     }
 
-    sectorMap[sector] += stock.investedAmount;
+    sectorMap[sector] += Number(stock.investedAmount) || 0;
 
     if (
       !biggestStock ||
@@ -38,34 +39,36 @@ export function generateRebalanceAdvice(portfolio) {
     }
   }
 
-  const sectorPercent = ((dominantValue / total) * 100).toFixed(2);
-  const stockPercent = (
-    (biggestStock.investedAmount / total) * 100
-  ).toFixed(2);
+  const sectorPercent = safeTotalValue > 0
+    ? Number(((dominantValue / safeTotalValue) * 100).toFixed(2))
+    : 0;
+  const stockPercent = safeTotalValue > 0
+    ? Number((((Number(biggestStock?.investedAmount) || 0) / safeTotalValue) * 100).toFixed(2))
+    : 0;
 
   let recommendation = [];
 
   if (sectorPercent > 50) {
     recommendation.push(
-      `Reduce ${dominantSector} exposure (${sectorPercent}%)`
+      `Reduce ${dominantSector} exposure (${sectorPercent.toFixed(2)}%)`
     );
   }
 
   if (stockPercent > 30) {
     recommendation.push(
-      `Trim ${biggestStock.symbol} allocation (${stockPercent}%)`
+      `Trim ${biggestStock.symbol} allocation (${stockPercent.toFixed(2)}%)`
     );
   }
 
   if (recommendation.length === 0) {
-    recommendation.push("Portfolio looks balanced");
+    recommendation.push("Allocation currently within institutional risk guardrails");
   }
 
   return {
     dominantSector,
     sectorPercent,
-    biggestStock: biggestStock.symbol,
-    stockPercent,
+    biggestStock: biggestStock?.symbol || "N/A",
+    stockPercent: stockPercent.toFixed(2),
     recommendation: recommendation.join(". ")
   };
 }

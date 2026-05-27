@@ -1,0 +1,249 @@
+{
+  "generatedAt": "2026-05-27T06:50:39.572Z",
+  "overallStatus": "BLOCKED",
+  "phases": [
+    {
+      "phase": 1,
+      "title": "Static Feature Inventory",
+      "checks": [
+        {
+          "name": "inventory_generation",
+          "status": "PASS",
+          "evidence": "node scripts/validation/generatePhase1Inventory.mjs"
+        },
+        {
+          "name": "routes_documented",
+          "status": "PASS",
+          "evidence": "routes=24"
+        },
+        {
+          "name": "schedulers_documented",
+          "status": "PASS",
+          "evidence": "schedulers=27"
+        },
+        {
+          "name": "telegram_actions_documented",
+          "status": "PASS",
+          "evidence": "telegramHandlers=9"
+        },
+        {
+          "name": "db_tables_documented",
+          "status": "PASS",
+          "evidence": "dbTables=34"
+        },
+        {
+          "name": "ai_agents_documented",
+          "status": "PASS",
+          "evidence": "agents=28"
+        },
+        {
+          "name": "env_keys_documented",
+          "status": "PASS",
+          "evidence": "envKeys=26"
+        },
+        {
+          "name": "dependency_graph_extracted",
+          "status": "PASS",
+          "evidence": "edges=393"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 2,
+      "title": "Simplest Features Validation",
+      "checks": [
+        {
+          "name": "health_endpoint_present",
+          "status": "PASS",
+          "evidence": "src/app.js"
+        },
+        {
+          "name": "request_tracing_present",
+          "status": "PASS",
+          "evidence": "src/app.js"
+        },
+        {
+          "name": "rate_limit_present",
+          "status": "PASS",
+          "evidence": "src/app.js"
+        },
+        {
+          "name": "config_loader_env_usage",
+          "status": "PASS",
+          "evidence": "src/services/supabase.service.js"
+        },
+        {
+          "name": "structured_logging_hooks",
+          "status": "PASS",
+          "evidence": "src/services/telemetry.service.js"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 3,
+      "title": "Database Validation",
+      "checks": [
+        {
+          "name": "schema_integrity_tests",
+          "status": "PASS",
+          "evidence": "migrations.integration.test.js"
+        },
+        {
+          "name": "subscription_idempotency_webhook",
+          "status": "PASS",
+          "evidence": "webhook-signature.integration.test.js"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 4,
+      "title": "Telegram System Validation",
+      "checks": [
+        {
+          "name": "telegram_delivery_integration",
+          "status": "PASS",
+          "evidence": "recommendation-delivery.integration.test.js"
+        },
+        {
+          "name": "telegram_lifecycle_notifications",
+          "status": "PASS",
+          "evidence": "pipeline.integration.test.js"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 5,
+      "title": "Market Data Validation",
+      "checks": [
+        {
+          "name": "provider_integrity_and_failover",
+          "status": "PASS",
+          "evidence": "provider-*.integration.test.js"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 6,
+      "title": "Signal Engine Validation",
+      "checks": [
+        {
+          "name": "signal_guardrails_and_formatter",
+          "status": "PASS",
+          "evidence": "scanner-formatter + elitescanner guardrail"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 7,
+      "title": "AI Decision Engine Validation",
+      "checks": [
+        {
+          "name": "ai_output_guardrails",
+          "status": "PASS",
+          "evidence": "institutional-output + audit guardrail"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 8,
+      "title": "Scanner Engine Validation",
+      "checks": [
+        {
+          "name": "universe_scan_pipeline",
+          "status": "PASS",
+          "evidence": "scanner + pipeline integration"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 9,
+      "title": "Alert Engine Validation",
+      "checks": [
+        {
+          "name": "alert_delivery_dedup",
+          "status": "PASS",
+          "evidence": "delivery + webhook idempotency"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 10,
+      "title": "Performance Validation",
+      "checks": [
+        {
+          "name": "stability_regression_suite",
+          "status": "PASS",
+          "evidence": "pipeline-regression + scheduler-lease"
+        },
+        {
+          "name": "long_duration_6h_24h_72h_7d",
+          "status": "MANUAL_REQUIRED",
+          "evidence": "Requires soak environment and profiler collection"
+        }
+      ],
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "phase": 11,
+      "title": "Financial Correctness Validation",
+      "checks": [
+        {
+          "name": "financial_correctness_suite",
+          "status": "PASS",
+          "evidence": "fundamental normalization + backtesting route tests"
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "phase": 12,
+      "title": "Adversarial System Testing",
+      "checks": [
+        {
+          "name": "malicious_input_and_outage_resilience",
+          "status": "PASS",
+          "evidence": "webhook tamper + provider outage + audit guardrail"
+        },
+        {
+          "name": "chaos_db_redis_network_partition_clock_drift",
+          "status": "MANUAL_REQUIRED",
+          "evidence": "Requires dedicated chaos harness and infra controls"
+        }
+      ],
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "phase": 13,
+      "title": "Production-Grade Institutional Validation",
+      "checks": [
+        {
+          "name": "institutional_benchmark_live_compare",
+          "status": "MANUAL_REQUIRED",
+          "evidence": "Requires live TradingView/Zerodha/pro scanner side-by-side runbook"
+        }
+      ],
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "phase": 14,
+      "title": "Final Deployment Gate",
+      "checks": [
+        {
+          "name": "deployment_gate",
+          "status": "FAIL",
+          "evidence": "One or more prior phases are FAIL/MANUAL_REQUIRED"
+        }
+      ],
+      "status": "FAIL"
+    }
+  ]
+}

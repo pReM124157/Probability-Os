@@ -1,6 +1,7 @@
-import { getCompanyOverview } from "../services/marketData.service.js";
+import { getCompanyOverview, getLiveMarketData } from "../services/marketData.service.js";
 import { safeString } from "./safety.js";
 import { logMetric } from "../services/telemetry.service.js";
+import { normalizeTickerAlias } from "./tickerAliases.js";
 
 function toTickerCandidate(input) {
   if (typeof input === "string") return safeString(input).toUpperCase();
@@ -26,7 +27,7 @@ function hasCompanyOverviewShape(input) {
 
 export function extractAnalysisTicker(input) {
   const ticker = toTickerCandidate(input);
-  return ticker.replace(/\s+/g, "");
+  return normalizeTickerAlias(ticker.replace(/\s+/g, ""));
 }
 
 export async function buildAnalysisContext(input) {
@@ -45,12 +46,24 @@ export async function buildAnalysisContext(input) {
     };
   }
 
-  const stockData = await getCompanyOverview(ticker);
+  const [stockData, liveData] = await Promise.all([
+    getCompanyOverview(ticker),
+    getLiveMarketData(`${ticker}.NS`).catch(() => null)
+  ]);
   return {
     ticker,
     stockData: {
       ...stockData,
-      Symbol: stockData?.Symbol || ticker
+      Symbol: stockData?.Symbol || ticker,
+      currentPrice: liveData?.currentPrice || liveData?.price || null,
+      isMarketOpen: liveData?.isMarketOpen || false,
+      change: liveData?.change || null,
+      volumeRatio: liveData?.volumeRatio || null,
+      rsi: liveData?.rsi || null,
+      trend: liveData?.trend || null,
+      support: liveData?.support || null,
+      resistance: liveData?.resistance || null,
+      atr: liveData?.atr || null
     }
   };
 }

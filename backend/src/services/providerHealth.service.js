@@ -53,6 +53,15 @@ export async function canUseProvider(provider) {
   }
 }
 
+export async function isProviderCoolingDown(provider) {
+  const available = await canUseProvider(provider);
+  return !available;
+}
+
+export function logProviderSkipped(provider, reason = "cooldown_active", meta = {}) {
+  logEvent("provider.skipped", { provider, reason, ...meta });
+}
+
 // ─── RECORD SUCCESS ───────────────────────────────────────────────────────────
 
 export async function recordProviderSuccess(provider) {
@@ -197,12 +206,20 @@ export async function recoverProviderHealth(provider) {
 export function resetProviderHealthForTest(provider) {
   localProviderHealth.delete(provider);
   providerStats.delete(provider);
+  // Explicitly set clean state to prevent cooldown bleeding between tests
+  localProviderHealth.set(provider, {
+    consecutiveFailures: 0,
+    cooldownUntil: null,
+    lastSuccessAt: new Date().toISOString(),
+    lastError: null
+  });
 }
 
 // ─── WITH PROVIDER GUARD ──────────────────────────────────────────────────────
 
 export async function withProviderGuard(provider, operation, options = {}) {
   const skipWhenCoolingDown = options.skipWhenCoolingDown !== false;
+  const successOnOperation = options.successOnOperation !== false;
 
   if (skipWhenCoolingDown) {
     // Try recovery first (expired cooldown)
@@ -225,7 +242,9 @@ export async function withProviderGuard(provider, operation, options = {}) {
     stats.latencyMs = Math.round((stats.latencyMs * 0.7) + ((Date.now() - started) * 0.3));
     stats.bursts = Math.max(0, stats.bursts - 1);
     providerStats.set(provider, stats);
-    await recordProviderSuccess(provider);
+    if (successOnOperation) {
+      await recordProviderSuccess(provider);
+    }
     logEvent("provider.latency", { provider, durationMs: Date.now() - startedAt });
     return result;
   } catch (error) {

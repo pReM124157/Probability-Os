@@ -189,6 +189,30 @@ export const generateInvestmentAnalysis = async (prompt) => {
   }
 };
 
+export async function callGroq(prompt, { maxTokens = 500, temperature = 0.1 } = {}) {
+  try {
+    const response = await primaryGroq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: String(prompt || "") }],
+      temperature,
+      max_tokens: maxTokens
+    });
+    return response?.choices?.[0]?.message?.content || "";
+  } catch (error) {
+    try {
+      const fallback = await backupGroq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: String(prompt || "") }],
+        temperature,
+        max_tokens: maxTokens
+      });
+      return fallback?.choices?.[0]?.message?.content || "";
+    } catch {
+      return "";
+    }
+  }
+}
+
 export async function generateStructuredJson({ prompt, schema, schemaName, maxTokens = 800 }) {
   const call = async (client, model) => {
     const startedAt = Date.now();
@@ -208,6 +232,14 @@ export async function generateStructuredJson({ prompt, schema, schemaName, maxTo
       logEvent("llm.structured.malformed_output", { schemaName, model, raw });
       throw error;
     }
+    parsed.finalConfidenceScore = Math.max(
+      1,
+      Math.min(10, Number(parsed.finalConfidenceScore) || 1)
+    );
+    parsed.rankScore = Math.max(
+      1,
+      Math.min(10, Number(parsed.rankScore) || 1)
+    );
     const validated = schema.safeParse(parsed);
     if (!validated.success) {
       logMetric("llm.structured.parse_failure", 1, { schemaName, phase: "schema_validate", model });

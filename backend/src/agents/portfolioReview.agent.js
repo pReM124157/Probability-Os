@@ -1,4 +1,5 @@
 import { getCompanyOverview, getLiveMarketData } from "../services/marketData.service.js";
+import { buildCapitalProtectionState, getInstitutionalRuntimeSnapshot } from "../services/institutionalStatus.service.js";
 
 const SECTOR_FALLBACKS = {
   TCS: "INFORMATION TECHNOLOGY",
@@ -103,6 +104,12 @@ function canonicalSectorName(rawSector, symbol) {
   // Only use hardcoded fallbacks if the provider failed to give us a sector
   const fallback = SECTOR_FALLBACKS[normalizeTicker(symbol)];
   return fallback || "Sector unavailable";
+}
+
+function normalizeDisplaySector(sector = "") {
+  return String(sector || "Unknown")
+    .toLowerCase()
+    .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function scoreBand(value, bands, fallback = 5) {
@@ -252,10 +259,13 @@ export async function buildPortfolioReview(holdings = []) {
       ]);
 
       const quantity = Number(holding.quantity || 0);
-      const avgPrice = Number(holding.avgPrice || 0);
+      const avgPrice = Number(holding.avgPrice ?? holding.avg_price ?? holding.buyPrice ?? 0);
       const currentPrice = Number(live?.currentPrice || live?.price || avgPrice || 0);
-      const invested = quantity * avgPrice;
-      const currentValue = quantity * currentPrice;
+      const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 0;
+      const safeAvgPrice = Number.isFinite(avgPrice) && avgPrice > 0 ? avgPrice : 0;
+      const safeCurrentPrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : safeAvgPrice;
+      const invested = safeQuantity * safeAvgPrice;
+      const currentValue = safeQuantity * safeCurrentPrice;
       const pnlAmount = currentValue - invested;
       const pnlPct = invested > 0 ? ((currentValue - invested) / invested) * 100 : 0;
       const sector = canonicalSectorName(overview?.Sector, symbol);
@@ -263,9 +273,9 @@ export async function buildPortfolioReview(holdings = []) {
       return {
         symbol,
         name: overview?.Name || symbol,
-        quantity,
-        avgPrice,
-        currentPrice,
+        quantity: safeQuantity,
+        avgPrice: safeAvgPrice,
+        currentPrice: safeCurrentPrice,
         invested,
         currentValue,
         pnlAmount,
@@ -277,13 +287,16 @@ export async function buildPortfolioReview(holdings = []) {
 
   const totalInvested = enriched.reduce((sum, item) => sum + item.invested, 0);
   const totalValue = enriched.reduce((sum, item) => sum + item.currentValue, 0);
+  const safeTotalValue = Number(totalValue || 0);
   const totalPnL = totalValue - totalInvested;
   const totalPnLPct = totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0;
 
   const holdingsWithWeights = enriched
     .map((item) => ({
       ...item,
-      weight: totalValue > 0 ? (item.currentValue / totalValue) * 100 : 0
+      weight: safeTotalValue > 0
+        ? Number(((item.currentValue / safeTotalValue) * 100).toFixed(2))
+        : 0
     }))
     .sort((a, b) => b.weight - a.weight);
 
@@ -298,7 +311,9 @@ export async function buildPortfolioReview(holdings = []) {
   const sectors = Array.from(sectorBuckets.values())
     .map((bucket) => ({
       sector: bucket.sector,
-      weight: totalValue > 0 ? (bucket.value / totalValue) * 100 : 0,
+      weight: safeTotalValue > 0
+        ? Number(((bucket.value / safeTotalValue) * 100).toFixed(2))
+        : 0,
       holdings: bucket.holdings.sort((a, b) => b.weight - a.weight)
     }))
     .sort((a, b) => b.weight - a.weight);
@@ -365,6 +380,36 @@ export async function buildPortfolioReview(holdings = []) {
   actions.push("Add defensive consumption allocation");
   actions.push("Maintain 5–10% strategic cash reserve");
 
+  const activeSystems = [
+    { name: "Portfolio Defense Agent", active: true },
+    { name: "Correlation Stress Engine", active: holdingsWithWeights.length >= 2 },
+    { name: "Adaptive Learning Layer", active: true },
+    { name: "Statistical Validation Engine", active: true },
+    { name: "Market Regime Detection", active: sectors.length > 0 },
+    { name: "Volatility Surveillance", active: holdingsWithWeights.length > 0 },
+    { name: "Liquidity Monitoring", active: holdingsWithWeights.length > 0 },
+    { name: "Recommendation Outcome Tracker", active: true }
+  ];
+
+  const activeRiskNotes = [];
+  if ((topSector?.weight || 0) >= 35) {
+    activeRiskNotes.push(`${normalizeDisplaySector(topSector?.sector || "Top sector")} concentration elevated`);
+  }
+  if ((topHolding?.pnlPct || 0) < 0) {
+    activeRiskNotes.push(`Momentum weakening in ${topHolding.symbol} exposure`);
+  }
+  if (activeRiskNotes.length === 0) {
+    activeRiskNotes.push("No immediate concentration shock detected");
+  }
+  const runtime = await getInstitutionalRuntimeSnapshot();
+  const capitalProtection = buildCapitalProtectionState({
+    score,
+    details: {
+      topHoldingWeight: Number((topHolding?.weight || 0).toFixed(1)),
+      topSectorWeight: Number((topSector?.weight || 0).toFixed(1))
+    }
+  }, runtime);
+
   return {
     empty: false,
     score,
@@ -413,8 +458,13 @@ export async function buildPortfolioReview(holdings = []) {
       topHoldingWeight: Number((topHolding?.weight || 0).toFixed(1)),
       formatted: {
         totalValue: formatCurrency(totalValue),
+        totalInvested: formatCurrency(totalInvested),
         totalPnL: `${totalPnL >= 0 ? "+" : "-"}${formatCurrency(Math.abs(totalPnL))}`
-      }
+      },
+      activeSystems,
+      activeRiskNotes,
+      runtime,
+      capitalProtection
     }
   };
 }

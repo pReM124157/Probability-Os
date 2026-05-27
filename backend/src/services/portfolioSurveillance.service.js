@@ -127,10 +127,33 @@ async function fetchPortfolioPositions() {
 
   if (error) {
     console.warn("[PORTFOLIO SURVEILLANCE] Failed to fetch portfolio_positions:", error.message);
+  }
+
+  if (Array.isArray(data) && data.length > 0) {
+    return data;
+  }
+
+  // Fallback for legacy portfolio records.
+  // Older portfolio flows write to `holdings`, while advanced defense reads `portfolio_positions`.
+  const { data: legacyHoldings, error: legacyError } = await supabase
+    .from("holdings")
+    .select("*");
+
+  if (legacyError) {
+    console.warn("[PORTFOLIO SURVEILLANCE] Failed to fetch fallback holdings:", legacyError.message);
     return [];
   }
 
-  return data || [];
+  return (legacyHoldings || []).map((h) => ({
+    ticker: h.ticker || h.symbol,
+    quantity: h.quantity,
+    avg_price: h.avg_price,
+    sector: h.sector || "UNKNOWN",
+    beta: h.beta || 1,
+    volatility: h.volatility || 0.18,
+    correlation_risk: h.correlation_risk || 0.35,
+    source_table: "holdings"
+  })).filter((h) => h.ticker && Number(h.quantity) > 0);
 }
 
 async function fetchHoldingTelemetry(ticker) {

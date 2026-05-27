@@ -13,6 +13,8 @@ function withTimeout(promise, timeoutMs = 8 * 60 * 1000) {
 
 async function runTrackingCycle({ traceId, onlyOpen, limit }) {
   const startedAt = Date.now();
+  console.log("=== RECOMMENDATION TRACKER RUNNING ===");
+  console.log(new Date().toISOString());
   const result = await withTimeout(syncRecommendationOutcomes({ onlyOpen, limit }));
   logEvent("scheduler.recommendation_tracking.completed", {
     traceId,

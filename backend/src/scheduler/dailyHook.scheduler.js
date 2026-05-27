@@ -5,6 +5,9 @@ import { isPro } from "../core/user.js";
 import { runMorningBriefing } from "../scanner/morningScheduler.js";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+import { getMarketStateIST } from "../utils/time.js";
+import { withSchedulerFailureIsolation } from "../utils/pipelineShape.js";
+import { recordSchedulerSuccess, recordSchedulerFailure } from "../services/telemetryAggregator.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -27,13 +30,32 @@ function isMorningBriefingEligible(user) {
 
 function buildTelegramMorningMessage(packet) {
   const reportText = packet?.report?.report || "Morning briefing unavailable.";
-  return [
-    "FinSight Pro Morning Briefing",
-    "",
-    reportText,
-    "",
-    "Educational only. Not SEBI-registered investment advice."
-  ].join("\n");
+  const marketState = getMarketStateIST();
+
+  const parts = ["FinSight Pro Morning Briefing", ""];
+
+  // Confidence state tag always present
+  parts.push(`Confidence State: [${marketState.tag}]`, "");
+
+  // Full market-closed notice when market is not live
+  if (!marketState.open) {
+    parts.push(
+      "⚠️ MARKET STATUS NOTICE",
+      "",
+      "Indian markets are currently closed.",
+      "All prices, institutional flows, volatility models, and scanner outputs are based on the latest available closing-session data and post-close processing.",
+      "",
+      "Intraday confirmations, liquidity shifts, breakout validations, and institutional participation strength can materially change after the next market open.",
+      "",
+      "Finsight AI does not execute trades automatically. All signals, watchlists, and institutional intelligence outputs are probabilistic decision-support insights and should be independently validated before taking any trading or investment action.",
+      "",
+      "Market Closed • Signals generated using latest available market data. Final trade confirmation requires live market validation after open.",
+      ""
+    );
+  }
+
+  parts.push(reportText, "", "Educational only. Not SEBI-registered investment advice.");
+  return parts.join("\n");
 }
 
 export function startDailyHook() {
@@ -43,8 +65,21 @@ export function startDailyHook() {
   cron.schedule("0 2 * * *", async () => {
     await runWithSchedulerLease("scheduler:daily_morning_briefing", async ({ traceId, assertLease }) => {
       logEvent("scheduler.daily_morning_briefing.started", { traceId });
-      const packet = await runMorningBriefing();
-      const message = buildTelegramMorningMessage(packet);
+
+      // Item 7: Full failure isolation — briefing crash never kills the scheduler
+      const packetResult = await withSchedulerFailureIsolation(
+        "daily_morning_briefing",
+        async () => runMorningBriefing(),
+        logError
+      );
+
+      if (packetResult.suppressed) {
+        recordSchedulerFailure("daily_morning_briefing", packetResult.errors?.[0]?.error || "suppressed");
+        logEvent("scheduler.daily_morning_briefing.suppressed", { traceId, status: packetResult.status });
+        return;
+      }
+
+      const message = buildTelegramMorningMessage(packetResult);
 
       const { data: users, error } = await supabase
         .from("subscribers")
@@ -71,6 +106,7 @@ export function startDailyHook() {
         }
       }
       logEvent("scheduler.daily_morning_briefing.completed", { traceId });
+      recordSchedulerSuccess("daily_morning_briefing");
     }, {
       ttlSeconds: 30 * 60
     }).catch((err) => {

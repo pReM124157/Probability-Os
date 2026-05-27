@@ -1,11 +1,12 @@
 import { Telegraf, Markup } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
-import { safeObject, safeString, safeSubstring } from "../core/safety.js";
+import { safeObject, safeString, safeSubstring, safeArray } from "../core/safety.js";
 import { parseInput } from "../core/router.js";
 import { isValidSymbol } from "../core/validator.js";
 import { isPro } from "../core/user.js";
 import { buildMessage } from "../core/messageBuilder.js";
 import { runAnalysisSafe } from "../core/analysisRunner.js";
+import { processNaturalLanguage } from "../core/agentOrchestrator.js";
 
 // Global Production Guards
 process.on("unhandledRejection", (err) => {
@@ -22,10 +23,12 @@ import {
   EXISTENCE_STATE,
   MARKET_AVAILABILITY
 } from "../core/tickerContracts.js";
-import { getLiveMarketData, getCompanyOverview } from "./marketData.service.js";
+import { getLiveMarketData, getCompanyOverview, getMarketStatusIST } from "./marketData.service.js";
 import { scannerAgent } from "../agents/scanner.agent.js";
 import { sectorScannerAgent } from "../agents/sectorScanner.agent.js";
 import { buildPortfolioReview } from "../agents/portfolioReview.agent.js";
+import { formatInstitutionalScannerReport } from "../scanner/scannerFormatter.js";
+import { validateSignal } from "../scanner/signalGuards.js";
 import {
   addHolding,
   getPortfolio,
@@ -36,10 +39,11 @@ import { createPaymentLink, cancelSubscriptionNow, cancelSubscriptionLater } fro
 import supabase from "./supabase.service.js";
 import { handleUsage } from "./usage.service.js";
 import { generateChatReply } from "./chat.service.js";
-import { formatIST } from "../utils/time.js";
+import { formatIST, getMarketStateIST } from "../utils/time.js";
 import { formatPortfolioReview } from "../core/portfolioFormatter.js";
 import { buildAnalysisContext } from "../core/analysisContext.js";
 import { parseAddCommand, parseRemoveCommand } from "./portfolioCommandParser.service.js";
+import { normalizeTickerAlias } from "../core/tickerAliases.js";
 import {
   claimEphemeralKey,
   consumeState,
@@ -67,8 +71,12 @@ import {
   buildDecisionTrace,
   computeInstitutionalFactorWeights
 } from "./institutionalInterpretation.service.js";
+import { computeCompositeScores } from "../scoring/compositeScoreEngine.js";
+import { getInstitutionalRuntimeSnapshot } from "./institutionalStatus.service.js";
+import { reconcileSubscriberEntitlement } from "./subscriptionReconciliation.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const TELEGRAM_RETRY_DELAYS_MS = [5000, 15000, 30000, 60000];
 const THROTTLE_MS = 2000; // 2s cooldown
 const ANALYZE_STATE_TTL_SECONDS = 10 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 24 * 60 * 60;
@@ -85,6 +93,105 @@ let botSupervisorTimer = null;
 let botLeaseOwner = false;
 let botLaunchInFlight = false;
 let botStartedInFallbackMode = false;
+let conflictStateActive = false;
+let botLaunchRetryTimer = null;
+let botLaunchRetryAttempts = 0;
+const telegramRuntimeState = {
+  connected: false,
+  degradedMode: true,
+  lastSuccessfulConnection: null
+};
+
+function getRetryDelayMs(attempt) {
+  const idx = Math.max(0, Math.min(attempt, TELEGRAM_RETRY_DELAYS_MS.length - 1));
+  return TELEGRAM_RETRY_DELAYS_MS[idx];
+}
+
+function setTelegramConnected() {
+  telegramRuntimeState.connected = true;
+  telegramRuntimeState.degradedMode = false;
+  telegramRuntimeState.lastSuccessfulConnection = new Date().toISOString();
+  botLaunchRetryAttempts = 0;
+  if (botLaunchRetryTimer) {
+    clearTimeout(botLaunchRetryTimer);
+    botLaunchRetryTimer = null;
+  }
+  logEvent("telegram.bot.connected", {
+    ownerId: BOT_INSTANCE_ID,
+    lastSuccessfulConnection: telegramRuntimeState.lastSuccessfulConnection
+  });
+}
+
+function setTelegramDegraded(reason = "UNKNOWN") {
+  telegramRuntimeState.connected = false;
+  telegramRuntimeState.degradedMode = true;
+  logEvent("telegram.bot.launch_failed", {
+    ownerId: BOT_INSTANCE_ID,
+    reason
+  });
+}
+
+function scheduleBotLaunchRetry(reason = "LAUNCH_FAILED") {
+  if (botLaunchRetryTimer) return;
+  const delayMs = getRetryDelayMs(botLaunchRetryAttempts);
+  logEvent("telegram.bot.retry_scheduled", {
+    ownerId: BOT_INSTANCE_ID,
+    attempt: botLaunchRetryAttempts + 1,
+    delay_ms: delayMs,
+    reason
+  });
+  botLaunchRetryTimer = setTimeout(async () => {
+    botLaunchRetryTimer = null;
+    botLaunchRetryAttempts += 1;
+    await launchBotIfNeeded("retry");
+  }, delayMs);
+}
+
+export async function verifyTelegramConnectivity(timeoutMs = 5000) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    logEvent("telegram.network.dns_failure", {
+      ownerId: BOT_INSTANCE_ID,
+      reason: "missing_bot_token"
+    });
+    return false;
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+      method: "GET",
+      signal: controller.signal
+    });
+    if (response.ok) {
+      logEvent("telegram.network.ok", { ownerId: BOT_INSTANCE_ID });
+      return true;
+    }
+    logEvent("telegram.network.dns_failure", {
+      ownerId: BOT_INSTANCE_ID,
+      reason: `http_${response.status}`
+    });
+    return false;
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (error?.name === "AbortError") {
+      logEvent("telegram.network.timeout", { ownerId: BOT_INSTANCE_ID, timeout_ms: timeoutMs });
+      return false;
+    }
+    if (message.includes("ENOTFOUND") || message.includes("getaddrinfo")) {
+      logEvent("telegram.network.dns_failure", {
+        ownerId: BOT_INSTANCE_ID,
+        reason: "dns_lookup_failed",
+        message
+      });
+      return false;
+    }
+    logError("telegram.network.dns_failure", error, { ownerId: BOT_INSTANCE_ID, reason: "network_error" });
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 async function canCall(userId) {
   try {
@@ -101,8 +208,19 @@ async function launchBotIfNeeded(mode = "lease") {
 
   botLaunchInFlight = true;
   try {
+    const networkOk = await verifyTelegramConnectivity();
+    if (!networkOk) {
+      setTelegramDegraded("network_unreachable");
+      scheduleBotLaunchRetry("network_unreachable");
+      return;
+    }
     await bot.launch();
     botStarted = true;
+    setTelegramConnected();
+    if (conflictStateActive) {
+      conflictStateActive = false;
+      logEvent("telegram.bot.conflict", { ownerId: BOT_INSTANCE_ID, mode, state: "recovered" });
+    }
     botStartedInFallbackMode = mode === "fallback";
     logEvent("telegram.bot.started", {
       ownerId: BOT_INSTANCE_ID,
@@ -110,10 +228,16 @@ async function launchBotIfNeeded(mode = "lease") {
     });
   } catch (err) {
     if (err.response && err.response.error_code === 409) {
-      logEvent("telegram.bot.conflict", { ownerId: BOT_INSTANCE_ID, mode });
+      if (!conflictStateActive) {
+        conflictStateActive = true;
+        logEvent("telegram.bot.conflict", { ownerId: BOT_INSTANCE_ID, mode, state: "entered" });
+      }
     } else {
+      conflictStateActive = false;
+      setTelegramDegraded(err?.code || "launch_error");
       logError("telegram.bot.launch_error", err, { ownerId: BOT_INSTANCE_ID, mode });
-      throw err;
+      scheduleBotLaunchRetry(err?.code || "launch_error");
+      return;
     }
   } finally {
     botLaunchInFlight = false;
@@ -288,7 +412,7 @@ async function executePortfolioBatchAdd(chatId, rawEntries = []) {
 }
 
 
-function formatAnalysis(res, symbol, stockData = {}) {
+export function formatAnalysis(res, symbol, stockData = {}, options = {}) {
   const result = safeObject(res);
   if (isVerifiedAnalysisUnavailable(result)) {
     return safeString(
@@ -310,16 +434,72 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const institutionalEvidence = safeObject(result.institutionalEvidence);
   const priceField = safeString(result.priceField || "");
 
-  let marketStatusLabel = "Closed (Last Close Data)";
+  const istMarket = getMarketStateIST();
+  let marketStatusLabel = istMarket.open ? "Open (IST Session)" : "Closed (IST Session)";
   if (priceField === "postMarketPrice") marketStatusLabel = "Closed (Post-Market Live Data)";
   else if (priceField === "preMarketPrice") marketStatusLabel = "Pre-Market (Live Discovery)";
   else if (result.isMarketOpen) marketStatusLabel = "Open (Live Data)";
-  else if (priceField === "regularMarketPrice" || priceField === "currentPrice") marketStatusLabel = "Closed (Latest Regular Session Price)";
+  else if (istMarket.open && (priceField === "regularMarketPrice" || priceField === "currentPrice")) marketStatusLabel = "Open (Live Data)";
+  else if (!istMarket.open && (priceField === "regularMarketPrice" || priceField === "currentPrice")) marketStatusLabel = "Closed (Latest Regular Session Price)";
 
-  const price = Number(result.currentPrice || entryTiming.currentPrice || 0);
+  const stockDataPrice = Number(
+    stockData?.currentPrice ||
+    stockData?.CurrentPrice ||
+    stockData?.previousClose ||
+    stockData?.PreviousClose ||
+    stockData?.regularMarketPreviousClose ||
+    stockData?.RegularMarketPreviousClose ||
+    0
+  );
+  const previousCloseFallback = Number(
+    result?.previousClose ||
+    result?.marketData?.previousClose ||
+    result?.marketData?.regularMarketPreviousClose ||
+    result?.technical?.previousClose ||
+    result?.technical?.regularMarketPreviousClose ||
+    0
+  );
+  const technicalPriceFallback = Number(
+    result?.technical?.currentPrice ||
+    result?.technical?.close ||
+    0
+  );
+  const livePrice = Number(
+    result.currentPrice ||
+    entryTiming.currentPrice ||
+    technicalPriceFallback ||
+    0
+  );
+  const previousClose = Number(
+    previousCloseFallback ||
+    stockDataPrice ||
+    0
+  );
+  const marketOpen = Boolean(result.isMarketOpen || istMarket.open);
+  // Always fall back to previous close if live price is unavailable.
+  // This prevents "price missing" regressions while still labeling data quality via marketStatusLabel.
+  const price = livePrice || previousClose;
   const priceChange = Number(technical.priceChangePercent || technical.changePercent || 0);
-  const priceText = price > 0 ? `₹${price}` : "Price discovery in progress";
+  const hasVerifiedPrice = price > 0;
+  const executionLive = Boolean(
+    result.isLive ||
+    (hasVerifiedPrice && (
+      result.isMarketOpen ||
+      marketStatusLabel.includes("Open (Live Data)") ||
+      priceField === "regularMarketPrice" ||
+      priceField === "currentPrice"
+    ))
+  );
+  if (!marketOpen) {
+    marketStatusLabel = "Closed (Last Close Data)";
+  } else if (marketOpen && livePrice <= 0 && previousClose > 0) {
+    marketStatusLabel = "Open (Last Close Fallback — Live Feed Delayed)";
+  } else if (istMarket.open && !hasVerifiedPrice) {
+    marketStatusLabel = "Open (Feed Degraded — Live Price Unavailable)";
+  }
+  const priceText = hasVerifiedPrice ? `₹${price}` : "Unavailable (no verified market price)";
 
+  const referencePrice = price > 0 ? price : stockDataPrice;
   const normalized = {
     verdict: safeString(result.direction || result.action || result?.decision?.finalDecision || "HOLD"),
     asset: safeString(symbol || "UNKNOWN"),
@@ -331,8 +511,8 @@ function formatAnalysis(res, symbol, stockData = {}) {
     momentum: smartFallback("momentum", safeString(technical.momentum || technical.signal), { priceChange }),
     volume: safeString(technical.volumeTrend || (technical.isVolumeSpike ? "Spike" : "Normal")),
     entryZone: safeString(entryTiming.idealEntryZone || "Watch opening range"),
-    stopLoss: safeString(entryTiming.stopLoss || (price ? `₹${Math.round(price * 0.96)}` : "Dynamic by volatility")),
-    target: safeString(entryTiming.initialTarget || (price ? `₹${Math.round(price * 1.06)}` : "Trend continuation target")),
+    stopLoss: safeString(entryTiming.stopLoss || (referencePrice ? `₹${Math.round(referencePrice * 0.96)}` : "Unavailable pending verified price")),
+    target: safeString(entryTiming.initialTarget || (referencePrice ? `₹${Math.round(referencePrice * 1.06)}` : "Unavailable pending verified price")),
     tradeAction: sanitizeInstitutionalAction(entryTiming.finalExecutionAdvice),
     pe: stockData.PERatio ?? null,
     roe: stockData.ReturnOnEquityTTM ?? null,
@@ -355,8 +535,22 @@ function formatAnalysis(res, symbol, stockData = {}) {
 
   const adaptiveScore = Number(normalized.confidenceEvidence?.adaptiveConfidenceScore);
   const warnings = Array.isArray(normalized.confidenceEvidence?.warnings) ? normalized.confidenceEvidence.warnings : [];
-  const penalties = safeObject(normalized.confidenceEvidence?.penalties);
-  const contributions = safeObject(normalized.confidenceEvidence?.contributionMap);
+  const penalties = {
+    partialDataPenalty: 0,
+    degradedExecutionPenalty: 0,
+    eventRiskPenalty: 0,
+    ...safeObject(normalized.confidenceEvidence?.penalties)
+  };
+  const contributions = {
+    technicalTrend: 0,
+    technicalMomentum: 0,
+    volumeConfirmation: 0,
+    sectorAlignment: 0,
+    relativeStrength: 0,
+    fundamentalQuality: 0,
+    dataQuality: 0,
+    ...safeObject(normalized.confidenceEvidence?.contributionMap)
+  };
   const noTrade = normalized.verdict.toUpperCase().includes("HOLD") || safeString(normalized.tradeAction).toUpperCase().includes("WAIT");
   const replayStatus = safeString(normalized.institutionalEvidence?.replay?.status || "INSUFFICIENT_REPLAY_DEPTH");
   const calibrationStatus = safeString(normalized.institutionalEvidence?.calibration?.status || "INSUFFICIENT_DATA");
@@ -365,10 +559,9 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const marketRegime = safeObject(normalized.institutionalEvidence?.marketRegime);
 
   // Conviction class
-  const conviction = classifyInstitutionalConfidence(adaptiveScore);
-  const confidenceDisplay = Number.isFinite(adaptiveScore)
-    ? `${Math.round(adaptiveScore)}/100 — ${conviction.label}`
-    : "UNRELIABLE — NON-DEPLOYABLE";
+  let confidenceDisplay = Number.isFinite(adaptiveScore)
+    ? `${Math.round(adaptiveScore)}/100 — ${classifyInstitutionalConfidence(adaptiveScore).label}`
+    : "N/A — CONDITIONAL (confidence evidence unavailable)";
 
   // Institutional fundamental narrative
   const fundNarrative = buildInstitutionalFundamentalNarrative({
@@ -386,32 +579,37 @@ function formatAnalysis(res, symbol, stockData = {}) {
     technicalTrend: contributions.technicalTrend ?? 0, technicalMomentum: contributions.technicalMomentum ?? 0,
     volumeConfirmation: contributions.volumeConfirmation ?? 0, sectorAlignment: contributions.sectorAlignment ?? 0,
     relativeStrength: contributions.relativeStrength ?? 0,
-    adaptiveScore, replayStatus, calibrationStatus, driftStatus
+    adaptiveScore, replayStatus, calibrationStatus, driftStatus,
+    trendLabel: normalized.trend,
+    momentumLabel: normalized.momentum,
+    volumeLabel: normalized.volume,
+    relativeStrengthLabel: normalized.relStrength,
+    entryStrategy: entryTiming.strategy
   });
 
   // Evidence constraint — ONE compressed paragraph, no repeated spam
   const evidenceConstraint = buildEvidenceConstraintSummary({ replayStatus, calibrationStatus, driftStatus, benchmarkStatus });
 
   // Governance gate
-  const governance = buildGovernanceExplanation({
-    replayStatus, adaptiveScore, isLive: result.isLive,
+  let governance = buildGovernanceExplanation({
+    replayStatus, adaptiveScore, isLive: executionLive,
     tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS"),
     eventRisk: warnings.includes("EVENT_RISK_OVERRIDE") ? "HIGH" : "LOW",
     calibrationStatus
   });
 
   // Decision trace — every conclusion traced to an engine
-  const decisionTrace = buildDecisionTrace({
+  let decisionTrace = buildDecisionTrace({
     replayStatus, adaptiveScore, technicalTrend: normalized.trend,
     fundamentalScore: fundNarrative.quality_summary.score,
-    calibrationStatus, isLive: result.isLive,
+    calibrationStatus, isLive: executionLive,
     tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS")
   });
 
   const activationIf = [
     normalized.bullishScenario !== "-" ? normalized.bullishScenario : null,
     normalized.keyTrigger !== "-" ? normalized.keyTrigger : null,
-    Number.isFinite(adaptiveScore) ? `Adaptive confidence ≥ 55/100 (currently ${Math.round(adaptiveScore)}/100)` : "Statistical evidence becomes sufficient"
+    Number.isFinite(adaptiveScore) ? `Raw signal confidence observed at ${Math.round(adaptiveScore)}/100` : "Statistical evidence becomes sufficient"
   ].filter(Boolean).slice(0, 3);
 
   const qs = fundNarrative.quality_summary;
@@ -421,7 +619,9 @@ function formatAnalysis(res, symbol, stockData = {}) {
   const bs = fundNarrative.balance_sheet_summary;
   const balanceLines = [
     `  • ${bs.institutional_interpretation}`,
-    bs.stress ? "  • Leverage stress indicators active" : "  • No leverage stress detected"
+    String(bs.leverage_quality || "").toUpperCase() === "UNKNOWN"
+      ? "  • Leverage stress: Not assessed due to unavailable balance sheet data"
+      : (bs.stress ? "  • Leverage stress indicators active" : "  • No leverage stress detected")
   ].join("\n");
 
   const gr = fundNarrative.growth_summary;
@@ -431,62 +631,194 @@ function formatAnalysis(res, symbol, stockData = {}) {
 
   const vs = fundNarrative.valuation_summary;
   const fb = factorModel.factor_breakdown;
+  const governanceBlocked = Boolean(governance?.blocked);
+  const growthDataUnavailable = !Number.isFinite(Number(normalized.revenueGrowth)) && !Number.isFinite(Number(normalized.earningsGrowth));
+  const fundamentalCoverage = Number(factorModel?.data_coverage?.fundamentals || 0);
+  const hasFundamentalCoverage = fundamentalCoverage >= 50;
+  const composite = computeCompositeScores({
+    factorBreakdown: fb,
+    marketOpen,
+    marketRegimeState: marketRegime.state,
+    replayStatus,
+    governanceBlocked
+  });
+  const technicalSetupScore = composite.technicalSetupScore;
+  const analyticalScore = composite.analyticalScore;
+  const executionReadiness = composite.executionReadiness;
+  const deploymentBlocked = composite.deploymentBlocked;
+  const confidenceClass =
+    analyticalScore >= 75
+      ? "HIGH"
+      : analyticalScore >= 55
+      ? "MODERATE"
+      : "LOW";
+  const deploymentState = deploymentBlocked ? "BLOCKED" : "READY";
+  const conviction = classifyInstitutionalConfidence(analyticalScore);
+  const convictionLabel = conviction.label === "NON-DEPLOYABLE"
+    ? "CONDITIONAL — DEPLOYMENT RESTRICTED"
+    : conviction.label;
+  confidenceDisplay = `${Math.round(analyticalScore)}/100 — ${convictionLabel}`;
+
+  // Rebuild user-facing governance/trace with final public conviction, not raw signal confidence.
+  governance = buildGovernanceExplanation({
+    replayStatus,
+    adaptiveScore: analyticalScore,
+    isLive: executionLive,
+    tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS"),
+    eventRisk: warnings.includes("EVENT_RISK_OVERRIDE") ? "HIGH" : "LOW",
+    calibrationStatus
+  });
+
+  decisionTrace = buildDecisionTrace({
+    replayStatus,
+    adaptiveScore: analyticalScore,
+    technicalTrend: normalized.trend,
+    fundamentalScore: fundNarrative.quality_summary.score,
+    calibrationStatus,
+    isLive: executionLive,
+    tradabilityHold: warnings.includes("TRADABILITY_HOLD_BIAS")
+  });
+  const renderNoZero = false;
+  const fmtScore = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "N/A";
+    if (renderNoZero && n <= 0) return "N/A";
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  };
+  const fmtContribution = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "N/A";
+    if (renderNoZero && n <= 0) return "N/A";
+    return String(n);
+  };
+  const rawVerdict = safeString(normalized.verdict).toUpperCase();
+  const longTermLanguage = rawVerdict.includes("LONG-TERM") || rawVerdict.includes("LONG TERM") || rawVerdict.includes("INVEST");
+  const weakFundamentalWeight = fb.fundamentals < 10;
+  let governedVerdict = deploymentBlocked
+    ? "WAIT"
+    : (longTermLanguage && weakFundamentalWeight
+      ? "CONDITIONAL LONG BIAS — WAIT FOR CONFIRMATION"
+      : normalized.verdict);
+  if (growthDataUnavailable && /REVENUE GROWTH TURNAROUND/i.test(governedVerdict)) {
+    governedVerdict = "WATCHLIST ONLY — WAIT FOR FUNDAMENTAL AND EXECUTION CONFIRMATION";
+  }
+  const decisionBasis = deploymentBlocked
+    ? (analyticalScore < 55
+      ? "Accumulation requires final conviction recovery above 55, plus trigger and volume confirmation."
+      : `Accumulation requires trigger confirmation above ${normalized.resistance} with volume; reliability/calibration gates still prevent full deployment.`)
+    : normalized.tradeAction;
+  const deploymentStatus = deploymentBlocked ? "Blocked for full deployment" : "Ready for conditional deployment";
+  const confidenceGatePassed = analyticalScore >= 55;
+  const reliabilityGatePassed = replayStatus === "AVAILABLE";
+  const calibrationGatePassed = calibrationStatus === "AVAILABLE";
+  // Default to full dossier unless a caller explicitly requests short mode.
+  console.log("[DOSSIER MODE DEBUG]", {
+    symbol,
+    optionsMode: options?.mode,
+    shortModeCandidate: options?.mode === "short"
+  });
+  const shortMode = options?.mode === "short";
+  const blockers = [
+    ...(safeArray(governance?.reasons)),
+    ...factorModel.negative_drivers
+  ].slice(0, 4);
+  const primaryReason = blockers[0] || "No material blockers identified";
+
+  if (shortMode) {
+    return `
+*FINSIGHT AI — SHORT DOSSIER*
+━━━━━━━━━━━━━━━━━━
+• Renderer: v2.1
+• Asset: ${normalized.asset}
+• Verdict: ${governedVerdict}
+• Conviction: ${confidenceDisplay}
+• Watchlist Positioning: Allowed | Capital Deployment: ${deploymentBlocked ? "Blocked" : "Ready"}
+• Reason: ${primaryReason}
+• Trigger: ${normalized.keyTrigger}
+• Stop Loss / Target: ${normalized.stopLoss} / ${normalized.target}
+• Main Blockers:
+${blockers.length ? blockers.map((b) => `  • ${b}`).join("\n") : "  • None"}
+━━━━━━━━━━━━━━━━━━
+⚠️ Educational use only. Not financial advice.`.trim();
+  }
+  const plainEnglishSummary = deploymentBlocked
+    ? `${normalized.asset} is showing a possible setup, but full deployment is blocked until execution and reliability gates pass.${hasVerifiedPrice ? "" : " Verified price feed is currently unavailable."}`
+    : (noTrade
+    ? `${normalized.asset} is not an active trade yet. Execution is blocked until live confirmation conditions are met.`
+    : `${normalized.asset} has a tradable setup, but deployment remains conditional on risk and execution checks.`);
 
   return `
 *FINSIGHT AI — INSTITUTIONAL DECISION DOSSIER*
 ━━━━━━━━━━━━━━━━━━
+• Renderer: v2.1
 *1) Executive Decision*
 • Asset: ${normalized.asset}
 • Current Price: ${priceText}
 • Market State: ${normalized.marketStatus}
-• System Verdict: ${normalized.verdict}
-• Conviction Class: ${confidenceDisplay}
-• Decision Basis: ${normalized.tradeAction}
+  • System Verdict: ${governedVerdict}
+  • Conviction Class: ${confidenceDisplay}
+  • Watchlist Positioning: Allowed | Capital Deployment: ${deploymentBlocked ? "Blocked" : "Ready"}
+  • Plain-English Summary: ${plainEnglishSummary}
+  • Decision Basis: ${decisionBasis}
 ━━━━━━━━━━━━━━━━━━
 *2) Evidence Reliability*
 ${evidenceConstraint}
 • Regime: ${marketRegime.state || "UNKNOWN"} | Sector Bias: ${marketRegime.sectorBias || normalized.sectorBias} | Rel. Strength: ${marketRegime.relativeStrength || normalized.relStrength}
 ━━━━━━━━━━━━━━━━━━
 *3) Trade Activation Conditions*
-${noTrade ? "• Active Positioning: Deferred under institutional execution controls." : "• Active Positioning: Conditionally allowed under governance constraints."}
+• Watchlist Positioning: Allowed
+• Capital Deployment: ${deploymentBlocked ? "Blocked for full deployment" : "Ready"}
+• Final Conviction Gate: ${confidenceGatePassed ? `Passed — ${analyticalScore}/100 above 55` : `Failed — ${analyticalScore}/100 below 55`}
+• Reliability Gate: ${reliabilityGatePassed ? "Passed" : "Failed"}
+• Calibration Gate: ${calibrationGatePassed ? "Passed" : "Failed"}
 • Activation Triggers:
 ${activationIf.map((x) => `  • ${x}`).join("\n")}
 • Stop Loss: ${normalized.stopLoss} | Target: ${normalized.target}
 ━━━━━━━━━━━━━━━━━━
 *4) Weighted Factor Model*
-  • Fundamentals: ${fb.fundamentals}/35 | Technicals: ${fb.technicals}/30
-  • Execution: ${fb.execution}/20 | Intelligence: ${fb.intelligence.toFixed(1)}/15
-  • Total Factor Score: ${fb.total}/100
+  • Fundamental Weighted Contribution: ${fmtScore(fb.fundamentals)}/35 | Technical Weighted Contribution: ${fmtScore(fb.technicals)}/30
+  • Execution: ${fmtScore(fb.execution)}/20 | Reliability/Backtest Layer: ${fmtScore(fb.intelligence)}/15
+  • Institutional Completeness Score: ${fmtScore(fb.total)}/100
+  • Technical Setup Score: ${fmtScore(technicalSetupScore)}/100
+  • Execution Readiness: ${fmtScore(executionReadiness)}/100 | Final Conviction: ${fmtScore(analyticalScore)}/100 — ${confidenceClass} Confidence
+  • Confidence Class: ${confidenceClass} | Deployment State: ${deploymentState}
 ${factorModel.positive_drivers.length ? factorModel.positive_drivers.map((d) => `  ✓ ${d}`).join("\n") : "  ✓ No dominant positive factors"}
 ${factorModel.negative_drivers.length ? factorModel.negative_drivers.map((d) => `  ✗ ${d}`).join("\n") : "  ✗ No material constraint factors"}
 ━━━━━━━━━━━━━━━━━━
-*5) Adaptive Confidence Attribution*
-• Contribution — Technical Trend: ${contributions.technicalTrend ?? "—"} | Momentum: ${contributions.technicalMomentum ?? "—"}
-• Contribution — Sector Alignment: ${contributions.sectorAlignment ?? "—"} | Rel. Strength: ${contributions.relativeStrength ?? "—"}
-• Contribution — Fundamental Quality: ${contributions.fundamentalQuality ?? "—"} | Data Quality: ${contributions.dataQuality ?? "—"}
-• Penalty — Partial Data: ${penalties.partialDataPenalty ?? 0} | Degraded Exec: ${penalties.degradedExecutionPenalty ?? 0} | Event Risk: ${penalties.eventRiskPenalty ?? 0}
+*5) Signal Attribution*
+• Contribution — Technical Trend: ${fmtContribution(contributions.technicalTrend)} | Momentum: ${fmtContribution(contributions.technicalMomentum)}
+• Contribution — Sector Alignment: ${fmtContribution(contributions.sectorAlignment)} | Rel. Strength: ${fmtContribution(contributions.relativeStrength)}
+• Contribution — Fundamental Quality: ${hasFundamentalCoverage ? fmtContribution(contributions.fundamentalQuality) : "Excluded — insufficient validated data"} | Data Quality: ${hasFundamentalCoverage ? fmtContribution(contributions.dataQuality) : `${fmtContribution(contributions.dataQuality)} — technical/live data only`}
+• Penalty — Partial Data: ${fmtContribution(penalties.partialDataPenalty)} | Degraded Exec: ${fmtContribution(penalties.degradedExecutionPenalty)} | Event Risk: ${fmtContribution(penalties.eventRiskPenalty)}
 ━━━━━━━━━━━━━━━━━━
 *6) Institutional Fundamental Intelligence*
-• Fundamental Quality Score: ${qs.score}/100 — ${qs.bias}
-• Institutional Bias: ${qs.class}
+• Fundamental Data Coverage: ${fundamentalCoverage}%
+${!hasFundamentalCoverage
+  ? "• Fundamental Score: Excluded from conviction due to insufficient validated data"
+  : `• Fundamental Quality Score: ${qs.score}/100 — ${qs.bias}\n• Institutional Bias: ${qs.class}`}
 Quality Layer
-${qualityLines}
+${!hasFundamentalCoverage ? "  • Fundamental metrics unavailable or stale for this session window" : qualityLines}
 Balance Sheet Layer
-${balanceLines}
+${String(bs.leverage_quality || "").toUpperCase() === "UNKNOWN"
+  ? "  • Leverage stress: Not assessed due to unavailable balance sheet data"
+  : (!hasFundamentalCoverage ? "  • Debt and leverage interpretation deferred until validated data refresh" : balanceLines)}
 Growth Layer
-${growthLines}
+${!hasFundamentalCoverage ? "  • Growth interpretation deferred until validated data refresh" : growthLines}
 Valuation Layer
-  • ${vs.label || "Valuation data unavailable"}
+  • ${!hasFundamentalCoverage ? "Valuation interpretation deferred due to incomplete data coverage" : (vs.label || "Valuation data unavailable")}
 Net Institutional Interpretation
-  ${fundNarrative.institutional_conclusion}
+  ${!hasFundamentalCoverage
+    ? "Fundamental layer excluded from conviction scoring for this run to prevent misleading inferences from missing data."
+    : fundNarrative.institutional_conclusion}
 ━━━━━━━━━━━━━━━━━━
 *7) Decision Trace*
 ${decisionTrace.map((t) => `• ${t}`).join("\n") || "• Trace data unavailable"}
 ━━━━━━━━━━━━━━━━━━
 *8) Governance & Deployment Gate*
 ${governance ? governance.formatted : "• No active deployment blocks — conditions conditionally satisfied"}
+• Deployment Status: ${deploymentStatus}
 • Risk Controls: Stop Loss ${normalized.stopLoss} | Target ${normalized.target}
-• Capital Protection State: ${noTrade ? "DEFENSIVE" : "CONDITIONAL_DEPLOYMENT"}
+• Capital Protection State: ${deploymentBlocked ? "DEFENSIVE / WATCHLIST_ONLY" : "CONDITIONAL_DEPLOYMENT"}
 ━━━━━━━━━━━━━━━━━━
 *9) Technical Regime*
 • Trend: ${normalized.trend} | Momentum: ${normalized.momentum} | Volume: ${normalized.volume}
@@ -494,7 +826,7 @@ ${governance ? governance.formatted : "• No active deployment blocks — condi
 • Entry Zone: ${normalized.entryZone}
 ━━━━━━━━━━━━━━━━━━
 *10) Final Institutional Verdict*
-• Recommendation: ${normalized.verdict}
+• Recommendation: ${governedVerdict}
 • Conviction: ${confidenceDisplay}
 • News Sentiment: ${normalized.sentiment}
 ━━━━━━━━━━━━━━━━━━
@@ -505,7 +837,39 @@ ${governance ? governance.formatted : "• No active deployment blocks — condi
 // ANALYSIS HELPERS
 // ─────────────────────────────────────────────
 
-async function performAnalysis(chatId, symbol, footer = "") {
+
+async function sendTelegramLongMessage(chatId, text, options = {}) {
+  const maxLen = 3800;
+  const raw = String(text || "");
+
+  if (raw.length <= maxLen) {
+    await bot.telegram.sendMessage(chatId, raw, options);
+    return;
+  }
+
+  const parts = [];
+  let remaining = raw;
+
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf("\n━━━━━━━━━━━━━━━━━━", maxLen);
+    if (cut < 1000) cut = remaining.lastIndexOf("\n\n", maxLen);
+    if (cut < 1000) cut = remaining.lastIndexOf("\n", maxLen);
+    if (cut < 1000) cut = maxLen;
+
+    parts.push(remaining.slice(0, cut).trim());
+    remaining = remaining.slice(cut).trim();
+  }
+
+  if (remaining) parts.push(remaining);
+
+  for (let i = 0; i < parts.length; i++) {
+    const prefix = parts.length > 1 ? `Part ${i + 1}/${parts.length}\n` : "";
+    await bot.telegram.sendMessage(chatId, prefix + parts[i], options);
+  }
+}
+
+
+async function performAnalysis(chatId, symbol, footer = "", options = {}) {
   await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
   console.log("[ANALYZE]", { symbol });
 
@@ -518,7 +882,7 @@ async function performAnalysis(chatId, symbol, footer = "") {
       console.log("[GLOBAL GUARD] No data at all for", sym);
       throw new Error("DATA_UNAVAILABLE");
     }
-    return formatAnalysis(data, sym, stockData);
+    return formatAnalysis(data, sym, stockData, options);
   });
 
   if (!result.ok) {
@@ -532,11 +896,18 @@ async function performAnalysis(chatId, symbol, footer = "") {
   let finalMessage = result.text;
   if (footer) finalMessage += `\n\n${footer}`;
 
-  await bot.telegram.sendMessage(chatId, finalMessage);
+  await sendTelegramLongMessage(chatId, finalMessage);
 }
 
 async function sendSubscriptionLink(chatId) {
-  const { url } = await createPaymentLink(chatId.toString());
+  const { url, alreadyActive } = await createPaymentLink(chatId.toString());
+  if (alreadyActive) {
+    await bot.telegram.sendMessage(
+      chatId,
+      "💎 Your FinSight Pro subscription is already active. Use /status to view renewal details or /cancel to manage it."
+    );
+    return;
+  }
   await bot.telegram.sendMessage(
     chatId,
     `💎 Unlock FinSight Pro
@@ -630,16 +1001,18 @@ bot.command('status', async (ctx) => {
   const chatId = ctx.chat.id.toString();
   const { data } = await supabase
     .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end, plan, razorpay_subscription_id')
+    .select('status, expires_at, cancel_at_period_end, plan, is_pro, subscription_end, razorpay_subscription_id')
     .eq('telegram_chat_id', chatId)
     .maybeSingle();
 
+  const reconciledData = await reconcileSubscriberEntitlement(chatId, data);
+
   const now = new Date();
   const isActive =
-    (data?.status === 'active' || data?.status === 'grace') &&
-    (data.expires_at && new Date(data.expires_at) > now);
+    (reconciledData?.status === 'active' || reconciledData?.status === 'grace') &&
+    (reconciledData.expires_at && new Date(reconciledData.expires_at) > now);
 
-  if (!data || !isActive) {
+  if (!reconciledData || !isActive) {
     return ctx.reply(
       `🆓 *Free Plan*\n\n` +
       `You don't have an active Pro subscription.\n\n` +
@@ -648,7 +1021,7 @@ bot.command('status', async (ctx) => {
     );
   }
 
-  if (data.status === 'grace') {
+  if (reconciledData.status === 'grace') {
     return ctx.reply(
       `⚠️ *Payment Failed*\n\n` +
       `Your subscription is in a 48-hour grace period.\n` +
@@ -658,26 +1031,26 @@ bot.command('status', async (ctx) => {
     );
   }
 
-  const expiryDate = data.expires_at
-    ? formatIST(data.expires_at)
+  const expiryDate = reconciledData.expires_at
+    ? formatIST(reconciledData.expires_at)
     : 'Not set';
 
   let expiryText = `Expires: ${expiryDate}`;
-  let autoRenewText = `Auto-renew: ${data.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}`;
+  let autoRenewText = `Auto-renew: ${reconciledData.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}`;
   
-  if (data.razorpay_subscription_id && !data.cancel_at_period_end) {
+  if (reconciledData.razorpay_subscription_id && !reconciledData.cancel_at_period_end) {
     expiryText = `Renews on: ${expiryDate}`;
     autoRenewText = `Auto-renew: ✅ On`;
-  } else if (data.razorpay_subscription_id) {
+  } else if (reconciledData.razorpay_subscription_id) {
     expiryText = `Expires on: ${expiryDate}`;
     autoRenewText = `Auto-renew: ❌ Off`;
   }
 
-  const subIdText = data.razorpay_subscription_id ? `Sub ID: \`${data.razorpay_subscription_id}\`\n` : '';
+  const subIdText = reconciledData.razorpay_subscription_id ? `Sub ID: \`${reconciledData.razorpay_subscription_id}\`\n` : '';
 
   return ctx.reply(
     `💎 *Pro Active*\n\n` +
-    `Plan: ${data.plan || 'Pro'}\n` +
+    `Plan: ${reconciledData.plan || 'Pro'}\n` +
     `${expiryText}\n` +
     `${autoRenewText}\n` +
     `${subIdText}\n` +
@@ -706,14 +1079,23 @@ bot.action('cancel_now', async (ctx) => {
     }
   }
 
-  await supabase
+  const { error: cancelUpdateError } = await supabase
     .from('subscribers')
     .update({
+      is_pro: false,
       status: 'cancelled',
       plan: 'FREE',
-      cancelled_at: new Date().toISOString()
+      expires_at: null,
+      subscription_end: null,
+      cancel_at_period_end: false
     })
     .eq('telegram_chat_id', chatId);
+
+  if (cancelUpdateError) {
+    console.error('Supabase cancel update error:', cancelUpdateError.message);
+    await ctx.answerCbQuery('Cancellation could not be saved.');
+    return ctx.reply('⚠️ Cancellation was requested, but we could not update your subscription state. Please try again.');
+  }
   
   await ctx.answerCbQuery('Subscription cancelled immediately.');
   return ctx.reply('❌ *Subscription Cancelled*\n\nYou are now on the free plan.', { parse_mode: 'Markdown' });
@@ -765,9 +1147,11 @@ bot.on("text", async (ctx) => {
     // ── Single DB fetch ─────────────────────────────────────────────
     let { data: user } = await supabase
       .from("subscribers")
-      .select("plan, is_pro, subscription_end, status, expires_at")
+      .select("plan, is_pro, subscription_end, status, expires_at, cancel_at_period_end, razorpay_subscription_id, last_payment_at")
       .eq("telegram_chat_id", chatId)
       .maybeSingle();
+
+    user = await reconcileSubscriberEntitlement(chatId, user);
 
     const effectiveExpiry = user?.expires_at || user?.subscription_end || null;
     // Add a 5-minute buffer to expiry checks to prevent race conditions
@@ -996,17 +1380,51 @@ bot.on("text", async (ctx) => {
     if (text.trim().startsWith("/portfolio")) {
       console.log("[PORTFOLIO COMMAND ROUTED]", "portfolio");
       try {
+        const isDetailed = /\/portfolio\s+detailed/i.test(text.trim());
         const dbHoldings = await getPortfolio(chatId);
         if (!dbHoldings?.length) {
           await bot.telegram.sendMessage(chatId, "Your portfolio is empty.\nUse /add to add holdings.");
           return;
         }
         const review = await buildPortfolioReview(dbHoldings);
-        const msg = formatPortfolioReview(review);
+        const msg = formatPortfolioReview(review, { detailed: isDetailed });
         await bot.telegram.sendMessage(chatId, msg);
       } catch (err) {
         console.error("[PORTFOLIO ERROR]", err);
         await bot.telegram.sendMessage(chatId, "⚠️ Unable to fetch portfolio right now.");
+      }
+      return;
+    }
+
+    if (text.trim().startsWith("/systems")) {
+      try {
+        const runtime = await getInstitutionalRuntimeSnapshot();
+        const lines = [];
+        lines.push("🛰 FINSIGHT — INSTITUTIONAL OPERATIONS COMMAND CENTER");
+        lines.push("━━━━━━━━━━━━━━━━━━");
+        lines.push(`⚙ Infrastructure Status: ${runtime?.queue?.runtimeState || "UNKNOWN"}`);
+        lines.push(`📡 Market State: ${runtime?.marketInfra?.marketState || "UNKNOWN"}`);
+        lines.push(`🧭 Data Reliability: ${runtime?.marketInfra?.dataReliability || "UNKNOWN"}`);
+        lines.push(`🩺 Provider Health Score: ${Number(runtime?.marketInfra?.providerHealthScore || 0)}/100`);
+        lines.push(`🧠 Scheduler State: ${runtime?.surveillance?.schedulerState || "UNKNOWN"}`);
+        lines.push(`⏱ Last Portfolio Scan: ${runtime?.surveillance?.lastPortfolioScanAgo ?? "NA"}${typeof runtime?.surveillance?.lastPortfolioScanAgo === "number" ? "s ago" : ""}`);
+        lines.push("━━━━━━━━━━━━━━━━━━");
+        lines.push("🔌 Provider Health");
+        (runtime.providers || []).forEach((p) => {
+          lines.push(`• ${p.label}: ${p.state} | SR ${Math.round((Number(p.successRate || 0) * 100))}% | ${Number(p.latencyMs || 0)}ms`);
+        });
+        lines.push("━━━━━━━━━━━━━━━━━━");
+        lines.push("🛡 Protection Systems");
+        (runtime.systems || []).forEach((s) => {
+          lines.push(`• ${s.name}: ${s.state}`);
+        });
+        lines.push("━━━━━━━━━━━━━━━━━━");
+        lines.push(`🗂 Cache Health: ${runtime?.marketInfra?.cacheState || "UNKNOWN"}`);
+        lines.push(`🧵 Queue Runtime: ${runtime?.queue?.runtimeState || "UNKNOWN"}`);
+        await bot.telegram.sendMessage(chatId, lines.join("\n"));
+      } catch (err) {
+        console.error("[SYSTEMS ERROR]", err);
+        await bot.telegram.sendMessage(chatId, "⚠️ Unable to fetch systems telemetry right now.");
       }
       return;
     }
@@ -1027,13 +1445,22 @@ bot.on("text", async (ctx) => {
     if (lowerText === "/help") {
       await bot.telegram.sendMessage(chatId,
         `🏦 *Finsight AI — Command Menu*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `• /analyze <TICKER> — Full deep-dive report\n• /quick <TICKER> — Quick trend check\n` +
+        `• /analyze <TICKER> — Full deep-dive report (default)\n• /dossier <TICKER> — Full deep-dive report\n• /quick <TICKER> — Quick trend check\n` +
         `• /compare <T1> <T2> — Side-by-side comparison\n• /top — 🚀 Top market opportunities\n` +
         `• /sector — 📊 Sector rotation report\n• /portfolio — 🏥 Portfolio health\n` +
+        `• /systems — 🛰 Infra + telemetry status\n` +
         `• /add <T> <Q> <P> — Add holding\n• /update <T> <Q> <P> — Update holding\n• /remove <T> — Remove holding\n\n` +
         `━━━━━━━━━━━━━━━━━━\n⚠️ Educational purposes only. Not SEBI registered advice.`,
         { parse_mode: "Markdown" }
       );
+      return;
+    }
+
+    // ── /dossier ───────────────────────────────────────────────────
+    if (lowerText.startsWith("/dossier")) {
+      const ticker = text.replace(/^\/dossier\s*/i, "").trim().toUpperCase();
+      if (!isValidSymbol(ticker)) { await send("Please enter a valid ticker like TCS, RELIANCE, INFY"); return; }
+      await performAnalysis(chatId, ticker, footer, { mode: "full" });
       return;
     }
 
@@ -1093,15 +1520,88 @@ bot.on("text", async (ctx) => {
     if (["/scanner", "/top", "/opportunities"].includes(lowerText)) {
       await bot.telegram.sendMessage(chatId, "🔍 Running Institutional Scanner...\nPlease wait.");
       try {
+        const marketState = getMarketStateIST();
+        
+        // If market is closed, send the long status notice first
+        if (!marketState.open) {
+          const disclaimer = 
+            `⚠️ *MARKET STATUS NOTICE*\n\n` +
+            `Indian markets are currently closed.\n` +
+            `All prices, institutional flows, volatility models, and scanner outputs are based on the latest available closing-session data and post-close processing.\n\n` +
+            `Intraday confirmations, liquidity shifts, breakout validations, and institutional participation strength can materially change after the next market open.\n\n` +
+            `Finsight AI does not execute trades automatically. All signals, watchlists, and institutional intelligence outputs are probabilistic decision-support insights and should be independently validated before taking any trading or investment action.`;
+          await bot.telegram.sendMessage(chatId, disclaimer, { parse_mode: "Markdown" });
+        }
+
         const opportunities = await scannerAgent();
-        if (!opportunities?.length) { await bot.telegram.sendMessage(chatId, "No strong opportunities found right now."); return; }
-        let msg = "🏆 TOP OPPORTUNITIES TODAY\n\n";
-        opportunities.forEach((s, i) => {
-          msg += `#${i+1} ${s.stock}\n📊 Decision: ${s.decision} (${s.confidenceScore}/10)\n💰 Price: ₹${s.currentPrice}\n🎯 Entry: ${s.idealEntryZone}\n🛑 SL: ${s.stopLoss}\n🎯 Target: ${s.initialTarget}\n⚖️ R/R: ${s.rewardRiskRatio}\n⚡ Urgency: ${s.entryUrgency}\n🧠 ${s.entryReasoning}\n📌 ${s.finalExecutionAdvice}\n\n`;
+        const safeOpportunities = Array.isArray(opportunities)
+          ? opportunities
+          : (opportunities?.recommendations || []);
+        const approvedSignals = safeOpportunities.filter((signal) => {
+          if (signal?.approved !== true) return false;
+          return validateSignal(signal).approved;
         });
-        msg += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-        await send(msg);
-      } catch (err) { console.error("[SCANNER ERROR]", err); await bot.telegram.sendMessage(chatId, "⚠️ Scanner temporarily unavailable."); }
+        
+        let confidenceTag = marketState.tag;
+        const noValidSetups = safeOpportunities.length === 1 && safeOpportunities[0]?.status === "NO_VALID_SETUPS";
+
+        // Post-market fallback: show last signal from DB
+        const isPostMarket = opportunities?.status === "POST_MARKET_CONTEXT";
+        const lastSignal = opportunities?.lastSignal;
+
+        if (isPostMarket && lastSignal) {
+          const now = new Date();
+
+          const istNow = new Date(
+            now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+          );
+
+          const marketClose = new Date(istNow);
+          marketClose.setHours(15, 30, 0, 0);
+
+          const signalAge = Math.max(
+            1,
+            Math.round((istNow - marketClose) / (1000 * 60 * 60))
+          );
+
+          const msg =
+            `🏛 *FINSIGHT ELITE FLOW TERMINAL*\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `Confidence State: ${confidenceTag}\n\n` +
+            `📌 *Last Signal — ${signalAge}h ago*\n\n` +
+            `*${lastSignal.symbol}* — ${lastSignal.action}\n` +
+            `Confidence: ${lastSignal.confidence}%\n` +
+            `R/R: ${lastSignal.rr_ratio}\n` +
+            `Entry: ₹${lastSignal.entry_price}\n` +
+            `Stop Loss: ₹${lastSignal.stop_loss}\n` +
+            `Target: ₹${lastSignal.target_price}\n\n` +
+            `_${lastSignal.ai_summary || ""}_\n\n` +
+            `⚠️ Market closed. Signal from last trading session.\n` +
+            `Not SEBI registered investment advice.`;
+
+          await send(msg, { parse_mode: "Markdown" });
+          return;
+        }
+
+        if (!safeOpportunities || !safeOpportunities.length || noValidSetups || approvedSignals.length === 0) {
+          confidenceTag = marketState.tag;
+          let msg =
+            `🏛 *FINSIGHT ELITE FLOW TERMINAL*\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `Confidence State: ${confidenceTag}\n\n` +
+            `No institutional-grade opportunities available right now.\n` +
+            `All scanned setups failed elite guardrails (R/R, momentum, participation, or risk structure).\n` +
+            `Capital preservation mode active.`;
+          await send(msg, { parse_mode: "Markdown" });
+          return;
+        }
+        let msg = formatInstitutionalScannerReport(approvedSignals);
+        msg += "\n\n⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
+        await send(msg, { parse_mode: "Markdown" });
+      } catch (err) { 
+        console.error("[SCANNER ERROR]", err); 
+        await bot.telegram.sendMessage(chatId, "⚠️ Scanner temporarily unavailable."); 
+      }
       return;
     }
 
@@ -1109,12 +1609,17 @@ bot.on("text", async (ctx) => {
     if (["/sector", "/sectors", "/rotation"].includes(lowerText)) {
       await bot.telegram.sendMessage(chatId, "📊 Running Sector Rotation Scanner...");
       try {
+        const marketState = getMarketStateIST();
         const sectors = await sectorScannerAgent();
         if (!sectors?.length) { await bot.telegram.sendMessage(chatId, "No sector data available right now."); return; }
-        let msg = "📊 SECTOR ROTATION REPORT\n\n";
-        sectors.slice(0, 5).forEach((item, i) => { msg += `#${i+1} ${item.sector}\n🏆 Strength Score: ${item.avgScore}/10\n\n`; });
+        let msg = "";
+        if (!marketState.open) {
+          msg += `*Market Closed • Signals generated using latest available market data. Final trade confirmation requires live market validation after open.*\n\n`;
+        }
+        msg += `📊 *SECTOR ROTATION REPORT*\n🛡️ *Confidence State: ${marketState.tag}*\n\n`;
+        sectors.slice(0, 5).forEach((item, i) => { msg += `#${i+1} *${item.sector}*\n🏆 Strength Score: ${item.avgScore}/10\n\n`; });
         msg += "⚠️ For educational purposes only.\nNot SEBI registered investment advice.";
-        await send(msg);
+        await send(msg, { parse_mode: "Markdown" });
       } catch (err) { console.error("[SECTOR ERROR]", err); await bot.telegram.sendMessage(chatId, "⚠️ Sector scanner temporarily unavailable."); }
       return;
     }
@@ -1143,7 +1648,7 @@ bot.on("text", async (ctx) => {
         await send("Please enter a valid NSE ticker like TCS, RELIANCE, or INFY.");
         return;
       }
-      await performAnalysis(chatId, syntaxCheck.cleanTicker, footer);
+      await performAnalysis(chatId, syntaxCheck.cleanTicker, footer, { mode: "full" });
       return;
     }
 
@@ -1167,7 +1672,7 @@ bot.on("text", async (ctx) => {
         return;
       }
 
-      const cleanTicker = syntaxResult.cleanTicker;
+      const cleanTicker = normalizeTickerAlias(syntaxResult.cleanTicker);
 
       // ── LAYER 2: Symbol existence (overview/registry, NO live price needed) ─
       const existenceResult = await checkSymbolExistence(cleanTicker, { getCompanyOverview });
@@ -1206,29 +1711,43 @@ bot.on("text", async (ctx) => {
             });
             if (stateMsg) await send(stateMsg);
             // Proceed with degraded analysis using stale data
-            await performAnalysis(chatId, cleanTicker, footer);
+            await performAnalysis(chatId, cleanTicker, footer, { mode: "full" });
             return;
           }
         }
 
         // No usable data at all — show institutional unavailability message
-        const { buildDataStateMessage, DATA_AVAILABILITY_STATES } = await import("./dataAvailability.service.js");
-        await send(buildDataStateMessage(DATA_AVAILABILITY_STATES.UNAVAILABLE, { symbol: cleanTicker }));
+        await send(
+          `*FINSIGHT DATA NOTICE*\n` +
+          `${cleanTicker} could not be analyzed right now because live market data could not be validated.\n` +
+          `Reason:\n` +
+          `• Yahoo provider cooling down\n` +
+          `• Alpha/Finnhub/TwelveData returned unusable quote data\n` +
+          `• No valid price confirmed\n` +
+          `Action:\n` +
+          `Try again shortly or use another ticker.\n` +
+          `No trade verdict generated because price validation failed.`,
+          { parse_mode: "Markdown" }
+        );
         return;
       }
 
       // ── LAYER 4 is enforced inside performAnalysis via validateAnalysisReadiness() ─
       // Proceed to analysis — availability is LIVE or DEGRADED (acceptable).
-      await performAnalysis(chatId, cleanTicker, footer);
+      await performAnalysis(chatId, cleanTicker, footer, { mode: "full" });
       return;
     }
 
     // ── Chat fallback ───────────────────────────────────────────────
     const financeIntent =
-      /(portfolio|invest|allocation|allocate|stock|shares|price|buy|sell|market|nifty|sensex|₹\d+)/i.test(text);
+      /(portfolio|invest|allocation|allocate|stock|shares|price|buy|sell|market|nifty|sensex|₹\d+|rsi|scanner|news|holdings)/i.test(text);
     if (financeIntent) {
-      console.log("ROUTING TO MASTER AGENT");
-      console.log("MESSAGE:", text);
+      const orchestrated = await processNaturalLanguage(text, chatId, []);
+      const nlResponse = safeString(orchestrated?.response || "").trim();
+      if (nlResponse) {
+        await send(nlResponse);
+        return;
+      }
       const result = await masterAgent({
         mode: "conversation",
         userQuery: text,
@@ -1303,6 +1822,8 @@ export const startBot = () => {
       }
     } catch (error) {
       logError("telegram.bot.lease.claim_error", error, { ownerId: BOT_INSTANCE_ID });
+      setTelegramDegraded("lease_claim_error");
+      scheduleBotLaunchRetry("lease_claim_error");
       if (!TELEGRAM_LEASE_REQUIRED) {
         await launchBotIfNeeded("fallback");
       }
@@ -1315,6 +1836,10 @@ export const startBot = () => {
 };
 
 export const stopBot = () => {
+  if (botLaunchRetryTimer) {
+    clearTimeout(botLaunchRetryTimer);
+    botLaunchRetryTimer = null;
+  }
   if (botHeartbeatTimer) {
     clearInterval(botHeartbeatTimer);
     botHeartbeatTimer = null;
@@ -1328,6 +1853,8 @@ export const stopBot = () => {
       mode: botStartedInFallbackMode ? "fallback" : "lease"
     });
   }
+  telegramRuntimeState.connected = false;
+  telegramRuntimeState.degradedMode = true;
   botStartedInFallbackMode = false;
 };
 
@@ -1349,10 +1876,17 @@ export const shutdownBotSupervisor = async () => {
 };
 
 process.once("SIGINT", () => {
-  shutdownBotSupervisor().finally(() => bot.stop("SIGINT"));
+  shutdownBotSupervisor().finally(() => {
+    try { bot.stop("SIGINT"); } catch (_) {}
+  });
 });
 process.once("SIGTERM", () => {
-  shutdownBotSupervisor().finally(() => bot.stop("SIGTERM"));
+  shutdownBotSupervisor().finally(() => {
+    try { bot.stop("SIGTERM"); } catch (_) {}
+  });
 });
 
 export default bot;
+export function getTelegramRuntimeState() {
+  return { ...telegramRuntimeState };
+}

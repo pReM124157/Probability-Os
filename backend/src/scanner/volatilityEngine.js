@@ -4,6 +4,19 @@ function formatPrice(value) {
   return `₹${Math.round(value)}`;
 }
 
+function normalizeEntryZone({ entry, stopLoss, currentPrice }) {
+  const price = toNumber(currentPrice);
+  const maxWidth = price * 0.04;
+  const lowerBound = Math.max(stopLoss, entry - maxWidth / 2);
+  const upperBound = Math.min(price * 1.01, entry + maxWidth / 2);
+  const width = Math.max(0, upperBound - lowerBound);
+  return {
+    lower: lowerBound,
+    upper: upperBound,
+    widthPct: price > 0 ? (width / price) * 100 : 0
+  };
+}
+
 export function buildVolatilitySetup({ ticker, currentPrice, technicalData = {} }) {
   const price = toNumber(currentPrice);
   const atr = toNumber(technicalData.atr) || price * 0.025;
@@ -44,25 +57,41 @@ export function buildVolatilitySetup({ ticker, currentPrice, technicalData = {} 
     ? stopLoss
     : price - Math.max(1.2 * atr, price * 0.02);
 
-  const projectedMove =
-    atr *
-    historicalMoveExtension *
-    breakoutContinuationProbability *
-    volatilityExpansionMultiplier;
-  const target1Raw = Math.max(resistanceProjection, price + projectedMove);
-  const target1 = atrCompression
-    ? Math.min(target1Raw, price + (1.8 * atr))
-    : target1Raw;
-  const target2 = Math.max(
-    target1 + (0.9 * atr * volatilityExpansionMultiplier),
-    target1 * (1 + Math.max(0.012, projectedMove / Math.max(price, 1)))
-  );
-  const risk = price - validStop;
+  const normalizedTrendStrength = trendStrength <= 10 ? trendStrength * 10 : trendStrength;
+  if (normalizedTrendStrength < 55) return null;
+
+  let dynamicRRMultiplier = 1.5;
+  if (normalizedTrendStrength >= 85) dynamicRRMultiplier = 3.0;
+  else if (normalizedTrendStrength >= 75) dynamicRRMultiplier = 2.5;
+  else if (normalizedTrendStrength >= 65) dynamicRRMultiplier = 2.0;
+
+  const positionType = normalizedTrendStrength >= 80 ? "SWING" : normalizedTrendStrength >= 65 ? "POSITIONAL" : "TACTICAL";
+  const maxStopPct = positionType === "SWING" ? 0.06 : positionType === "POSITIONAL" ? 0.08 : 0.05;
+
+  const rawStopDistance = price - validStop;
+  const clampedStopDistance = Math.min(rawStopDistance, price * maxStopPct);
+  if (clampedStopDistance <= 0) return null;
+  const normalizedStopLoss = price - clampedStopDistance;
+  const targetDistance = clampedStopDistance * dynamicRRMultiplier;
+  if (clampedStopDistance > targetDistance) return null;
+  
+  const target1 = price + (clampedStopDistance * dynamicRRMultiplier);
+  const target2 = price + (clampedStopDistance * (dynamicRRMultiplier + 0.5));
+  const target3 = price + (clampedStopDistance * (dynamicRRMultiplier + 1.0));
+
+  const risk = clampedStopDistance;
   const reward = target1 - price;
   const rr = risk > 0 ? reward / risk : 0;
+  if (rr < 1.5) return null;
 
-  const entryLower = Math.max(validStop + (0.4 * atr), Math.min(price, sma20, sma50) - (0.25 * atr));
-  const entryUpper = Math.max(entryLower, Math.min(price + (0.4 * atr), target1));
+  const rawEntryLower = Math.max(normalizedStopLoss + (0.4 * atr), Math.min(price, sma20, sma50) - (0.25 * atr));
+  const rawEntryUpper = Math.max(rawEntryLower, Math.min(price + (0.35 * atr), target1));
+  const normalizedEntry = normalizeEntryZone({
+    entry: (rawEntryLower + rawEntryUpper) / 2,
+    stopLoss: normalizedStopLoss,
+    currentPrice: price
+  });
+  if (normalizedEntry.widthPct > 4) return null;
   const riskBand =
     atr > price * 0.03 ? "HIGH" : atr > price * 0.015 ? "MEDIUM" : "LOW";
 
@@ -71,14 +100,16 @@ export function buildVolatilitySetup({ ticker, currentPrice, technicalData = {} 
     currentPrice: Number(price.toFixed(2)),
     atr: Number(atr.toFixed(2)),
     volatilityBand: riskBand,
-    idealEntryZone: `${formatPrice(entryLower)} – ${formatPrice(entryUpper)}`,
-    stopLoss: Number(validStop.toFixed(2)),
+    idealEntryZone: `${formatPrice(normalizedEntry.lower)} - ${formatPrice(normalizedEntry.upper)}`,
+    stopLoss: Number(normalizedStopLoss.toFixed(2)),
     target1: Number(target1.toFixed(2)),
     target2: Number(target2.toFixed(2)),
+    target3: Number(target3.toFixed(2)),
     rr: Number(rr.toFixed(2)),
+    positionType,
     atrCompression,
     breakoutContinuationProbability: Number(breakoutContinuationProbability.toFixed(2)),
     trendStrength: Number(trendStrength.toFixed(1)),
-    momentumConfirmed: momentumStrength !== "WEAK" && volumeRatio >= 1.1 && rsi >= 50
+    momentumConfirmed: momentumStrength !== "WEAK" && volumeRatio >= 1.1 && rsi >= 50 && rsi <= 75
   };
 }

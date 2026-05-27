@@ -1,12 +1,19 @@
 import { getHistoricalCandles } from "./marketData.service.js";
 
 const BENCHMARK_SYMBOLS = {
-  NIFTY50: "^NSEI",
-  BANKNIFTY: "^NSEBANK",
-  AUTO: "NIFTY_AUTO",
-  IT: "NIFTY_IT",
-  FINANCIALS: "NIFTY_FIN_SERVICE"
+  NIFTY50: ["^NSEI", "NSEI", "NIFTY50", "NIFTY 50"],
+  BANKNIFTY: ["^NSEBANK", "NSEBANK", "BANKNIFTY", "NIFTYBANK", "NIFTY BANK"],
+  SENSEX: ["^BSESN", "BSESN", "SENSEX"],
+  AUTO: ["NIFTY_AUTO", "NIFTY AUTO"],
+  IT: ["NIFTY_IT", "NIFTY IT"],
+  FINANCIALS: ["NIFTY_FIN_SERVICE", "NIFTY FIN SERVICE", "NIFTY FINANCIAL SERVICES"]
 };
+
+function getBenchmarkCandidates(benchmark = "NIFTY50") {
+  const key = String(benchmark || "NIFTY50").toUpperCase();
+  const candidates = BENCHMARK_SYMBOLS[key] || BENCHMARK_SYMBOLS.NIFTY50;
+  return Array.isArray(candidates) ? candidates : [candidates];
+}
 
 function toDateOnly(value) {
   const d = new Date(value);
@@ -40,15 +47,34 @@ function cumulativeCurve(candles, startDate, endDate) {
 }
 
 export async function getBenchmarkReturns({ startDate, endDate, benchmark = "NIFTY50", days = 400 } = {}) {
-  const symbol = BENCHMARK_SYMBOLS[String(benchmark || "").toUpperCase()] || BENCHMARK_SYMBOLS.NIFTY50;
-  const candles = await getHistoricalCandles(symbol, { days, interval: "1d" });
-  const curve = cumulativeCurve(candles || [], startDate, endDate);
-  return {
-    benchmark: String(benchmark || "NIFTY50").toUpperCase(),
-    symbol,
-    curve,
-    total_return_pct: curve[curve.length - 1].cumulative_return
-  };
+  const normalizedBenchmark = String(benchmark || "NIFTY50").toUpperCase();
+  const candidates = getBenchmarkCandidates(normalizedBenchmark);
+  const attempts = [];
+
+  for (const symbol of candidates) {
+    try {
+      const candles = await getHistoricalCandles(symbol, { days, interval: "1d" });
+      const curve = cumulativeCurve(candles || [], startDate, endDate);
+
+      return {
+        benchmark: normalizedBenchmark,
+        symbol,
+        candidates,
+        attempts,
+        curve,
+        total_return_pct: curve[curve.length - 1].cumulative_return
+      };
+    } catch (error) {
+      attempts.push({
+        symbol,
+        error: error?.message || "BENCHMARK_SYMBOL_FAILED"
+      });
+    }
+  }
+
+  const err = new Error(`Insufficient benchmark candles for ${normalizedBenchmark}`);
+  err.details = { benchmark: normalizedBenchmark, candidates, attempts };
+  throw err;
 }
 
 export function compareAgainstBenchmark(strategyReturns = [], benchmarkReturns = []) {

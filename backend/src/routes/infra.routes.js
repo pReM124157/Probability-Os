@@ -17,6 +17,8 @@ import express from "express";
 import supabase, { isSupabaseSchemaMissing } from "../services/supabase.service.js";
 import { logEvent } from "../services/telemetry.service.js";
 import { getPortfolioDefenseHealth } from "../services/portfolioDefenseHealth.service.js";
+import { getOperationalHealth } from "../services/telemetryAggregator.service.js";
+import { getCircuitBreakerSnapshot } from "../utils/circuitBreakerDecay.js";
 
 const router = express.Router();
 
@@ -175,6 +177,37 @@ router.get("/portfolio-defense-health", async (_req, res) => {
     asOf: new Date().toISOString(),
     health: getPortfolioDefenseHealth()
   });
+});
+
+/**
+ * GET /infra/ops/health
+ * Production observability dashboard:
+ * - Scanner success/failure rates
+ * - Stage-level failure counts
+ * - Provider exhaustion events
+ * - Scheduler success/failure rates
+ * - Recent errors (last 10)
+ */
+router.get("/ops/health", (_req, res) => {
+  try {
+    const health = getOperationalHealth();
+    return res.json({ success: true, ...health });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
+ * GET /infra/ops/circuit-breakers
+ * Per-provider circuit breaker snapshot with live/historical scopes.
+ */
+router.get("/ops/circuit-breakers", (_req, res) => {
+  try {
+    const snapshot = getCircuitBreakerSnapshot();
+    return res.json({ success: true, asOf: new Date().toISOString(), providers: snapshot });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 export default router;

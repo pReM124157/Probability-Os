@@ -1,5 +1,6 @@
 export function buildWatchlists(rankedStocks = []) {
-  const highRiskWatchlist = rankedStocks
+  const safeRanked = Array.isArray(rankedStocks) ? rankedStocks : [];
+  const highRiskWatchlist = safeRanked
     .filter((stock) => stock.volatilityBand === "HIGH" || stock.riskLevel === "HIGH")
     .map((stock) => ({
       ticker: stock.ticker,
@@ -10,7 +11,7 @@ export function buildWatchlists(rankedStocks = []) {
         : "Risk model flagged high risk"
     }));
 
-  const weakSetupWatchlist = rankedStocks
+  const weakSetupWatchlist = safeRanked
     .filter((stock) => stock.convictionScore < 6 || stock.rr < 1.5 || stock.trend === "BEARISH")
     .map((stock) => ({
       ticker: stock.ticker,

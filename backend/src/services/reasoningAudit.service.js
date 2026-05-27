@@ -1,8 +1,10 @@
 import supabase from "./supabase.service.js";
 
+const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 export async function storeDecisionReasoning(record = {}) {
   const row = {
-    user_id: record.userId || "system",
+    user_id: record.userId || SYSTEM_USER_ID,
     decision_type: record.decisionType || "PORTFOLIO_DEFENSE",
     reasoning: record.reasoning || "No reasoning provided",
     mathematical_basis: record.mathematicalBasis || "No mathematical basis provided",

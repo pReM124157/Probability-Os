@@ -1,6 +1,8 @@
 import supabase from "./supabase.service.js";
 import { safeString } from "../core/safety.js";
 
+const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 /**
  * Adds or updates a holding for a user.
  */
@@ -94,7 +96,7 @@ function clamp(value, min = 0, max = 1) {
 
 export async function storeHistoricalPortfolioStates(state = {}) {
   const row = {
-    user_id: state.userId || "system",
+    user_id: state.userId || SYSTEM_USER_ID,
     portfolio_value: Number(state.portfolioValue || 0),
     drawdown: Number(state.drawdown || 0),
     volatility: Number(state.volatility || 0),

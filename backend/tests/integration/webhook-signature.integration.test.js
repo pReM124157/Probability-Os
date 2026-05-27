@@ -4,6 +4,7 @@ import { createMockSupabase } from "./helpers/mockSupabase.js";
 
 const telemetryEvents = [];
 let mockSupabase;
+let telegramSendMessage;
 
 vi.mock("../../src/services/telemetry.service.js", () => ({
   createTraceId: (prefix = "trace") => `${prefix}_test`,
@@ -14,7 +15,7 @@ vi.mock("../../src/services/telemetry.service.js", () => ({
 vi.mock("../../src/services/telegram.service.js", () => ({
   default: {
     telegram: {
-      sendMessage: vi.fn(async () => true)
+      sendMessage: (...args) => telegramSendMessage(...args)
     }
   }
 }));
@@ -59,6 +60,7 @@ describe("integration: webhook signature verification", () => {
   beforeEach(() => {
     telemetryEvents.length = 0;
     process.env.RAZORPAY_WEBHOOK_SECRET = "test_secret";
+    telegramSendMessage = vi.fn(async () => ({ message_id: 321 }));
     mockSupabase = createMockSupabase({
       subscription_events: [],
       subscribers: [{ telegram_chat_id: "123", razorpay_subscription_id: "sub_1" }],
@@ -105,5 +107,42 @@ describe("integration: webhook signature verification", () => {
       expect(replayRes.statusCode).toBe(200);
       expect(telemetryEvents.some((e) => e.event === "webhook.razorpay.replay_detected")).toBe(true);
       expect(mockSupabase.__getTable("payments").length).toBe(1);
+  });
+
+  it("persists duplicate-safe subscription activation delivery on the event row", async () => {
+    const webhookRouter = (await import("../../src/routes/webhook.js")).default;
+    const layer = webhookRouter.stack.find((l) => l?.route?.path === "/razorpay" && l.route.methods.post);
+    const handler = layer.route.stack[layer.route.stack.length - 1].handle;
+
+    const validBody = JSON.stringify({
+      event: "subscription.activated",
+      payload: {
+        subscription: {
+          entity: {
+            id: "sub_1",
+            notes: { telegram_chat_id: "123" }
+          }
+        }
+      }
+    });
+    const validSig = crypto.createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET).update(validBody).digest("hex");
+
+    const firstRes = await invokeWebhook(handler, validBody, validSig, "evt_sub_activation");
+    const secondRes = await invokeWebhook(handler, validBody, validSig, "evt_sub_activation");
+
+    expect(firstRes.statusCode).toBe(200);
+    expect(secondRes.statusCode).toBe(200);
+    expect(telegramSendMessage).toHaveBeenCalledTimes(1);
+
+    const eventRow = mockSupabase.__getTable("subscription_events")[0];
+    expect(eventRow.event_id).toBe("evt_sub_activation");
+    expect(eventRow.payload_preview._delivery.status).toBe("SENT");
+    expect(eventRow.payload_preview._delivery.attempts).toBe(1);
+    expect(eventRow.payload_preview._delivery.message_id).toBe("321");
+
+    const subscriber = mockSupabase.__getTable("subscribers").find((row) => row.telegram_chat_id === "123");
+    expect(subscriber.status).toBe("active");
+    expect(subscriber.plan).toBe("PRO");
+    expect(String(telegramSendMessage.mock.calls[0][1])).toContain("✅ SUBSCRIPTION ACTIVATED");
   });
 });

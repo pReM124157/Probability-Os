@@ -1,3 +1,5 @@
+import { normalizeTickerAlias } from "./tickerAliases.js";
+
 /**
  * ╔══════════════════════════════════════════════════════════════════════╗
  * ║              TICKER SEMANTIC CONTRACT BOUNDARIES                     ║
@@ -162,7 +164,7 @@ export const MARKET_AVAILABILITY = Object.freeze({
  */
 export async function checkMarketAvailability(ticker, { getLiveMarketData }) {
   try {
-    const liveData = await getLiveMarketData(ticker);
+    const liveData = await getLiveMarketData(normalizeTickerAlias(ticker));
 
     const price = Number(liveData?.currentPrice || liveData?.price || 0);
     const source = String(liveData?.priceSource || "").toUpperCase();

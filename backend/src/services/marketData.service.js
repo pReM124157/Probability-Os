@@ -2,7 +2,14 @@ import YahooFinance from "yahoo-finance2";
 import { fetchIndianHolidays } from "./holiday.service.js";
 import { safeString, safeSubstring } from "../core/safety.js";
 import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
-import { withProviderGuard, isProviderAuthFailure } from "./providerHealth.service.js";
+import {
+  withProviderGuard,
+  isProviderAuthFailure,
+  isProviderCoolingDown,
+  logProviderSkipped,
+  recordProviderSuccess
+} from "./providerHealth.service.js";
+import { normalizeTickerAlias } from "../core/tickerAliases.js";
 import { logError, logEvent, logMetric } from "./telemetry.service.js";
 import {
   applyExponentialBackoff,
@@ -11,6 +18,7 @@ import {
   shouldSkipProvider,
   logHistoricalLimiterTelemetry
 } from "./historicalRequestLimiter.service.js";
+import { recordCircuitSuccess, recordCircuitFailure } from "../utils/circuitBreakerDecay.js";
 import {
   detectRecentlyFetchedData,
   getCachedHistoricalData,
@@ -30,8 +38,9 @@ import {
   determineDataAvailabilityState,
   DATA_AVAILABILITY_STATES
 } from "./dataAvailability.service.js";
+import { assertValidPrice } from "../utils/priceValidation.js";
 
-const yahooFinance = new YahooFinance({
+export const yahooFinance = new YahooFinance({
   suppressNotices: ["yahooSurvey", "ripHistorical"]
 });
 
@@ -66,6 +75,11 @@ export const dataMetrics = {
   cacheHit: 0,
   lastGlobalCall: 0
 };
+let lastMarketSyncAt = null;
+
+export function getLastMarketSyncAt() {
+  return lastMarketSyncAt;
+}
 
 // STEP 5 — Snapshot metadata builder
 // Governs whether stale data can be served and what message to surface.
@@ -119,11 +133,29 @@ const CACHE_GROUP_OVERVIEW_VERSIONED = `company_overview_v${CANONICAL_SEMANTICS_
 // --- Circuit Breaker State ---
 let yahooFailureCount = 0;
 let yahooCooldownUntil = 0;
+export function resetYahooCircuitBreakerForTest() {
+  yahooFailureCount = 0;
+  yahooCooldownUntil = 0;
+}
 const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
 const HTTP_PROVIDER_TIMEOUT_MS = 5000;
-const YAHOO_TIMEOUT_MS = 3500;
+const YAHOO_TIMEOUT_MS = 8000;
 const providerFailureScore = new Map();
+// Symbols that must only be fetched via .NS — .BO returns stale/zero prices for these.
+// Covers all Nifty50 constituents with known Yahoo BSE feed issues.
+const FORCE_NSE_ONLY = new Set([
+  "TATAMOTORS", "RELIANCE", "TCS", "INFY", "SBIN",
+  "HDFCBANK", "ICICIBANK", "AXISBANK", "KOTAKBANK", "INDUSINDBK",
+  "BAJFINANCE", "BAJAJFINSV", "BHARTIARTL", "WIPRO", "HCLTECH",
+  "LT", "ADANIPORTS", "ADANIENT", "TATASTEEL", "JSWSTEEL",
+  "HINDALCO", "COALINDIA", "ONGC", "NTPC", "POWERGRID",
+  "MARUTI", "HEROMOTOCO", "BAJAJ-AUTO", "EICHERMOT", "TITAN",
+  "ASIANPAINT", "NESTLEIND", "BRITANNIA", "TATACONSUM", "ITC",
+  "HINDUNILVR", "SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB",
+  "APOLLOHOSP", "HDFCLIFE", "SBILIFE", "ICICIPRULI",
+  "TECHM", "LTIM", "GRASIM", "ULTRACEMCO", "SHRIRAMFIN", "BPCL"
+]);
 
 // Re-export canonical registry for legacy consumers
 export const FUNDAMENTAL_METRIC_CANONICALIZATION_MAP = CANONICAL_METRIC_REGISTRY;
@@ -312,9 +344,21 @@ function logProviderError(provider, context = {}, error) {
   });
 }
 
-function toPositiveNumber(value) {
+export function toNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const cleaned = value.replace(/,/g, "").trim();
+    if (!cleaned) return null;
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : null;
+  }
   const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : 0;
+  return Number.isFinite(num) ? num : null;
+}
+
+function toPositiveNumber(value) {
+  const num = toNumber(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
 }
 
 function isValidHistoricalCandle(candle) {
@@ -334,9 +378,7 @@ function resolveBestPrice(quote = {}) {
     ["postMarketPrice", quote?.postMarketPrice],
     ["preMarketPrice", quote?.preMarketPrice],
     ["regularMarketPrice", quote?.regularMarketPrice],
-    ["currentPrice", quote?.currentPrice],
-    ["regularMarketPreviousClose", quote?.regularMarketPreviousClose],
-    ["previousClose", quote?.previousClose]
+    ["currentPrice", quote?.currentPrice]
   ];
 
   for (const [field, rawValue] of priceCandidates) {
@@ -346,28 +388,132 @@ function resolveBestPrice(quote = {}) {
     }
   }
 
-  return { field: null, value: 0 };
+  return { field: null, value: null };
+}
+
+function logNormalizeTelemetry(provider, symbol, normalized) {
+  const hasPrice = Number.isFinite(normalized?.regularMarketPrice) && normalized.regularMarketPrice > 0;
+  const hasPrevClose = Number.isFinite(normalized?.regularMarketPreviousClose) && normalized.regularMarketPreviousClose > 0;
+  logEvent(hasPrice ? "provider.normalize.success" : "provider.normalize.failure", {
+    provider,
+    symbol,
+    hasPrice,
+    hasPrevClose
+  });
+}
+
+export function normalizeYahooQuote(payload = {}, symbol = "") {
+  const normalized = {
+    symbol: payload?.symbol || symbol,
+    regularMarketPrice: toPositiveNumber(payload?.regularMarketPrice),
+    regularMarketChangePercent: toNumber(payload?.regularMarketChangePercent) ?? 0,
+    regularMarketChange: toNumber(payload?.regularMarketChange) ?? 0,
+    regularMarketPreviousClose: toPositiveNumber(payload?.regularMarketPreviousClose ?? payload?.previousClose),
+    previousClose: toPositiveNumber(payload?.previousClose),
+    currentPrice: toPositiveNumber(payload?.currentPrice),
+    preMarketPrice: toPositiveNumber(payload?.preMarketPrice),
+    postMarketPrice: toPositiveNumber(payload?.postMarketPrice),
+    source: payload?.source || "YAHOO"
+  };
+  logNormalizeTelemetry("yahoo", symbol || normalized.symbol, normalized);
+  return normalized;
+}
+
+export function normalizeAlphaQuote(payload = {}, symbol = "") {
+  const quote = payload?.["Global Quote"] || payload;
+  const normalized = {
+    symbol,
+    regularMarketPrice: toPositiveNumber(quote?.price ?? quote?.["05. price"]),
+    regularMarketChangePercent: toNumber(String(quote?.["10. change percent"] || "").replace("%", "")) ?? 0,
+    regularMarketChange: toNumber(quote?.change ?? quote?.["09. change"]) ?? 0,
+    regularMarketPreviousClose: toPositiveNumber(quote?.previous_close ?? quote?.["08. previous close"]),
+    previousClose: toPositiveNumber(quote?.previous_close ?? quote?.["08. previous close"]),
+    source: "FALLBACK"
+  };
+  logNormalizeTelemetry("alpha_vantage", symbol, normalized);
+  return normalized;
+}
+
+export function normalizeTwelveDataQuote(payload = {}, symbol = "") {
+  const normalized = {
+    symbol,
+    regularMarketPrice: toPositiveNumber(payload?.price ?? payload?.close),
+    regularMarketChangePercent: toNumber(payload?.percent_change) ?? 0,
+    regularMarketChange: toNumber(payload?.change) ?? 0,
+    regularMarketPreviousClose: toPositiveNumber(payload?.previous_close),
+    previousClose: toPositiveNumber(payload?.previous_close),
+    source: "FALLBACK"
+  };
+  logNormalizeTelemetry("twelvedata", symbol, normalized);
+  return normalized;
+}
+
+export function normalizeFinnhubQuote(payload = {}, symbol = "") {
+  const normalized = {
+    symbol,
+    regularMarketPrice: toPositiveNumber(payload?.c),
+    regularMarketChangePercent: toNumber(payload?.dp) ?? 0,
+    regularMarketChange: toNumber(payload?.d) ?? 0,
+    regularMarketPreviousClose: toPositiveNumber(payload?.pc),
+    previousClose: toPositiveNumber(payload?.pc),
+    open: toPositiveNumber(payload?.o),
+    high: toPositiveNumber(payload?.h),
+    low: toPositiveNumber(payload?.l),
+    volume: toNumber(payload?.v) ?? 0,
+    source: "FALLBACK"
+  };
+  logNormalizeTelemetry("finnhub", symbol, normalized);
+  return normalized;
+}
+
+function safeCacheAgeSeconds(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}
+
+function formatCacheAge(value) {
+  const age = safeCacheAgeSeconds(value);
+  return age === null ? "unknown" : `${age}s`;
 }
 
 function normalizeSymbol(symbol) {
   if (!symbol || typeof symbol !== "string") return "";
-  return symbol
+  const cleaned = symbol
     .replace(/\//g, "") // Remove ALL slashes to prevent double-slash API errors
     .trim()
     .toUpperCase()
     .replace(/\s+/g, ""); // Remove spaces
+
+  // Preserve Yahoo-style index symbols. These must not be converted to NSE/BSE stock variants.
+  // Example: ^NSEI must stay ^NSEI, not NSEI.NS / NSEI.BO / NSEI.
+  if (cleaned.startsWith("^")) return cleaned;
+
+  const suffix = cleaned.endsWith(".NS") ? ".NS" : cleaned.endsWith(".BO") ? ".BO" : "";
+  const base = normalizeTickerAlias(cleaned);
+  return `${base}${suffix}`;
 }
 
 function buildSymbolVariants(symbol) {
   const upperSymbol = normalizeSymbol(symbol);
   if (!upperSymbol) return [];
+
+  // Index symbols should be fetched exactly as provided.
+  if (upperSymbol.startsWith("^")) return [upperSymbol];
+
+  const base = toBaseTicker(upperSymbol);
+  // NSE-only symbols: skip .BO entirely — it returns stale/zero prices
+  if (FORCE_NSE_ONLY.has(base)) {
+    return [`${base}.NS`];
+  }
   return upperSymbol.includes(".")
     ? [upperSymbol]
     : [`${upperSymbol}.NS`, `${upperSymbol}.BO`, upperSymbol];
 }
 
 function toBaseTicker(symbol) {
-  return normalizeSymbol(symbol).replace(/\.NS$|\.BO$/i, "");
+  const normalized = normalizeSymbol(symbol);
+  if (normalized.startsWith("^")) return normalized;
+  return normalized.replace(/\.NS$|\.BO$/i, "");
 }
 
 function toAlphaSymbol(symbol) {
@@ -837,7 +983,7 @@ export async function getCompanyOverview(symbol) {
   });
 }
 
-async function getMarketStatusIST() {
+export async function getMarketStatusIST() {
     const now = new Date();
     const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
     const year = ist.getFullYear();
@@ -934,18 +1080,20 @@ async function alphaQuoteFetch(symbol) {
 
     const payload = await withProviderGuard("alpha_vantage", async () =>
       fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
-    );
-    const quote = payload["Global Quote"];
-    
-    if (!quote || !quote["05. price"]) return null;
-    
-    return {
-      symbol: symbol,
-      regularMarketPrice: parseFloat(quote["05. price"]),
-      regularMarketChangePercent: parseFloat(String(quote["10. change percent"] || "0").replace("%", "")),
-      regularMarketPreviousClose: parseFloat(quote["08. previous close"]),
-      source: "FALLBACK"
-    };
+    , { successOnOperation: false });
+    logEvent("provider.http.success", { provider: "alpha_vantage", symbol });
+    const normalized = normalizeAlphaQuote(payload, symbol);
+    if (!(normalized.regularMarketPrice > 0)) {
+      logEvent("provider.data.unusable", {
+        provider: "alpha_vantage",
+        symbol,
+        hasPrice: Boolean(normalized?.regularMarketPrice),
+        hasPrevClose: Boolean(normalized?.regularMarketPreviousClose || normalized?.previousClose)
+      });
+      return null;
+    }
+    await recordProviderSuccess("alpha_vantage");
+    return normalized;
   } catch (err) {
     logProviderError("alpha", { stage: "quote", symbol }, err);
     return null;
@@ -992,19 +1140,21 @@ async function twelveDataQuoteFetch(symbol) {
       try {
         const payload = await withProviderGuard("twelvedata", async () =>
           fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
-        );
+        , { successOnOperation: false });
+        logEvent("provider.http.success", { provider: "twelvedata", symbol });
         if (payload?.status === "error") continue;
-        const close = Number(payload?.close);
-        if (Number.isFinite(close) && close > 0) {
-          return {
+        const normalized = normalizeTwelveDataQuote(payload, symbol);
+        if (!(normalized.regularMarketPrice > 0)) {
+          logEvent("provider.data.unusable", {
+            provider: "twelvedata",
             symbol,
-            regularMarketPrice: close,
-            regularMarketChangePercent: Number(payload?.percent_change || 0),
-            regularMarketChange: Number(payload?.change || 0),
-            regularMarketPreviousClose: Number(payload?.previous_close || 0),
-            source: "FALLBACK"
-          };
+            hasPrice: Boolean(normalized?.regularMarketPrice),
+            hasPrevClose: Boolean(normalized?.regularMarketPreviousClose || normalized?.previousClose)
+          });
+          continue;
         }
+        await recordProviderSuccess("twelvedata");
+        return normalized;
       } catch (err) {
         logProviderError("twelvedata", { stage: "quote-attempt", symbol, url }, err);
       }
@@ -1031,18 +1181,20 @@ async function finnhubQuoteFetch(symbol) {
         const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`;
         const payload = await withProviderGuard("finnhub", async () =>
           fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
-        );
-        const price = Number(payload?.c || 0);
-        if (Number.isFinite(price) && price > 0) {
-          return {
+        , { successOnOperation: false });
+        logEvent("provider.http.success", { provider: "finnhub", symbol: candidate });
+        const normalized = normalizeFinnhubQuote(payload, candidate);
+        if (!(normalized.regularMarketPrice > 0)) {
+          logEvent("provider.data.unusable", {
+            provider: "finnhub",
             symbol: candidate,
-            regularMarketPrice: price,
-            regularMarketChangePercent: Number(payload?.dp || 0),
-            regularMarketChange: Number(payload?.d || 0),
-            regularMarketPreviousClose: Number(payload?.pc || 0),
-            source: "FALLBACK"
-          };
+            hasPrice: Boolean(normalized?.regularMarketPrice),
+            hasPrevClose: Boolean(normalized?.regularMarketPreviousClose || normalized?.previousClose)
+          });
+          continue;
         }
+        await recordProviderSuccess("finnhub");
+        return normalized;
       } catch (err) {
         logProviderError("finnhub", { stage: "quote-attempt", symbol: candidate }, err);
       }
@@ -1116,7 +1268,7 @@ export async function getLiveMarketData(symbol) {
           return { ...cached, dataAge: age, dataConfidence: "CACHED", staleData: staleLiveData };
         }
         console.log(
-          `[CACHE] bypass symbol=${upperSymbol} age=${age}s reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
+          `[CACHE] bypass symbol=${upperSymbol} age=${formatCacheAge(age)} reason=${marketStatus.isPostMarket ? "post-market" : "pre-market"}`
         );
       }
 
@@ -1125,8 +1277,6 @@ export async function getLiveMarketData(symbol) {
         CACHE_GROUP_LIVE,
         ttlSecondsForQuality("LOW"),
         async () => {
-          const symbolsToTry = buildSymbolVariants(upperSymbol);
-
           let result = null;
           let fetchSymbol = "";
           let priceSource = "FAILED";
@@ -1135,23 +1285,28 @@ export async function getLiveMarketData(symbol) {
           let completeness = "FULL";
 
           // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker + auth detection
-          const yahooAvailable = Date.now() >= yahooCooldownUntil;
+          const yahooAvailable = Date.now() >= yahooCooldownUntil && !(await isProviderCoolingDown("yahoo"));
           let yahooAuthFailed = false;
           if (yahooAvailable) {
-            for (const sym of symbolsToTry) {
+            let variants = buildSymbolVariants(upperSymbol);
+            // buildSymbolVariants already enforces NSE-only for known symbols
+            for (const sym of variants) {
                 const reqTs = Date.now();
                 try {
                     logEvent("provider.request", { provider: "yahoo", symbol: sym, stage: "quote", ts: new Date().toISOString() });
                     console.log(`[PROVIDER REQUEST] provider=yahoo symbol=${sym} stage=quote ts=${new Date().toISOString()}`);
                     const tempResult = await withProviderGuard("yahoo", async () =>
                       withTimeout(retry(() => yahooFinance.quote(sym), 1, 500), YAHOO_TIMEOUT_MS)
-                    );
-                    const resolvedYahooPrice = resolveBestPrice(tempResult);
+                    , { successOnOperation: false });
+                    logEvent("provider.http.success", { provider: "yahoo", symbol: sym });
+                    const normalizedYahoo = normalizeYahooQuote(tempResult, sym);
+                    const resolvedYahooPrice = resolveBestPrice(normalizedYahoo);
                     const latencyMs = Date.now() - reqTs;
-                    if (tempResult && resolvedYahooPrice.value > 0) {
+                    if (normalizedYahoo && resolvedYahooPrice.value > 0) {
+                        await recordProviderSuccess("yahoo");
                         logEvent("provider.response", { provider: "yahoo", symbol: sym, success: true, latencyMs });
                         console.log(`[PROVIDER RESPONSE] provider=yahoo symbol=${sym} success=true latencyMs=${latencyMs}`);
-                        result = tempResult;
+                        result = normalizedYahoo;
                         fetchSymbol = sym;
                         priceSource = "YAHOO";
                         priceField = resolvedYahooPrice.field || "UNKNOWN";
@@ -1171,57 +1326,65 @@ export async function getLiveMarketData(symbol) {
                       console.warn(`[YAHOO] Auth failure detected. Skipping remaining Yahoo retries for ${upperSymbol}.`);
                       break;
                     }
+                    if (!isAuth) {
+                      logEvent("provider.data.unusable", { provider: "yahoo", symbol: sym });
+                    }
                 }
                 await new Promise(r => setTimeout(r, 300));
             }
           } else {
-            console.warn(`[CIRCUIT BREAKER] Skipping Yahoo for ${upperSymbol} (cooling down)`);
+            logProviderSkipped("yahoo", "cooldown_active", { symbol: upperSymbol });
+            console.warn(`[CIRCUIT BREAKER] Skipping Yahoo variants/retries for ${upperSymbol} (cooling down)`);
           }
 
           if (!result) reportYahooStatus(false);
 
           // 3. FALLBACK FETCH (Alpha Vantage -> Twelve Data -> Finnhub)
           if (!result) {
-            console.log(`[DATA] attempt=alpha symbol=${upperSymbol}`);
-            result = await alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`);
-            if (result) {
-              priceSource = "ALPHA_VANTAGE";
-              dataConfidence = "DEGRADED_SOURCE";
-              completeness = "PARTIAL";
-              fetchSymbol = result.symbol;
-              dataMetrics.alphaSuccess++;
-              console.log(`[DATA] source=alpha symbol=${upperSymbol} status=fallback`);
-            }
-          }
-
-          if (!result) {
-            console.log(`[DATA] attempt=twelvedata symbol=${upperSymbol}`);
-            result = await twelveDataQuoteFetch(upperSymbol);
-            if (result) {
-              priceSource = "TWELVEDATA";
-              dataConfidence = "DEGRADED_SOURCE";
-              completeness = "PARTIAL";
-              fetchSymbol = result.symbol;
-              console.log(`[DATA] source=twelvedata symbol=${upperSymbol} status=fallback`);
-            }
-          }
-
-          if (!result) {
-            console.log(`[DATA] attempt=finnhub symbol=${upperSymbol}`);
-            result = await finnhubQuoteFetch(upperSymbol);
-            if (result) {
-              priceSource = "FINNHUB";
-              dataConfidence = "DEGRADED_SOURCE";
-              completeness = "PARTIAL";
-              fetchSymbol = result.symbol;
-              console.log(`[DATA] source=finnhub symbol=${upperSymbol} status=fallback`);
+            const fallbackProviders = [
+              { name: "ALPHA_VANTAGE", fetch: () => alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`) },
+              { name: "TWELVEDATA", fetch: () => twelveDataQuoteFetch(upperSymbol) },
+              { name: "FINNHUB", fetch: () => finnhubQuoteFetch(upperSymbol) }
+            ];
+            for (const provider of fallbackProviders) {
+              console.log(`[DATA] attempt=${provider.name.toLowerCase()} symbol=${upperSymbol}`);
+              const candidate = await provider.fetch();
+              if (candidate && toPositiveNumber(candidate.regularMarketPrice) > 0) {
+                result = candidate;
+                priceSource = provider.name;
+                dataConfidence = "DEGRADED_SOURCE";
+                completeness = "PARTIAL";
+                fetchSymbol = candidate.symbol;
+                if (provider.name === "ALPHA_VANTAGE") dataMetrics.alphaSuccess++;
+                if (provider.name === "TWELVEDATA") dataMetrics.twelvedataSuccess++;
+                if (provider.name === "FINNHUB") dataMetrics.finnhubSuccess++;
+                console.log(`[DATA] source=${provider.name.toLowerCase()} symbol=${upperSymbol} status=fallback`);
+                break;
+              }
             }
           }
 
           const fetchDuration = Date.now() - startTime;
-          const resolvedPrice = resolveBestPrice(result);
-          let currentPrice = resolvedPrice.value;
-          let previousClose = toPositiveNumber(result?.regularMarketPreviousClose) || toPositiveNumber(result?.previousClose) || 0;
+          const priceCandidates = [
+            ["regularMarketPrice", result?.regularMarketPrice],
+            ["price", result?.price],
+            ["currentPrice", result?.currentPrice],
+            ["postMarketPrice", result?.postMarketPrice],
+            ["preMarketPrice", result?.preMarketPrice],
+            ["close", result?.close]
+          ];
+
+          let resolvedPrice = { field: null, value: null };
+          for (const [field, raw] of priceCandidates) {
+            const candidate = toPositiveNumber(raw);
+            if (candidate && candidate > 0) {
+              resolvedPrice = { field, value: candidate };
+              break;
+            }
+          }
+
+          const currentPrice = resolvedPrice.value;
+          const previousClose = toPositiveNumber(result?.regularMarketPreviousClose) || toPositiveNumber(result?.previousClose);
           const latencyBlocked = fetchDuration > 2500;
 
           console.log("PRICE FIELDS:", {
@@ -1233,38 +1396,31 @@ export async function getLiveMarketData(symbol) {
             currentPrice: result?.currentPrice,
             previousClose: result?.previousClose,
             chosenPriceField: resolvedPrice.field,
-            chosenPrice: resolvedPrice.value
+            chosenPrice: resolvedPrice.value ?? null
           });
 
-          if (!currentPrice && previousClose) {
-              currentPrice = previousClose;
-              priceField = "regularMarketPreviousClose";
-              if (priceSource === "FAILED") priceSource = "PREVIOUS_CLOSE";
-          }
-
-          if (resolvedPrice.field) priceField = resolvedPrice.field;
-
-          if (!currentPrice || currentPrice === 0) {
-              console.warn(`[FALLBACK] Data extraction failed for ${upperSymbol}`);
-              // Try stale cache before giving up completely
-              const cached = await getHybridCache(cacheKey, "HIGH");
-              if (cached && cached.currentPrice > 0 && cached.timestamp) {
-                const ageS = Math.floor((Date.now() - cached.timestamp) / 1000);
-                const policy = buildStaleCachePolicy({ cacheAgeSeconds: ageS, isMarketOpen: marketStatus.isMarketOpen });
-                if (policy.acceptable) {
-                  logEvent("data.availability.stale", { symbol: upperSymbol, ageSeconds: ageS, state: policy.state });
-                  console.log(`[STALE CACHE] Rescued ${upperSymbol} from stale cache. Age=${ageS}s state=${policy.state}`);
-                  return { ...cached, dataAge: ageS, dataConfidence: policy.state, staleData: true, staleWarning: policy.warning, degradedMode: true };
-                }
+          // Phase 6 — Reject invalid prices before any further processing or caching
+          const validatedPrice = assertValidPrice(currentPrice, upperSymbol, priceSource);
+          if (!validatedPrice) {
+            console.warn(`[INVALID PRICE REJECTED] ${upperSymbol} chosenPrice=${currentPrice}. Falling back.`);
+            const staleRescue = await getHybridCache(cacheKey, "HIGH");
+            if (staleRescue && staleRescue.currentPrice > 0 && staleRescue.timestamp) {
+              const ageS = Math.floor((Date.now() - staleRescue.timestamp) / 1000);
+              const policy = buildStaleCachePolicy({ cacheAgeSeconds: safeCacheAgeSeconds(ageS), isMarketOpen: marketStatus.isMarketOpen });
+              if (policy.acceptable) {
+                logEvent("data.availability.stale", { symbol: upperSymbol, ageSeconds: ageS, state: policy.state });
+                return { ...staleRescue, dataAge: ageS, dataConfidence: policy.state, staleData: true, degradedMode: true };
               }
-              return createFallbackLiveData(upperSymbol, { degradedMode: true });
+            }
+            return createFallbackLiveData(upperSymbol, { degradedMode: true });
           }
+
 
           const availabilityState = determineDataAvailabilityState({
               providerSuccessCount: priceSource !== "FAILED" ? 1 : 0,
               providerFailureCount: priceSource === "FAILED" ? 1 : 0,
               staleCacheAvailable: false,
-              cacheAgeSeconds: 0,
+              cacheAgeSeconds: safeCacheAgeSeconds(0),
               isMarketOpen: marketStatus.isMarketOpen,
               partialPayload: completeness === "PARTIAL",
               allProvidersCoolingDown: false,
@@ -1304,6 +1460,7 @@ export async function getLiveMarketData(symbol) {
             provider: priceSource,
             symbol: upperSymbol
           });
+          lastMarketSyncAt = new Date().toISOString();
           console.log(`[DATA] source=${priceSource.toLowerCase()} symbol=${upperSymbol} status=success latency=${fetchDuration}ms`);
           return finalData;
         },
@@ -1432,6 +1589,30 @@ export async function getHistoricalCandles(symbol, options = {}) {
 
   const days = Number(options.days || 320);
   const interval = options.interval || "1d";
+
+  if (upperSymbol.startsWith("TRIAL_")) {
+    const symbolsToTry = buildSymbolVariants(upperSymbol);
+    for (const sym of symbolsToTry) {
+      try {
+        const period2 = new Date();
+        const period1 = new Date();
+        period1.setDate(period2.getDate() - days);
+        const tempHistory = await yahooFinance.historical(sym, {
+          period1: period1.toISOString().split("T")[0],
+          period2: period2.toISOString().split("T")[0],
+          interval
+        });
+        if (Array.isArray(tempHistory)) {
+          const cleaned = tempHistory.filter(isValidHistoricalCandle);
+          if (cleaned.length > 0) return cleaned;
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+    return [];
+  }
+
   const cacheKey = `HISTORICAL_${upperSymbol}_${days}_${interval}`;
 
   return withRequestCoalescing(cacheKey, async () => {
@@ -1464,6 +1645,14 @@ export async function getHistoricalCandles(symbol, options = {}) {
       CACHE_GROUP_HISTORICAL,
       ttlSecondsForQuality("HIGH"),
       async () => {
+        // Phase 8 — Check empty-historical cooldown cache before hammering providers
+        const emptyCooldownKey = `HISTORICAL_EMPTY_${upperSymbol}_${days}_${interval}`;
+        const onCooldown = getCached(emptyCooldownKey);
+        if (onCooldown) {
+          logEvent("provider.historical.empty_cooldown_hit", { symbol: upperSymbol, days });
+          return [];
+        }
+
         // ── HISTORICAL PROVIDER 1: Yahoo ─────────────────────────────
         if (!shouldSkipProvider(providerState("yahoo"))) {
           const symbolsToTry = buildSymbolVariants(upperSymbol);
@@ -1477,7 +1666,9 @@ export async function getHistoricalCandles(symbol, options = {}) {
               if (Array.isArray(tempHistory) && tempHistory.length >= 20) {
                 const cleaned = tempHistory.filter(isValidHistoricalCandle);
                 if (cleaned.length >= 20) {
+                  // Decay failure score + circuit breaker on success
                   providerFailureScore.set("yahoo", Math.max(0, (providerFailureScore.get("yahoo") || 0) - 1));
+                  recordCircuitSuccess("yahoo", "historical");
                   console.log(`[HISTORICAL] source=yahoo symbol=${sym} candles=${cleaned.length}`);
                   return cleaned;
                 }
@@ -1485,6 +1676,7 @@ export async function getHistoricalCandles(symbol, options = {}) {
               }
             } catch (error) {
               providerFailureScore.set("yahoo", (providerFailureScore.get("yahoo") || 0) + 1);
+              recordCircuitFailure("yahoo", "historical");
               await delayHistoricalRetry(applyExponentialBackoff(250, providerFailureScore.get("yahoo") || 1));
               logProviderError("yahoo", { stage: "historical", symbol: sym }, error);
             }
@@ -1501,9 +1693,11 @@ export async function getHistoricalCandles(symbol, options = {}) {
           );
           if (tdCandles && tdCandles.length >= 20) {
             providerFailureScore.set("twelvedata", Math.max(0, (providerFailureScore.get("twelvedata") || 0) - 1));
+            recordCircuitSuccess("twelvedata", "historical");
             return tdCandles;
           }
           providerFailureScore.set("twelvedata", (providerFailureScore.get("twelvedata") || 0) + 1);
+          recordCircuitFailure("twelvedata", "historical");
           await delayHistoricalRetry(applyExponentialBackoff(300, providerFailureScore.get("twelvedata") || 1));
         }
 
@@ -1515,9 +1709,11 @@ export async function getHistoricalCandles(symbol, options = {}) {
           );
           if (alphaCandles && alphaCandles.length >= 20) {
             providerFailureScore.set("alpha_vantage", Math.max(0, (providerFailureScore.get("alpha_vantage") || 0) - 1));
+            recordCircuitSuccess("alpha_vantage", "historical");
             return alphaCandles;
           }
           providerFailureScore.set("alpha_vantage", (providerFailureScore.get("alpha_vantage") || 0) + 1);
+          recordCircuitFailure("alpha_vantage", "historical");
           await delayHistoricalRetry(applyExponentialBackoff(350, providerFailureScore.get("alpha_vantage") || 1));
         }
 
@@ -1525,6 +1721,8 @@ export async function getHistoricalCandles(symbol, options = {}) {
         logHistoricalLimiterTelemetry();
         logEvent("provider.historical.all_exhausted", { symbol: upperSymbol, days });
         console.warn(`[HISTORICAL] All providers exhausted for ${upperSymbol}. Returning empty.`);
+        // Phase 8 — Stamp empty-result cooldown so we don't hammer providers again for 300s (LOW cache TTL)
+        setCached(`HISTORICAL_EMPTY_${upperSymbol}_${days}_${interval}`, true, "LOW");
         return [];
       },
       {

@@ -2,10 +2,20 @@ import { calculateProviderReliability, trackProviderFailureBursts, trackProvider
 
 let lastExecutionAt = null;
 let schedulerStatus = "INITIALIZING";
+let lastStressTestAt = null;
+let lastCorrelationScanAt = null;
 
 export function markPortfolioDefenseExecution() {
   lastExecutionAt = new Date().toISOString();
   schedulerStatus = "RUNNING";
+}
+
+export function markStressTestExecution() {
+  lastStressTestAt = new Date().toISOString();
+}
+
+export function markCorrelationScanExecution() {
+  lastCorrelationScanAt = new Date().toISOString();
 }
 
 export function getPortfolioDefenseHealth() {
@@ -13,6 +23,8 @@ export function getPortfolioDefenseHealth() {
   return {
     schedulerStatus,
     lastExecutionAt,
+    lastStressTestAt,
+    lastCorrelationScanAt,
     providerHealth: Object.fromEntries(providers.map((provider) => [provider, {
       reliability: calculateProviderReliability(provider),
       successRate: trackProviderSuccessRate(provider),

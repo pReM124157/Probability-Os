@@ -31,3 +31,9 @@ export function shouldAnalyze(symbol) {
 export function safeObject(obj) {
   return obj && typeof obj === "object" ? obj : {};
 }
+
+export function safeArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined) return [];
+  return [value];
+}

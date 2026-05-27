@@ -33,7 +33,13 @@ import {
   trackPortfolioDefenseSuccess,
   trackSchedulerExecution
 } from "../services/portfolioTelemetry.service.js";
-import { markPortfolioDefenseExecution } from "../services/portfolioDefenseHealth.service.js";
+import {
+  markCorrelationScanExecution,
+  markPortfolioDefenseExecution,
+  markStressTestExecution
+} from "../services/portfolioDefenseHealth.service.js";
+
+const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 function buildReturnMap(historicalRows = []) {
   return historicalRows.reduce((acc, row) => {
@@ -83,10 +89,12 @@ export async function runPortfolioDefenseCycle() {
     returnMap
   }));
   const correlation = correlationJob.result;
+  markCorrelationScanExecution();
   console.log("🧠 Correlation analysis complete");
 
   const stressJob = await enqueueQuantJob("stress", { holdings }, async () => generateStressScenarioReport(holdings));
   const stress = stressJob.result;
+  markStressTestExecution();
   console.log("🔥 Stress testing complete");
 
   const outlookByTicker = await Promise.all(
@@ -172,7 +180,7 @@ export async function runPortfolioDefenseCycle() {
   console.log("🚨 Portfolio alerts generated");
 
   await storeDecisionReasoning({
-    userId: "system",
+    userId: SYSTEM_USER_ID,
     decisionType: "PORTFOLIO_DEFENSE_V2_QUANT",
     reasoning: "Historical covariance, Monte Carlo distributions, stress replay, and survival metrics indicate current defensive posture.",
     mathematicalBasis: `VaR95=${var95}, CVaR95=${cvar95}, Tail=${tailRisk}, Fragility=${fragility}, Survival=${survivalProbability}`,
@@ -243,8 +251,11 @@ export async function runPortfolioDefenseForHolding(holding, regime, threat) {
 }
 
 export function initializePortfolioDefenseAgent() {
+  if (globalThis.__portfolioDefenseInitialized) return;
+  globalThis.__portfolioDefenseInitialized = true;
   console.log("🛡️ Portfolio Defense Agent Initialized");
-  schedulePortfolioSurveillance();
+  // Cron scheduling is handled by src/scheduler/portfolio.scheduler.js.
+  // Do not call schedulePortfolioSurveillance() here, or the 10-minute defense loop can double-register.
 }
 
 export { startPortfolioMonitoring };

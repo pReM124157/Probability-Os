@@ -54,6 +54,32 @@ function safeRealizedReturn(row) {
   return 0;
 }
 
+function isClosedOutcomeStatus(status) {
+  return ["TARGET_HIT", "STOP_HIT", "EXPIRED", "TRADE_CLOSED", "CLOSED_MANUAL"].includes(
+    String(status || "").toUpperCase()
+  );
+}
+
+function isProductionAdaptiveRow(row) {
+  const audit = row?.audit || {};
+  const blob = JSON.stringify({
+    recommendation_id: row?.recommendation_id,
+    outcome_status: row?.outcome_status,
+    generated_by: audit?.generated_by,
+    provider_metadata: audit?.provider_metadata,
+    symbol: audit?.symbol
+  }).toUpperCase();
+
+  if (blob.includes("TEST")) return false;
+  if (blob.includes("TRIAL")) return false;
+  if (blob.includes("MANUAL.TEST")) return false;
+  if (blob.includes("MANUAL_TEST")) return false;
+  if (blob.includes("COPILOT.DELIVERY")) return false;
+  if (blob.includes("PRODUCTION.DELIVERY.VERIFICATION")) return false;
+
+  return true;
+}
+
 function computeReplayConsistency(rows = []) {
   if (!rows.length) return 0;
   const outcomes = rows.map((r) => (safeRealizedReturn(r) >= 0 ? 1 : 0));
@@ -135,12 +161,20 @@ async function fetchAdaptiveRows(windowDays = 365) {
   const ids = (outcomes || []).map((r) => r.recommendation_id);
   const { data: audits, error: auditError } = await supabase
     .from("recommendation_audit")
-    .select("recommendation_id,confidence,recommendation_type,sector,market_regime")
+    .select("recommendation_id,symbol,action,confidence,recommendation_type,sector,market_regime,generated_by,provider_metadata")
     .in("recommendation_id", ids.length ? ids : ["__none__"]);
   if (auditError) throw new AdaptiveError("Failed loading recommendation audits", "FETCH_FAILED", { auditError });
 
   const auditMap = new Map((audits || []).map((a) => [a.recommendation_id, a]));
-  return (outcomes || []).map((o) => ({ ...o, audit: auditMap.get(o.recommendation_id) || null }));
+  return (outcomes || [])
+    .map((o) => ({ ...o, audit: auditMap.get(o.recommendation_id) || null }))
+    .filter((row) => row.audit)
+    .filter(isProductionAdaptiveRow)
+    .filter((row) => isClosedOutcomeStatus(row.outcome_status))
+    .filter((row) => {
+      const action = String(row.audit?.action || "").toUpperCase();
+      return action === "BUY" || action === "SELL";
+    });
 }
 
 function groupByModel(rows = []) {
