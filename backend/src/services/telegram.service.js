@@ -2,6 +2,7 @@ import { Telegraf, Markup } from "telegraf";
 import { masterAgent } from "../agents/master.agent.js";
 import { safeObject, safeString, safeSubstring, safeArray } from "../core/safety.js";
 import { parseInput } from "../core/router.js";
+import { classifyUserIntent } from "../core/intentRouter.js";
 import { isValidSymbol } from "../core/validator.js";
 import { isPro } from "../core/user.js";
 import { buildMessage } from "../core/messageBuilder.js";
@@ -44,6 +45,7 @@ import { formatPortfolioReview } from "../core/portfolioFormatter.js";
 import { buildAnalysisContext } from "../core/analysisContext.js";
 import { parseAddCommand, parseRemoveCommand } from "./portfolioCommandParser.service.js";
 import { normalizeTickerAlias } from "../core/tickerAliases.js";
+import { optimizePortfolioCandidate } from "./portfolioOptimizer.service.js";
 import {
   claimEphemeralKey,
   consumeState,
@@ -868,21 +870,269 @@ async function sendTelegramLongMessage(chatId, text, options = {}) {
   }
 }
 
+async function analyzeSymbolForTelegram(symbol, options = {}) {
+  const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+  if (!normalizedSymbol) {
+    throw new Error("SYMBOL_REQUIRED");
+  }
+
+  const { stockData } = await buildAnalysisContext(normalizedSymbol);
+  console.log("MASTER AGENT CALLED");
+  console.log("MESSAGE:", normalizedSymbol);
+  const analysisData = await masterAgent(stockData, { strictValidation: true });
+  if (!analysisData) {
+    console.log("[GLOBAL GUARD] No data at all for", normalizedSymbol);
+    throw new Error("DATA_UNAVAILABLE");
+  }
+
+  return {
+    symbol: normalizedSymbol,
+    stockData,
+    analysisData,
+    formattedText: formatAnalysis(analysisData, normalizedSymbol, stockData, options)
+  };
+}
+
+function normalizePortfolioAction(action) {
+  const upper = safeString(action).trim().toUpperCase();
+  if (!upper) return null;
+  if (["SELL", "AVOID"].includes(upper)) return "AVOID";
+  if (["WAIT", "HOLD", "PENDING_EXECUTION", "WATCH", "BLOCKED"].includes(upper)) return "WAIT";
+  if (upper === "BUY") return "BUY";
+  return upper;
+}
+
+function isDeploymentBlockedFromText(value = "") {
+  const text = String(value || "").toUpperCase();
+  return (
+    text.includes("RECOMMENDATION: WAIT") ||
+    text.includes("SYSTEM VERDICT: WAIT") ||
+    text.includes("DEPLOYMENT BLOCKED") ||
+    text.includes("CAPITAL DEPLOYMENT: BLOCKED") ||
+    text.includes("DEPLOYMENT STATUS: BLOCKED") ||
+    text.includes("DEPLOYMENT STATE: BLOCKED") ||
+    text.includes("WATCHLIST_ONLY") ||
+    text.includes("WATCHLIST ONLY") ||
+    text.includes("DEFENSIVE / WATCHLIST_ONLY") ||
+    text.includes("DEFENSIVE / WATCHLIST ONLY") ||
+    text.includes("PENDING_EXECUTION") ||
+    text.includes("LOW CONFIDENCE")
+  );
+}
+
+function normalizeStandaloneActionFromAnalysis(analysisResult = {}) {
+  const result = safeObject(analysisResult);
+  const decision = safeObject(result.decision);
+  const entryTiming = safeObject(result.entryTiming);
+  const confidenceEvidence = safeObject(result.confidenceEvidence);
+  const warnings = safeArray(confidenceEvidence.warnings).map((item) => safeString(item).toUpperCase());
+  const serialized = JSON.stringify(result || {}).toUpperCase();
+
+  const explicitCandidates = [
+    result.systemVerdict,
+    result.finalVerdict,
+    result.verdict,
+    decision.finalDecision,
+    decision.recommendation,
+    result.recommendation,
+    result.action,
+    result.decision,
+    entryTiming.finalExecutionAdvice,
+    result?.result?.systemVerdict,
+    result?.result?.verdict,
+    result?.result?.recommendation
+  ].map((value) => safeString(value).trim()).filter(Boolean);
+
+  const explicit = explicitCandidates[0] || "";
+  const action = explicit.toUpperCase();
+  const executionAdvice = safeString(entryTiming.finalExecutionAdvice).toUpperCase();
+  const reasonText = safeString(decision.reason || result.reason || "").toUpperCase();
+  const nextStep = safeString(result.nextStep).toUpperCase();
+
+  const deploymentBlocked =
+    isDeploymentBlockedFromText(serialized) ||
+    action.includes("DEPLOYMENT BLOCKED") ||
+    action.includes("WATCHLIST_ONLY") ||
+    action.includes("WATCHLIST ONLY") ||
+    action.includes("PENDING_EXECUTION") ||
+    action.includes("WAIT") ||
+    action.includes("HOLD") ||
+    executionAdvice.includes("WAIT") ||
+    executionAdvice.includes("DEFER") ||
+    executionAdvice.includes("GATED") ||
+    executionAdvice.includes("NO-TRADE") ||
+    executionAdvice.includes("NO TRADE") ||
+    reasonText.includes("TRADABILITY_HOLD_BIAS") ||
+    warnings.includes("TRADABILITY_HOLD_BIAS") ||
+    warnings.includes("NON_EXECUTABLE_LIVE_PRICE") ||
+    nextStep.includes("WAIT FOR PRICE CONFIRMATION") ||
+    nextStep.includes("WAIT FOR MARKET OPEN");
+
+  if (action.includes("SELL")) {
+    return { action: "SELL", deploymentBlocked: false };
+  }
+
+  if (action.includes("AVOID")) {
+    return { action: "AVOID", deploymentBlocked: false };
+  }
+
+  if (deploymentBlocked || action.includes("WAIT") || action.includes("HOLD") || action.includes("PENDING")) {
+    return { action: "WAIT", deploymentBlocked: true };
+  }
+
+  if (action.includes("BUY")) {
+    return { action: "BUY", deploymentBlocked: false };
+  }
+
+  return {
+    action: normalizePortfolioAction(action),
+    deploymentBlocked
+  };
+}
+
+function extractStandaloneRecommendation(analysisResult, symbol) {
+  const result = safeObject(analysisResult);
+  const decision = safeObject(result.decision);
+  const entryTiming = safeObject(result.entryTiming);
+  const risk = safeObject(result.risk);
+  const sector = safeObject(result.intelligence?.sector);
+  const normalizedVerdict = normalizeStandaloneActionFromAnalysis(result);
+
+  return {
+    symbol: String(symbol || "").trim().toUpperCase(),
+    action: normalizedVerdict.action,
+    deploymentBlocked: normalizedVerdict.deploymentBlocked,
+    confidence: Number(
+      decision.finalConfidenceScore ||
+      decision.confidenceScore ||
+      result.confidence ||
+      result.finalConviction ||
+      result.conviction ||
+      0
+    ) || null,
+    currentPrice: Number(
+      result.currentPrice ||
+      entryTiming.currentPrice ||
+      result.price ||
+      0
+    ) || null,
+    sector: safeString(result.sector || sector.bias || result.sectorBias || "").toUpperCase() || null,
+    riskScore: Number(result.riskScore || risk.riskScore || 0) || null
+  };
+}
+
+function applyStandalonePortfolioGovernance(optimizerResult, standaloneRecommendation, candidateSymbol) {
+  const fit = safeObject(optimizerResult);
+  const recommendation = safeObject(standaloneRecommendation);
+  const action = safeString(recommendation.action).toUpperCase();
+  const deploymentBlocked = Boolean(recommendation.deploymentBlocked);
+  const symbol = safeString(candidateSymbol || recommendation.symbol || "This stock").toUpperCase();
+
+  if (action === "SELL" || action === "AVOID") {
+    return {
+      ...fit,
+      portfolioFit: "BAD",
+      portfolioAction: "AVOID",
+      suggestedAllocationPct: null,
+      shouldBuySeparately: false,
+      shouldBuyForPortfolio: false,
+      reason: `${symbol} is not strong enough on standalone analysis, so portfolio action remains defensive.`,
+      positives: []
+    };
+  }
+
+  if (deploymentBlocked || action === "WAIT" || action === "HOLD" || action === "PENDING_EXECUTION" || action === "WATCH") {
+    return {
+      ...fit,
+      portfolioFit: "NEUTRAL",
+      portfolioAction: "WATCH",
+      suggestedAllocationPct: null,
+      shouldBuySeparately: false,
+      shouldBuyForPortfolio: false,
+      reason: `${symbol} has strong fundamentals, but standalone deployment is currently blocked until activation gates pass.`,
+      positives: []
+    };
+  }
+
+  return fit;
+}
+
+function formatSuggestedAllocation(value) {
+  const pct = Number(value);
+  if (!Number.isFinite(pct) || pct <= 0) return "N/A";
+  const high = Number((pct + 1).toFixed(0));
+  return `${pct.toFixed(0)}-${high}%`;
+}
+
+function formatBooleanFlag(value) {
+  return value ? "Yes" : "No";
+}
+
+function formatPortfolioFitSection({ candidateSymbol, portfolioSymbols = [], optimizerResult, standaloneRecommendation = {} }) {
+  const fit = safeObject(optimizerResult);
+  const standalone = safeObject(standaloneRecommendation);
+  const standaloneAction = safeString(standalone.action).toUpperCase();
+  const finalAction = safeString(fit.portfolioAction || fit.portfolioFit || "WATCH").toUpperCase();
+  const blockedStandalone = standaloneAction !== "BUY";
+  const buySeparately =
+    standaloneAction === "BUY" &&
+    !["WATCH", "AVOID"].includes(finalAction) &&
+    fit.shouldBuySeparately === true;
+  const buyForPortfolio =
+    standaloneAction === "BUY" &&
+    ["ADD", "ADD_SMALL"].includes(finalAction) &&
+    fit.shouldBuyForPortfolio === true;
+  const suggestedAllocation = blockedStandalone ? "N/A" : formatSuggestedAllocation(fit.suggestedAllocationPct);
+  const reason = standaloneAction === "WAIT"
+    ? "The standalone dossier is currently WAIT / deployment blocked, so portfolio addition should wait until activation gates pass."
+    : safeString(fit.reason || "Portfolio fit could not be calculated safely.");
+  const risks = safeArray(fit.risks).slice(0, 2);
+  const positives = blockedStandalone ? [] : safeArray(fit.positives).slice(0, 2);
+  const lines = [
+    "━━━━━━━━━━━━━━━━━━",
+    "📌 Portfolio Fit",
+    `• Candidate: ${candidateSymbol || "N/A"}`,
+    `• Portfolio holdings detected: ${portfolioSymbols.length ? portfolioSymbols.join(", ") : "None"}`,
+    `• Portfolio Fit: ${safeString(fit.portfolioFit || "N/A")}`,
+    `• Portfolio Action: ${safeString(finalAction || "N/A")}`,
+    `• Suggested Allocation: ${suggestedAllocation}`,
+    `• Buy separately: ${formatBooleanFlag(buySeparately)}`,
+    `• Buy for this portfolio: ${formatBooleanFlag(buyForPortfolio)}`,
+    `• Reason: ${reason}`
+  ];
+
+  if (risks.length) {
+    lines.push(`• Key risks: ${risks.join(" | ")}`);
+  }
+
+  if (positives.length) {
+    lines.push(`• Positives: ${positives.join(" | ")}`);
+  }
+
+  lines.push(`• Final action: ${safeString(finalAction || "WATCH")}`);
+
+  return lines.join("\n");
+}
+
+function getCasualReply(text = "") {
+  const lower = safeString(text).trim().toLowerCase();
+  if (lower.includes("thanks") || lower.includes("thank you")) {
+    return "Anytime. Ask about a stock or use /analyze TCS when you're ready.";
+  }
+  if (lower.includes("good morning") || lower.includes("good evening") || lower.includes("good afternoon")) {
+    return "Hello. I can help with stocks, portfolios, and market questions when you need me.";
+  }
+  return "Hi. Send a stock like TCS or ask something like \"Should I buy TCS?\"";
+}
+
 
 async function performAnalysis(chatId, symbol, footer = "", options = {}) {
   await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
   console.log("[ANALYZE]", { symbol });
 
   const result = await runAnalysisSafe(symbol, async (sym) => {
-    const { stockData } = await buildAnalysisContext(sym);
-    console.log("MASTER AGENT CALLED");
-    console.log("MESSAGE:", sym);
-    const data = await masterAgent(stockData, { strictValidation: true });
-    if (!data) {
-      console.log("[GLOBAL GUARD] No data at all for", sym);
-      throw new Error("DATA_UNAVAILABLE");
-    }
-    return formatAnalysis(data, sym, stockData, options);
+    const analysis = await analyzeSymbolForTelegram(sym, options);
+    return analysis.formattedText;
   });
 
   if (!result.ok) {
@@ -1736,6 +1986,104 @@ bot.on("text", async (ctx) => {
       // Proceed to analysis — availability is LIVE or DEGRADED (acceptable).
       await performAnalysis(chatId, cleanTicker, footer, { mode: "full" });
       return;
+    }
+
+    // ── Natural-language routing for non-command messages ───────────
+    if (!text.startsWith("/")) {
+      const routed = classifyUserIntent(text);
+      logEvent("telegram.intent_routed", {
+        intent: routed.intent,
+        candidateSymbol: routed.candidateSymbol,
+        portfolioSymbols: routed.portfolioSymbols,
+        requiresFinancialData: routed.requiresFinancialData
+      });
+
+      if (routed.intent === "CASUAL_CHAT") {
+        await send(getCasualReply(text));
+        return;
+      }
+
+      if (routed.intent === "STOCK_ANALYSIS" && routed.candidateSymbol) {
+        const symbol = normalizeTickerAlias(routed.candidateSymbol);
+        await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
+
+        const analysisResult = await runAnalysisSafe(symbol, async (sym) => {
+          const analysis = await analyzeSymbolForTelegram(sym);
+          return analysis.formattedText;
+        });
+
+        if (!analysisResult.ok) {
+          await send(`I could not complete live analysis for ${symbol} right now. Please try /analyze ${symbol}.`);
+          return;
+        }
+
+        let finalMessage = analysisResult.text;
+        if (footer) finalMessage += `\n\n${footer}`;
+        await sendTelegramLongMessage(chatId, finalMessage);
+        return;
+      }
+
+      if (routed.intent === "PORTFOLIO_OPTIMIZATION" && routed.candidateSymbol) {
+        const symbol = normalizeTickerAlias(routed.candidateSymbol);
+        const portfolio = safeArray(routed.extractedPortfolio)
+          .map((holding) => ({
+            symbol: safeString(holding?.symbol).toUpperCase()
+          }))
+          .filter((holding) => holding.symbol);
+
+        await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
+
+        const analysisResult = await runAnalysisSafe(symbol, async (sym) => analyzeSymbolForTelegram(sym));
+
+        if (!analysisResult.ok) {
+          await send(`I could not complete live analysis for ${symbol} right now. Please try /analyze ${symbol}.`);
+          return;
+        }
+
+        const analysisPayload = analysisResult.text;
+        let finalMessage = analysisPayload.formattedText;
+
+        try {
+          const standaloneRecommendation = extractStandaloneRecommendation(analysisPayload.analysisData, symbol);
+          const optimizerResult = await optimizePortfolioCandidate({
+            candidateSymbol: symbol,
+            portfolio,
+            standaloneRecommendation
+          });
+          const governedOptimizerResult = applyStandalonePortfolioGovernance(
+            optimizerResult,
+            standaloneRecommendation,
+            symbol
+          );
+
+          finalMessage += `\n\n${formatPortfolioFitSection({
+            candidateSymbol: symbol,
+            portfolioSymbols: routed.portfolioSymbols,
+            optimizerResult: governedOptimizerResult,
+            standaloneRecommendation
+          })}`;
+        } catch (optimizerError) {
+          logError("telegram.portfolio_optimizer.error", optimizerError, {
+            chatId,
+            candidateSymbol: symbol
+          });
+          finalMessage += "\n\n━━━━━━━━━━━━━━━━━━\n📌 Portfolio Fit\nPortfolio fit could not be calculated safely.";
+        }
+
+        if (footer) finalMessage += `\n\n${footer}`;
+        await sendTelegramLongMessage(chatId, finalMessage);
+        return;
+      }
+
+      if (routed.intent === "PORTFOLIO_REVIEW") {
+        await send("Portfolio review is available through /portfolio while natural-language portfolio review is being connected.");
+        return;
+      }
+
+      if (routed.intent === "MARKET_OVERVIEW" || routed.intent === "MACRO_QUERY") {
+        await send("Market overview is available through /sector, /scanner, or your existing macro flow while natural-language market routing is being connected.");
+        return;
+      }
     }
 
     // ── Chat fallback ───────────────────────────────────────────────
