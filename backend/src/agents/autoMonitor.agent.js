@@ -40,7 +40,19 @@ export async function runAutoMonitor() {
 
   const result = generateRebalanceAdvice(mappedPortfolio);
 
-  const message = `
+  const message = result.status === "DATA_NOT_VALIDATED"
+    ? `
+🚨 INSTITUTIONAL PORTFOLIO REVIEW
+━━━━━━━━━━━━━━━━━━
+⚠️ Portfolio data could not be fully validated.
+
+I detected a portfolio review request, but holding weights, sector exposure, or portfolio value are missing/zero.
+
+Use /portfolio for full health details, or send holdings with quantities like:
+“I have RELIANCE 10 shares and INFY 5 shares.”
+━━━━━━━━━━━━━━━━━━
+`.trim()
+    : `
 🚨 INSTITUTIONAL PORTFOLIO REVIEW
 ━━━━━━━━━━━━━━━━━━
 📊 Dominant Sector: ${result.dominantSector || "N/A"} (${result.sectorPercent || 0}%)

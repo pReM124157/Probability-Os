@@ -46,6 +46,25 @@ export function generateRebalanceAdvice(portfolio) {
     ? Number((((Number(biggestStock?.investedAmount) || 0) / safeTotalValue) * 100).toFixed(2))
     : 0;
 
+  const hasValidPortfolioValue = safeTotalValue > 0;
+  const hasValidExposure =
+    hasValidPortfolioValue &&
+    Number.isFinite(sectorPercent) &&
+    Number.isFinite(stockPercent) &&
+    (sectorPercent > 0 || stockPercent > 0);
+
+  if (!hasValidExposure) {
+    return {
+      status: "DATA_NOT_VALIDATED",
+      dominantSector: "N/A",
+      sectorPercent: 0,
+      biggestStock: "N/A",
+      stockPercent: "0.00",
+      recommendation:
+        "Portfolio exposure could not be validated because holding values, sector exposure, or portfolio value are missing/zero."
+    };
+  }
+
   let recommendation = [];
 
   if (sectorPercent > 50) {
@@ -65,6 +84,7 @@ export function generateRebalanceAdvice(portfolio) {
   }
 
   return {
+    status: "OK",
     dominantSector,
     sectorPercent,
     biggestStock: biggestStock?.symbol || "N/A",
