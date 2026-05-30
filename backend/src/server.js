@@ -5,7 +5,15 @@ import { staggerSchedulerExecution } from "./services/schedulerStagger.service.j
 import { startInstitutionalWorkers } from "./workers/index.js";
 
 const PORT = process.env.PORT || 5000;
-const RENDER_DEMO_MODE = process.env.RENDER_DEMO_MODE === "true";
+const RENDER_DEMO_MODE = String(process.env.RENDER_DEMO_MODE || "")
+  .trim()
+  .toLowerCase() === "true";
+
+console.log("[BOOT CONFIG]", {
+  nodeEnv: process.env.NODE_ENV || null,
+  renderDemoMode: RENDER_DEMO_MODE,
+  rawRenderDemoMode: process.env.RENDER_DEMO_MODE || null
+});
 const app = express();
 let backgroundServicesInitialized = false;
 
