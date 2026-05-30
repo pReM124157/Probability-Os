@@ -1548,6 +1548,8 @@ CRITICAL RULES:
     // Live session telemetry log formats
     const candidateLogStr = `symbol: ${ticker}, volumeRatio: ${technical?.volumeRatio || 0}, confidence: ${Number(finalDecision.finalConfidenceScore)}, rrRatio: ${parseCurrency(entryTiming.rewardRiskRatio) || 0}, trendStrength: ${entryTiming.trendStrength || technical?.score || 0}, momentumConfirmed: ${!!entryTiming.momentumConfirmed}, executionStatus: ${isLive ? (finalDecision.finalDecision || "HOLD") : ((finalDecision.finalDecision === "BUY" || finalDecision.finalDecision === "SELL") ? "PENDING_EXECUTION" : "HOLD")}, marketRegime: ${marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED"}`;
 
+    let news = [];
+
     console.log(`[LIVE SIGNAL CANDIDATE] ${candidateLogStr}`);
 
     if (entryTiming.momentumConfirmed) {
@@ -1914,7 +1916,7 @@ CRITICAL RULES:
       };
     }
 
-    const news = await fetchCompanyNews(ticker, stockData?.Name);
+    news = await fetchCompanyNews(ticker, stockData?.Name);
     console.log("[NEWS DATA]", news);
 
     const confidenceEvidence = {

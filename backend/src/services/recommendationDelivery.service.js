@@ -267,9 +267,47 @@ async function claimRecommendationForDelivery(row) {
   };
 }
 
+function isTestRecommendation(row = {}) {
+  const haystack = [
+    row.ai_summary,
+    row.reasoning_snapshot?.reason,
+    row.provider_metadata?.source,
+    row.generated_by,
+    row.analysis_version,
+    row.conviction,
+    row.recommendation_id
+  ]
+    .filter(Boolean)
+    .map((value) => {
+      try {
+        return typeof value === "string" ? value : JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    })
+    .join(" ")
+    .toUpperCase();
+
+  return (
+    haystack.includes("TEST ONLY") ||
+    haystack.includes("CONTROLLED RECOMMENDATION DELIVERY VERIFICATION") ||
+    haystack.includes("MANUAL:TEST-RECOMMENDATION-DELIVERY-SEND") ||
+    haystack.includes("MANUAL.TEST.ROUTE") ||
+    haystack.includes("TEST_SIGNAL") ||
+    haystack.includes("TEST-REC-")
+  );
+}
+
 export function evaluateRecommendationEligibility(row, { runtimeState } = {}) {
   if (!row || typeof row !== "object") {
     return { eligible: false, suppressionReason: "MALFORMED_RECOMMENDATION" };
+  }
+
+  if (
+    process.env.ALLOW_TEST_RECOMMENDATION_DELIVERY !== "true" &&
+    isTestRecommendation(row)
+  ) {
+    return { eligible: false, suppressionReason: "TEST_RECOMMENDATION_BLOCKED" };
   }
   if (!row.recommendation_id) {
     return { eligible: false, suppressionReason: "MISSING_RECOMMENDATION_ID" };
