@@ -1204,13 +1204,55 @@ function formatPortfolioFitSection({ candidateSymbol, portfolioSymbols = [], opt
 
 function getCasualReply(text = "") {
   const lower = safeString(text).trim().toLowerCase();
+
+  const asksCreator =
+    /\\b(who made you|who created you|who built you|your creator|who is your founder|who developed you)\\b/i.test(lower);
+
+  const asksIdentity =
+    /\\b(who are you|what are you|introduce yourself|explain yourself)\\b/i.test(lower);
+
+  if (asksCreator) {
+    return [
+      "I’m Finsight AI, built by Prem Ganatra — my respected creator and founder.",
+      "",
+      "I’m designed as a multi-agent financial intelligence system for Indian equities, covering stock analysis, portfolio defense, risk governance, market scanning, and Telegram delivery.",
+      "",
+      "You can ask me:",
+      "• Should I buy TCS?",
+      "• I have RELIANCE and INFY, should I add TCS?",
+      "• Run scanner"
+    ].join("\\n");
+  }
+
+  if (
+    asksIdentity ||
+    /^(hi|hello|hey|hi bro|yo|sup|bro)\\b/i.test(lower) ||
+    lower.includes("good morning") ||
+    lower.includes("good evening") ||
+    lower.includes("good afternoon")
+  ) {
+    return [
+      "Hi, I’m Finsight AI — an AI-powered market intelligence and portfolio analysis agent for Indian equities.",
+      "",
+      "I was built by Prem Ganatra to help with institutional-style stock analysis, portfolio risk review, market scanning, and recommendation logic.",
+      "",
+      "Try asking:",
+      "• Should I buy TCS?",
+      "• I have RELIANCE and INFY, should I add TCS?",
+      "• Run scanner",
+      "• How is my portfolio?"
+    ].join("\\n");
+  }
+
   if (lower.includes("thanks") || lower.includes("thank you")) {
-    return "Anytime. Ask about a stock or use /analyze TCS when you're ready.";
+    return "Anytime. Ask me about a stock, portfolio, scanner, or market view when you're ready.";
   }
-  if (lower.includes("good morning") || lower.includes("good evening") || lower.includes("good afternoon")) {
-    return "Hello. I can help with stocks, portfolios, and market questions when you need me.";
-  }
-  return "Hi. Send a stock like TCS or ask something like \"Should I buy TCS?\"";
+
+  return [
+    "I’m here. Ask me about a stock, portfolio, scanner, or market view.",
+    "",
+    "Example: Should I buy TCS?"
+  ].join("\\n");
 }
 
 
