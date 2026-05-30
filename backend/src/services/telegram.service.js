@@ -1887,6 +1887,55 @@ bot.on("text", async (ctx) => {
         const isPostMarket = opportunities?.status === "POST_MARKET_CONTEXT";
         const lastSignal = opportunities?.lastSignal;
 
+        const isTestLastSignal = (signal = {}) => {
+          const haystack = [
+            signal.ai_summary,
+            signal.reasoning_snapshot?.reason,
+            signal.provider_metadata?.source,
+            signal.generated_by,
+            signal.analysis_version,
+            signal.conviction,
+            signal.recommendation_id
+          ]
+            .filter(Boolean)
+            .map((value) => {
+              try {
+                return typeof value === "string" ? value : JSON.stringify(value);
+              } catch {
+                return String(value);
+              }
+            })
+            .join(" ")
+            .toUpperCase();
+
+          return (
+            haystack.includes("TEST ONLY") ||
+            haystack.includes("CONTROLLED RECOMMENDATION DELIVERY VERIFICATION") ||
+            haystack.includes("MANUAL:TEST-RECOMMENDATION-DELIVERY-SEND") ||
+            haystack.includes("MANUAL.TEST.ROUTE") ||
+            haystack.includes("TEST_SIGNAL") ||
+            haystack.includes("TEST-REC-")
+          );
+        };
+
+        if (isPostMarket && lastSignal && isTestLastSignal(lastSignal)) {
+          console.warn("[SCANNER] Suppressed TEST lastSignal fallback", {
+            symbol: lastSignal.symbol,
+            recommendationId: lastSignal.recommendation_id
+          });
+
+          const msg =
+            `🏛 *FINSIGHT ELITE FLOW TERMINAL*\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `Confidence State: ${confidenceTag}\n\n` +
+            `No institutional-grade opportunities available right now.\n` +
+            `Last available signal was a test/verification record and has been suppressed.\n` +
+            `Capital preservation mode active.`;
+
+          await send(msg, { parse_mode: "Markdown" });
+          return;
+        }
+
         if (isPostMarket && lastSignal) {
           const now = new Date();
 
