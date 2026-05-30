@@ -27,9 +27,28 @@ export function formatPortfolioReview(review, options = {}) {
 
   lines.push("🚨 FINSIGHT — LIVE PORTFOLIO COMMAND CENTER");
   lines.push("━━━━━━━━━━━━━━━━━━");
+  const investedCapital =
+    Number(review?.totalInvested) ||
+    Number(review?.investedCapital) ||
+    Number(review?.details?.totalInvested) ||
+    Number(review?.details?.investedCapital) ||
+    0;
+
+  const hasCostBasis = Number.isFinite(investedCapital) && investedCapital > 0;
+  const totalPnL = Number(review?.totalPnL);
+  const totalPnLPct = Number(review?.totalPnLPct);
+  const hasValidPnL =
+    hasCostBasis &&
+    Number.isFinite(totalPnL) &&
+    Number.isFinite(totalPnLPct);
+
   lines.push(`📊 Portfolio Value: ${formatCurrency(review.totalValue)}`);
-  lines.push(`💼 Invested Capital: ${review?.details?.formatted?.totalInvested || formatCurrency(0)}`);
-  lines.push(`📈 Unrealized P/L: ${review.totalPnL >= 0 ? "+" : "-"}${formatCurrency(Math.abs(review.totalPnL))} (${review.totalPnLPct >= 0 ? "+" : ""}${review.totalPnLPct.toFixed(2)}%)`);
+  lines.push(`💼 Invested Capital: ${hasCostBasis ? formatCurrency(investedCapital) : "Not available"}`);
+  lines.push(
+    hasValidPnL
+      ? `📈 Unrealized P/L: ${totalPnL >= 0 ? "+" : "-"}${formatCurrency(Math.abs(totalPnL))} (${totalPnLPct >= 0 ? "+" : ""}${totalPnLPct.toFixed(2)}%)`
+      : "📈 Unrealized P/L: Not available — cost basis missing"
+  );
   lines.push(`🧾 Holdings Count: ${review?.details?.stockCount || 0}`);
   lines.push("🏦 Sector Exposure");
 
