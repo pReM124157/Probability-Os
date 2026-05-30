@@ -39,7 +39,7 @@ const recommendationAuditSchema = z.object({
   symbol: z.string().min(1),
   exchange: z.string().optional().nullable(),
   recommendationType: z.string().min(1),
-  action: z.enum(["BUY", "SELL", "HOLD", "AVOID"]),
+  action: z.enum(["BUY", "SELL", "HOLD", "AVOID", "PENDING_EXECUTION"]),
   confidence: z.number().min(0).max(100),
   conviction: z.string().optional().nullable(),
   entryPrice: z.number().nonnegative().optional().nullable(),
@@ -85,7 +85,7 @@ function normalizeRecommendationAuditPayload(payload = {}) {
     recommendationType: String(payload.recommendationType || "").toUpperCase().trim(),
     action: (() => {
       const raw = String(payload.action || "").toUpperCase().trim();
-      if (["BUY", "SELL", "HOLD", "AVOID"].includes(raw)) return raw;
+      if (["BUY", "SELL", "HOLD", "AVOID", "PENDING_EXECUTION"].includes(raw)) return raw;
       if (raw.includes("BUY") || raw.includes("ACCUMULATE")) return "BUY";
       if (raw.includes("SELL") || raw.includes("EXIT") || raw.includes("TRIM")) return "SELL";
       if (raw.includes("AVOID") || raw.includes("WAIT") || raw.includes("BLOCK")) return "AVOID";
