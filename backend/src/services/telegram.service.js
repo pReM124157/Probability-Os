@@ -1206,10 +1206,10 @@ function getCasualReply(text = "") {
   const lower = safeString(text).trim().toLowerCase();
 
   const asksCreator =
-    /\\b(who made you|who created you|who built you|your creator|who is your founder|who developed you)\\b/i.test(lower);
+    /\b(who made you|who created you|who built you|your creator|who is your founder|who developed you)\b/i.test(lower);
 
   const asksIdentity =
-    /\\b(who are you|what are you|introduce yourself|explain yourself)\\b/i.test(lower);
+    /\b(who are you|what are you|introduce yourself|explain yourself)\b/i.test(lower);
 
   if (asksCreator) {
     return [
@@ -1221,12 +1221,12 @@ function getCasualReply(text = "") {
       "• Should I buy TCS?",
       "• I have RELIANCE and INFY, should I add TCS?",
       "• Run scanner"
-    ].join("\\n");
+    ].join("\n");
   }
 
   if (
     asksIdentity ||
-    /^(hi|hello|hey|hi bro|yo|sup|bro)\\b/i.test(lower) ||
+    /^(hi|hello|hey|hi bro|yo|sup|bro)\b/i.test(lower) ||
     lower.includes("good morning") ||
     lower.includes("good evening") ||
     lower.includes("good afternoon")
@@ -1241,7 +1241,7 @@ function getCasualReply(text = "") {
       "• I have RELIANCE and INFY, should I add TCS?",
       "• Run scanner",
       "• How is my portfolio?"
-    ].join("\\n");
+    ].join("\n");
   }
 
   if (lower.includes("thanks") || lower.includes("thank you")) {
@@ -1252,9 +1252,8 @@ function getCasualReply(text = "") {
     "I’m here. Ask me about a stock, portfolio, scanner, or market view.",
     "",
     "Example: Should I buy TCS?"
-  ].join("\\n");
+  ].join("\n");
 }
-
 
 async function performAnalysis(chatId, symbol, footer = "", options = {}) {
   await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
