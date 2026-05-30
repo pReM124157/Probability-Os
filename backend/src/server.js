@@ -5,6 +5,7 @@ import { staggerSchedulerExecution } from "./services/schedulerStagger.service.j
 import { startInstitutionalWorkers } from "./workers/index.js";
 
 const PORT = process.env.PORT || 5000;
+const RENDER_DEMO_MODE = process.env.RENDER_DEMO_MODE === "true";
 const app = express();
 let backgroundServicesInitialized = false;
 
@@ -367,6 +368,11 @@ app.listen(PORT, "0.0.0.0", () => {
       app.use(mainApp);
 
       startBot();
+
+      if (RENDER_DEMO_MODE) {
+        console.log("🧪 Render demo mode enabled — Telegram bot running, heavy schedulers skipped.");
+        return;
+      }
 
       await staggerSchedulerExecution("portfolio_surveillance", async () => startPortfolioScheduler());
       await staggerSchedulerExecution("monitoring", async () => startMonitoringJob());
