@@ -97,7 +97,7 @@ const SYMBOL_STOPWORDS = new Set([
 const CASUAL_PATTERNS = [
   /^(hi|hello|hey|yo|sup|good morning|good afternoon|good evening)\b/i,
   /^(thanks|thank you|thx)\b/i,
-  /^(what are you doing|who are you|explain yourself)\b/i
+  /^(what are you doing|who are you|what are you|explain yourself|introduce yourself|who made you|who created you|who built you|who developed you|who is your founder|your creator)\b/i
 ];
 
 const PORTFOLIO_PHRASES = [
