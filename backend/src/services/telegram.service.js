@@ -1212,47 +1212,26 @@ function getCasualReply(text = "") {
     /\b(who are you|what are you|introduce yourself|explain yourself)\b/i.test(lower);
 
   if (asksCreator) {
-    return [
-      "I’m Finsight AI, built by Prem Ganatra — my respected creator and founder.",
-      "",
-      "I’m designed as a multi-agent financial intelligence system for Indian equities, covering stock analysis, portfolio defense, risk governance, market scanning, and Telegram delivery.",
-      "",
-      "You can ask me:",
-      "• Should I buy TCS?",
-      "• I have RELIANCE and INFY, should I add TCS?",
-      "• Run scanner"
-    ].join("\n");
+    return "I was built by Prem Ganatra.";
   }
 
-  if (
-    asksIdentity ||
-    /^(hi|hello|hey|hi bro|yo|sup|bro)\b/i.test(lower) ||
-    lower.includes("good morning") ||
-    lower.includes("good evening") ||
-    lower.includes("good afternoon")
-  ) {
-    return [
-      "Hi, I’m Finsight AI — an AI-powered market intelligence and portfolio analysis agent for Indian equities.",
-      "",
-      "I was built by Prem Ganatra to help with institutional-style stock analysis, portfolio risk review, market scanning, and recommendation logic.",
-      "",
-      "Try asking:",
-      "• Should I buy TCS?",
-      "• I have RELIANCE and INFY, should I add TCS?",
-      "• Run scanner",
-      "• How is my portfolio?"
-    ].join("\n");
+  if (asksIdentity) {
+    return "I’m Finsight AI — a market intelligence and portfolio analysis agent.";
+  }
+
+  if (/^(hi|hello|hey|hi bro|yo|sup|bro)\b/i.test(lower)) {
+    return "I’m Finsight AI — a market intelligence and portfolio analysis agent. Ask me about a stock, portfolio, scanner, or market view.";
+  }
+
+  if (lower.includes("good morning") || lower.includes("good evening") || lower.includes("good afternoon")) {
+    return "Hello. I’m Finsight AI — ask me about a stock, portfolio, scanner, or market view.";
   }
 
   if (lower.includes("thanks") || lower.includes("thank you")) {
-    return "Anytime. Ask me about a stock, portfolio, scanner, or market view when you're ready.";
+    return "Anytime.";
   }
 
-  return [
-    "I’m here. Ask me about a stock, portfolio, scanner, or market view.",
-    "",
-    "Example: Should I buy TCS?"
-  ].join("\n");
+  return "Ask me about a stock, portfolio, scanner, or market view.";
 }
 
 async function performAnalysis(chatId, symbol, footer = "", options = {}) {
