@@ -45,6 +45,6 @@ export function startSubscriptionLifecycleScheduler() {
   cron.schedule("0 * * * *", async () => {
     await runSubscriptionLifecycleSchedulerTick({ now: new Date() }).catch(() => {});
   }, {
-    timezone: "UTC"
+    timezone: "Asia/Kolkata"
   });
 }

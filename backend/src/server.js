@@ -17,6 +17,15 @@ console.log("[BOOT CONFIG]", {
 const app = express();
 let backgroundServicesInitialized = false;
 
+async function startSchedulerSafely(name, starter) {
+  try {
+    await starter();
+    console.log(`✅ Scheduler started: ${name}`);
+  } catch (error) {
+    console.error(`❌ Scheduler failed to start: ${name}`, error);
+  }
+}
+
 // 1. START SERVER IMMEDIATELY FOR HEALTH CHECK
 app.get("/", (req, res) => {
   res.status(200).send("OK");
@@ -385,19 +394,19 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startRecommendationTrackingScheduler } = await import("./scheduler/recommendationTracking.scheduler.js");
       const { startStatisticalValidationScheduler } = await import("./scheduler/statisticalValidation.scheduler.js");
 
-      await staggerSchedulerExecution("portfolio_surveillance", async () => startPortfolioScheduler());
-      await staggerSchedulerExecution("monitoring", async () => startMonitoringJob());
-      await staggerSchedulerExecution("daily_hook", async () => startDailyHook());
-      await staggerSchedulerExecution("spike_hook", async () => startSpikeHook());
-      await staggerSchedulerExecution("recommendation_tracking", async () => startRecommendationTrackingScheduler());
-      await staggerSchedulerExecution("statistical_validation", async () => startStatisticalValidationScheduler());
-      await staggerSchedulerExecution("public_analytics", async () => startPublicAnalyticsScheduler());
-      await staggerSchedulerExecution("backtesting", async () => startBacktestingScheduler());
-      await staggerSchedulerExecution("adaptive_intelligence", async () => startAdaptiveIntelligenceScheduler());
-      await staggerSchedulerExecution("recommendation_delivery", async () => startRecommendationDeliveryScheduler());
-      await staggerSchedulerExecution("subscription_lifecycle", async () => startSubscriptionLifecycleScheduler());
-      await staggerSchedulerExecution("subscription_reconciliation", async () => startSubscriptionReconciliationScheduler());
-      await staggerSchedulerExecution("macro_report", async () => startMacroReportScheduler());
+      await staggerSchedulerExecution("portfolio_surveillance", async () => startSchedulerSafely("portfolio_surveillance", () => startPortfolioScheduler()));
+      await staggerSchedulerExecution("monitoring", async () => startSchedulerSafely("monitoring", () => startMonitoringJob()));
+      await staggerSchedulerExecution("daily_hook", async () => startSchedulerSafely("daily_hook", () => startDailyHook()));
+      await staggerSchedulerExecution("spike_hook", async () => startSchedulerSafely("spike_hook", () => startSpikeHook()));
+      await staggerSchedulerExecution("recommendation_tracking", async () => startSchedulerSafely("recommendation_tracking", () => startRecommendationTrackingScheduler()));
+      await staggerSchedulerExecution("statistical_validation", async () => startSchedulerSafely("statistical_validation", () => startStatisticalValidationScheduler()));
+      await staggerSchedulerExecution("public_analytics", async () => startSchedulerSafely("public_analytics", () => startPublicAnalyticsScheduler()));
+      await staggerSchedulerExecution("backtesting", async () => startSchedulerSafely("backtesting", () => startBacktestingScheduler()));
+      await staggerSchedulerExecution("adaptive_intelligence", async () => startSchedulerSafely("adaptive_intelligence", () => startAdaptiveIntelligenceScheduler()));
+      await staggerSchedulerExecution("recommendation_delivery", async () => startSchedulerSafely("recommendation_delivery", () => startRecommendationDeliveryScheduler()));
+      await staggerSchedulerExecution("subscription_lifecycle", async () => startSchedulerSafely("subscription_lifecycle", () => startSubscriptionLifecycleScheduler()));
+      await staggerSchedulerExecution("subscription_reconciliation", async () => startSchedulerSafely("subscription_reconciliation", () => startSubscriptionReconciliationScheduler()));
+      await staggerSchedulerExecution("macro_report", async () => startSchedulerSafely("macro_report", () => startMacroReportScheduler()));
 
       console.log("🚀 All background services initialized.");
       console.log("📊 Macro Intelligence Scheduler: ACTIVE");
