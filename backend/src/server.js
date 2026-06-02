@@ -54,34 +54,6 @@ app.get("/api/health", (req, res) => {
 });
 
 
-// TEMP DEBUG: Test TwelveData from deployed Render runtime
-app.get("/debug/twelvedata/:symbol", async (req, res) => {
-  try {
-    const symbol = String(req.params.symbol || "").toUpperCase();
-    const apiKey = process.env.TWELVEDATA_API_KEY;
-
-    if (!apiKey) {
-      return res.status(500).json({ ok: false, error: "TWELVEDATA_API_KEY missing" });
-    }
-
-    const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&exchange=NSE&apikey=${encodeURIComponent(apiKey)}`;
-    const response = await fetch(url);
-    const text = await response.text();
-
-    res.status(200).json({
-      ok: response.ok,
-      status: response.status,
-      symbol,
-      bodyPreview: text.slice(0, 1000)
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err?.message || String(err)
-    });
-  }
-});
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server listening on 0.0.0.0:${PORT}`);
   console.log(`✅ Health check path / is now responsive.`);
