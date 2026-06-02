@@ -39,6 +39,7 @@ import {
   DATA_AVAILABILITY_STATES
 } from "./dataAvailability.service.js";
 import { assertValidPrice } from "../utils/priceValidation.js";
+import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supabase.service.js";
 
 export const yahooFinance = new YahooFinance({
   suppressNotices: ["yahooSurvey", "ripHistorical"]
@@ -200,6 +201,177 @@ async function getHybridCache(cacheKey, quality = "HIGH") {
   }
 
   return null;
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Persistent last-verified quote cache
+// Used when deployed runtime cache is cold and live providers fail.
+// Never marks stale data as live.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isPersistentQuoteCacheEnabled() {
+  return !(
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST === "true" ||
+    process.env.VITEST_WORKER_ID
+  );
+}
+
+function normalizeQuoteCacheSymbol(symbol) {
+  return String(symbol || "")
+    .toUpperCase()
+    .replace(/\.NS$|\.BO$/, "")
+    .trim();
+}
+
+function resolveCachedQuotePrice(row = {}) {
+  const price =
+    toPositiveNumber(row?.price) ||
+    toPositiveNumber(row?.currentPrice) ||
+    toPositiveNumber(row?.regularMarketPrice) ||
+    toPositiveNumber(row?.previous_close) ||
+    toPositiveNumber(row?.previousClose);
+
+  return price && price > 0 ? price : null;
+}
+
+async function saveLastVerifiedQuote(symbol, data = {}) {
+  if (!isPersistentQuoteCacheEnabled()) return;
+
+  try {
+    const baseSymbol = normalizeQuoteCacheSymbol(symbol || data?.symbol || data?.Symbol);
+    const exchangeSymbol = String(data?.symbol || data?.Symbol || symbol || "").toUpperCase();
+
+    const price =
+      toPositiveNumber(data?.currentPrice) ||
+      toPositiveNumber(data?.regularMarketPrice) ||
+      toPositiveNumber(data?.price) ||
+      toPositiveNumber(data?.chosenPrice);
+
+    if (!baseSymbol || !price || price <= 0 || data?.priceSource === "FAILED") return;
+
+    const payload = {
+      symbol: baseSymbol,
+      exchange_symbol: exchangeSymbol,
+      price,
+      previous_close:
+        toPositiveNumber(data?.previousClose) ||
+        toPositiveNumber(data?.regularMarketPreviousClose) ||
+        null,
+      price_source: data?.priceSource || data?.source || null,
+      price_field: data?.priceField || data?.chosenPriceField || null,
+      provider: data?.priceSource || data?.source || null,
+      is_market_open: Boolean(data?.isMarketOpen),
+      data_quality: data?.dataQuality || data?.availabilityState || data?.completeness || null,
+      raw_payload: data,
+      verified_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from("market_quote_cache")
+      .upsert(payload, { onConflict: "symbol" });
+
+    if (error) {
+      if (isSupabaseSchemaMissing(error)) {
+        logInfraFallbackOnce(
+          "market_quote_cache_missing",
+          "[QUOTE CACHE] market_quote_cache table missing; persistent quote rescue disabled",
+          { code: error.code, message: error.message }
+        );
+        return;
+      }
+
+      console.warn("[QUOTE CACHE] save failed", {
+        symbol: baseSymbol,
+        message: error.message,
+        code: error.code
+      });
+    }
+  } catch (err) {
+    console.warn("[QUOTE CACHE] save exception", {
+      symbol,
+      message: err?.message
+    });
+  }
+}
+
+async function getLastVerifiedQuote(symbol, maxAgeHours = 168) {
+  if (!isPersistentQuoteCacheEnabled()) return null;
+
+  try {
+    const baseSymbol = normalizeQuoteCacheSymbol(symbol);
+    if (!baseSymbol) return null;
+
+    const { data, error } = await supabase
+      .from("market_quote_cache")
+      .select("*")
+      .eq("symbol", baseSymbol)
+      .maybeSingle();
+
+    if (error) {
+      if (isSupabaseSchemaMissing(error)) {
+        logInfraFallbackOnce(
+          "market_quote_cache_missing_read",
+          "[QUOTE CACHE] market_quote_cache table missing; persistent quote rescue disabled",
+          { code: error.code, message: error.message }
+        );
+        return null;
+      }
+
+      console.warn("[QUOTE CACHE] read failed", {
+        symbol: baseSymbol,
+        message: error.message,
+        code: error.code
+      });
+
+      return null;
+    }
+
+    if (!data) return null;
+
+    const verifiedAt = new Date(data.verified_at || data.updated_at || data.created_at);
+    const ageMs = Date.now() - verifiedAt.getTime();
+    const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maxAgeMs) return null;
+
+    const price = resolveCachedQuotePrice(data);
+    if (!price || price <= 0) return null;
+
+    const raw = data.raw_payload && typeof data.raw_payload === "object" ? data.raw_payload : {};
+
+    return {
+      ...raw,
+      symbol: data.exchange_symbol || raw.symbol || baseSymbol,
+      Symbol: data.exchange_symbol || raw.Symbol || baseSymbol,
+      currentPrice: price,
+      price,
+      regularMarketPrice: price,
+      previousClose: toPositiveNumber(data.previous_close) || raw.previousClose || null,
+      priceSource: "PERSISTENT_STALE_RESCUE",
+      priceField: data.price_field || "market_quote_cache.price",
+      status: "STALE_RESCUE",
+      dataQuality: "PERSISTENT_STALE_RESCUE",
+      availabilityState: "STALE_CACHE",
+      staleData: true,
+      degradedMode: true,
+      isStale: true,
+      dataAge: Math.floor(ageMs / 1000),
+      timestamp: verifiedAt.getTime(),
+      explanation:
+        "Live provider price unavailable. Using last verified persisted quote with degraded reliability."
+    };
+  } catch (err) {
+    console.warn("[QUOTE CACHE] read exception", {
+      symbol,
+      message: err?.message
+    });
+
+    return null;
+  }
 }
 
 async function setHybridCache(cacheKey, cacheGroup, payload, quality = "HIGH") {
@@ -1633,12 +1805,19 @@ export async function getLiveMarketData(symbol) {
         }
       );
 
+      await saveLastVerifiedQuote(upperSymbol, finalData);
       await setHybridCache(cacheKey, CACHE_GROUP_LIVE, finalData, finalData.priceSource === "YAHOO" ? "HIGH" : "LOW");
       return finalData;
 
     } catch (error) {
       console.error(`[ERROR] layer=data symbol=${symbol} type=critical error="${error.message}"`);
       logProviderError("market-data", { stage: "critical", symbol }, error);
+      const persistedRescue = await getLastVerifiedQuote(upperSymbol);
+      if (persistedRescue?.currentPrice > 0) {
+        await setHybridCache(cacheKey, CACHE_GROUP_LIVE, persistedRescue, "LOW");
+        return persistedRescue;
+      }
+
       const fallback = createFallbackLiveData(upperSymbol, { staleData: true });
       await setHybridCache(cacheKey, CACHE_GROUP_LIVE, fallback, "LOW");
       return fallback;
