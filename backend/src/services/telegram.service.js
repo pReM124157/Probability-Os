@@ -105,21 +105,44 @@ const telegramRuntimeState = {
 };
 
 function buildLiveDataFailureNotice(symbol, liveData = {}) {
-  const diagnosticReasons = Array.isArray(liveData?.failureDiagnostics?.reasons)
+  const rawReasons = Array.isArray(liveData?.failureDiagnostics?.reasons)
     ? liveData.failureDiagnostics.reasons.filter(Boolean)
     : [];
-  const reasons = diagnosticReasons.length > 0
-    ? diagnosticReasons
-    : [
-        "Live market data could not be validated from the available providers",
-        "No valid positive price could be confirmed"
-      ];
+
+  // Keep raw provider diagnostics in logs only. Do not expose API-plan, auth,
+  // URL, or provider internals to Telegram users.
+  if (rawReasons.length) {
+    console.warn("[LIVE DATA NOTICE]", {
+      symbol,
+      providerDiagnostics: rawReasons
+    });
+  }
+
+  const cleanReasons = [];
+
+  const joined = rawReasons.join(" ").toLowerCase();
+
+  if (joined.includes("yahoo")) {
+    cleanReasons.push("Primary market data provider could not validate the price");
+  }
+
+  if (
+    joined.includes("alpha") ||
+    joined.includes("twelvedata") ||
+    joined.includes("finnhub")
+  ) {
+    cleanReasons.push("Backup market data providers also returned unusable quote data");
+  }
+
+  cleanReasons.push("No verified positive market price could be confirmed");
+
+  const uniqueReasons = [...new Set(cleanReasons)];
 
   return (
     `*FINSIGHT DATA NOTICE*\n` +
-    `${symbol} could not be analyzed right now because live market data could not be validated.\n` +
+    `${symbol} could not be analyzed right now because verified market data is temporarily unavailable.\n` +
     `Reason:\n` +
-    `${reasons.map((reason) => `• ${reason}`).join("\n")}\n` +
+    `${uniqueReasons.map((reason) => `• ${reason}`).join("\n")}\n` +
     `Action:\n` +
     `Try again shortly or use another ticker.\n` +
     `No trade verdict generated because price validation failed.`
