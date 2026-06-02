@@ -46,7 +46,7 @@ export function validateSignal(signal = {}) {
   if (!stock || stock.toUpperCase() === "UNKNOWN") reasons.push("undefined_ticker");
   if (rr < minRR) reasons.push("low_rr");
   if (decision === "HOLD") reasons.push("hold_decision");
-  if (confidence < minConfidence) reasons.push("low_confidence");
+  if (confidence < minConfidence || confidence < 70) reasons.push("low_confidence");
   if (volumeRatio < minVolume) reasons.push("low_volume");
   if (rsi > 75) reasons.push("overbought_rsi");
   if (stopDistancePercent > 6) reasons.push("wide_stop");

@@ -391,8 +391,8 @@ export function buildInstitutionalFundamentalNarrative({ rawMetrics, adaptiveSco
 
 export function buildEvidenceConstraintSummary({ replayStatus, calibrationStatus, driftStatus, benchmarkStatus }) {
   const constraints = [];
-  if (replayStatus !== "AVAILABLE") constraints.push("historical validation depth is still expanding");
-  if (calibrationStatus !== "AVAILABLE") constraints.push("execution confidence remains under observation");
+  if (replayStatus !== "AVAILABLE") constraints.push("limited replay depth");
+  if (calibrationStatus !== "AVAILABLE") constraints.push("incomplete calibration data");
   if (driftStatus !== "AVAILABLE") constraints.push("drift monitoring not yet active");
   if (benchmarkStatus !== "AVAILABLE") constraints.push("incomplete benchmark context for the current regime window");
 
@@ -408,13 +408,13 @@ export function buildEvidenceConstraintSummary({ replayStatus, calibrationStatus
 export function buildGovernanceExplanation({ replayStatus, adaptiveScore, isLive, tradabilityHold, eventRisk, calibrationStatus }) {
   const reasons = [];
 
-  if (replayStatus !== "AVAILABLE") reasons.push("historical validation depth is still expanding");
+  if (replayStatus !== "AVAILABLE") reasons.push("limited replay depth");
   if (!isLive) reasons.push("live execution not confirmed — live feed delayed, stale, or price non-executable");
   const score = Number(adaptiveScore);
   if (Number.isFinite(score) && score < MIN_DEPLOYABLE_CONFIDENCE) reasons.push(`final conviction ${Math.round(score)}/100 below institutional deployment threshold (${MIN_DEPLOYABLE_CONFIDENCE})`);
   if (tradabilityHold) reasons.push("technical tradability conditions not satisfied — trend, momentum, and volume unconfirmed");
   if (eventRisk === "HIGH" || eventRisk === "CRITICAL") reasons.push(`active ${eventRisk.toLowerCase()} event risk override in effect`);
-  if (calibrationStatus !== "AVAILABLE") reasons.push("execution confidence remains under observation");
+  if (calibrationStatus !== "AVAILABLE") reasons.push("incomplete calibration data");
 
   if (!reasons.length) return null;
 
@@ -432,7 +432,7 @@ export function buildDecisionTrace({ replayStatus, adaptiveScore, technicalTrend
   const score = Number(adaptiveScore);
 
   if (replayStatus !== "AVAILABLE") trace.push("Historical validation depth is still expanding");
-  if (Number.isFinite(score) && score < MIN_DEPLOYABLE_CONFIDENCE) trace.push(`Final conviction ${Math.round(score)}/100 below deployment minimum (${MIN_DEPLOYABLE_CONFIDENCE})`);
+  if (Number.isFinite(score) && score < MIN_DEPLOYABLE_CONFIDENCE) trace.push(`Adaptive confidence score ${Math.round(score)}/100 below deployment minimum (${MIN_DEPLOYABLE_CONFIDENCE})`);
   if (!isLive) trace.push("Live execution not confirmed — verified live price/liquidity unavailable");
   if (tradabilityHold) trace.push("Technical trend bearish or unconfirmed");
   if (calibrationStatus !== "AVAILABLE") trace.push("Execution confidence remains under observation");

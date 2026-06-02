@@ -45,7 +45,21 @@ vi.mock("../../src/services/telegram.service.js", () => ({
   }
 }));
 
-let mockLiveMarketDataResponse = { currentPrice: 109 };
+let mockLiveMarketDataResponse = {
+  symbol: "TCS",
+  currentPrice: 109,
+  price: 109,
+  regularMarketPrice: 109,
+  chosenPrice: 109,
+  chosenPriceField: "regularMarketPrice",
+  priceSource: "YAHOO",
+  priceField: "regularMarketPrice",
+  completeness: "FULL",
+  dataConfidence: "HIGH",
+  status: "LIVE",
+  isMarketOpen: true,
+  marketStatus: { isMarketOpen: true }
+};
 
 vi.mock("../../src/services/marketData.service.js", () => ({
   getHistoricalCandles: async () => ([
@@ -114,9 +128,9 @@ describe("integration: audit->outcome->stats->adaptive", () => {
         reasoningSnapshot: {},
         indicatorSnapshot: {},
         marketSnapshot: {},
-        providerMetadata: { source: "test" },
+        providerMetadata: { source: "YAHOO" },
         analysisVersion: "integration-test",
-        generatedBy: "test-suite",
+        generatedBy: "pipeline-suite",
         userId: "u1",
         telegramChatId: "c1",
         createdAt: "2026-01-01T00:00:00.000Z"
@@ -128,7 +142,7 @@ describe("integration: audit->outcome->stats->adaptive", () => {
         rr_ratio: 1.6,
         volatility_score: 2,
         horizon: "SWING",
-        provider_metadata: { source: "test" },
+        provider_metadata: { source: "YAHOO" },
         created_at: "2026-01-01T00:00:00.000Z"
       });
     }
@@ -178,7 +192,7 @@ describe("integration: audit->outcome->stats->adaptive", () => {
     mockSupabase = createMockSupabase({
       recommendation_audit: [
         {
-          recommendation_id: "rec_filter_test",
+          recommendation_id: "rec_filter_live",
           symbol: "TCS",
           exchange: "NSE",
           recommendation_type: "BUY",
@@ -211,13 +225,13 @@ describe("integration: audit->outcome->stats->adaptive", () => {
     });
 
     await initializeOutcomeForRecommendation({
-      recommendation_id: "rec_filter_test",
+      recommendation_id: "rec_filter_live",
       symbol: "TCS",
       entry_price: 100,
       rr_ratio: 1.6,
       volatility_score: 2,
       horizon: "SWING",
-      provider_metadata: { source: "test" },
+      provider_metadata: { source: "YAHOO" },
       created_at: "2026-01-01T00:00:00.000Z"
     });
 

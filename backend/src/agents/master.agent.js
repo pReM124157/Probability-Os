@@ -1821,7 +1821,7 @@ CRITICAL RULES:
       symbol: ticker,
       exchange: "NSE",
       recommendationType: finalDecision.finalDecision || "HOLD",
-      action: isLive ? (finalDecision.finalDecision || "HOLD") : ((finalDecision.finalDecision === "BUY" || finalDecision.finalDecision === "SELL") ? "PENDING_EXECUTION" : "HOLD"),
+      action: finalDecision.finalDecision || "HOLD",
       confidence: Number(finalDecision.finalConfidenceScore || 0),
       conviction: finalDecision.conviction || "MEDIUM",
       entryPrice: activePrice,
@@ -1877,7 +1877,8 @@ CRITICAL RULES:
       telegramChatId: options?.telegramChatId ? String(options.telegramChatId) : null
     };
 
-    if (!skipAudit) {
+    const isAuditableAction = auditPayload.action !== "HOLD";
+    if (!skipAudit && isAuditableAction) {
       try {
         await Promise.race([
           insertRecommendationAudit(auditPayload),
