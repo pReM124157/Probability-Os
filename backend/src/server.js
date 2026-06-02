@@ -31,6 +31,28 @@ app.get("/", (req, res) => {
   res.status(200).send("OK");
 });
 
+
+// Health check aliases for local/dev/deployment probes
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "finsight-backend",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/healthz", (req, res) => {
+  res.status(200).send("OK");
+});
+
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "finsight-backend",
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server listening on 0.0.0.0:${PORT}`);
   console.log(`✅ Health check path / is now responsive.`);
