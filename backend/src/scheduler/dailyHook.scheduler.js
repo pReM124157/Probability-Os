@@ -10,6 +10,7 @@ import { withSchedulerFailureIsolation } from "../utils/pipelineShape.js";
 import { recordSchedulerSuccess, recordSchedulerFailure } from "../services/telemetryAggregator.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+let dailyHookSchedulerStarted = false;
 
 function isMorningBriefingEligible(user) {
   if (!user?.telegram_chat_id) return false;
@@ -59,10 +60,15 @@ function buildTelegramMorningMessage(packet) {
 }
 
 export function startDailyHook() {
+  if (dailyHookSchedulerStarted) {
+    console.log("⏰ Morning Briefing Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  dailyHookSchedulerStarted = true;
   console.log("⏰ Morning Briefing Scheduler Started");
 
-  // Run at 7:30 AM IST (02:00 UTC) every trading day
-  cron.schedule("0 2 * * *", async () => {
+  // Run at 7:30 AM IST (02:00 UTC) on weekdays
+  cron.schedule("0 2 * * 1-5", async () => {
     await runWithSchedulerLease("scheduler:daily_morning_briefing", async ({ traceId, assertLease }) => {
       logEvent("scheduler.daily_morning_briefing.started", { traceId });
 

@@ -3,6 +3,7 @@ import { syncRecommendationOutcomes } from "../services/recommendationOutcome.se
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
 import { preventSchedulerOverlap, staggerSchedulerExecution } from "../services/schedulerStagger.service.js";
+let recommendationTrackingSchedulerStarted = false;
 
 function withTimeout(promise, timeoutMs = 8 * 60 * 1000) {
   return Promise.race([
@@ -26,6 +27,11 @@ async function runTrackingCycle({ traceId, onlyOpen, limit }) {
 }
 
 export function startRecommendationTrackingScheduler() {
+  if (recommendationTrackingSchedulerStarted) {
+    console.log("⏱ Recommendation Outcome Tracking Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  recommendationTrackingSchedulerStarted = true;
   console.log("⏱ Recommendation Outcome Tracking Scheduler Started");
 
   // Every 30 minutes during market hours (09:00-16:00 IST)

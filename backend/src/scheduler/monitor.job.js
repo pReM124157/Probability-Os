@@ -21,6 +21,7 @@ import bot from "../services/telegram.service.js";
 import { buildAnalysisContext } from "../core/analysisContext.js";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { createTraceId, logError, logEvent } from "../services/telemetry.service.js";
+let monitoringJobStarted = false;
 
 function buildMorningBriefingMessage(packet) {
   const reportText = packet?.report?.report || "Morning briefing unavailable.";
@@ -148,6 +149,11 @@ ${exitSignal.reason || eventRisk.reason}
 };
 
 export const startMonitoringJob = () => {
+  if (monitoringJobStarted) {
+    console.log("🚀 Monitoring Job already started — skipping duplicate registration");
+    return;
+  }
+  monitoringJobStarted = true;
   console.log("🚀 Monitoring Job Started");
 
   // Portfolio Risk Monitor (8:00 AM)

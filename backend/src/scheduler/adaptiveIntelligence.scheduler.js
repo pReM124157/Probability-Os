@@ -3,6 +3,7 @@ import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { runAdaptiveRecalibration } from "../services/adaptiveIntelligence.service.js";
 import { detectModelDrift } from "../services/driftDetection.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+let adaptiveIntelligenceSchedulerStarted = false;
 
 async function runDriftHeartbeat() {
   const result = detectModelDrift({});
@@ -14,6 +15,11 @@ async function runDriftHeartbeat() {
 }
 
 export function startAdaptiveIntelligenceScheduler() {
+  if (adaptiveIntelligenceSchedulerStarted) {
+    console.log("🧠 Adaptive Intelligence Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  adaptiveIntelligenceSchedulerStarted = true;
   console.log("🧠 Adaptive Intelligence Scheduler Started");
 
   cron.schedule("0 */6 * * *", async () => {

@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { runStatisticalValidation } from "../services/statisticalValidation.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+let statisticalValidationSchedulerStarted = false;
 
 function withTimeout(promise, timeoutMs = 10 * 60 * 1000) {
   return Promise.race([
@@ -11,6 +12,11 @@ function withTimeout(promise, timeoutMs = 10 * 60 * 1000) {
 }
 
 export function startStatisticalValidationScheduler() {
+  if (statisticalValidationSchedulerStarted) {
+    console.log("📈 Statistical Validation Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  statisticalValidationSchedulerStarted = true;
   console.log("📈 Statistical Validation Scheduler Started");
 
   // Hourly incremental recomputation

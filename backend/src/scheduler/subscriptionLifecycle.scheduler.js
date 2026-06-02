@@ -3,6 +3,7 @@ import { preventSchedulerOverlap } from "../services/schedulerStagger.service.js
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { processSubscriptionLifecycleBatch } from "../services/subscriptionLifecycleScheduling.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+let subscriptionLifecycleSchedulerStarted = false;
 
 export async function runSubscriptionLifecycleSchedulerTick({ now = new Date() } = {}) {
   console.log("=== SUBSCRIPTION LIFECYCLE SCHEDULER RUNNING ===");
@@ -40,6 +41,11 @@ export async function runSubscriptionLifecycleSchedulerTick({ now = new Date() }
 }
 
 export function startSubscriptionLifecycleScheduler() {
+  if (subscriptionLifecycleSchedulerStarted) {
+    console.log("⏱ Subscription Lifecycle Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  subscriptionLifecycleSchedulerStarted = true;
   console.log("⏱ Subscription Lifecycle Scheduler Started");
 
   cron.schedule("0 * * * *", async () => {

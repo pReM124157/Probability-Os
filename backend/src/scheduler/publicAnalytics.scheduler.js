@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { runPublicAnalytics } from "../services/publicAnalytics.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+let publicAnalyticsSchedulerStarted = false;
 
 function withTimeout(promise, timeoutMs = 12 * 60 * 1000) {
   return Promise.race([
@@ -11,6 +12,11 @@ function withTimeout(promise, timeoutMs = 12 * 60 * 1000) {
 }
 
 export function startPublicAnalyticsScheduler() {
+  if (publicAnalyticsSchedulerStarted) {
+    console.log("📊 Public Analytics Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  publicAnalyticsSchedulerStarted = true;
   console.log("📊 Public Analytics Scheduler Started");
 
   // Every 6 hours: refresh analytics, sector, strategy, calibration

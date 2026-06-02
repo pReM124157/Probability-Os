@@ -6,6 +6,7 @@ import { logError, logEvent } from "../services/telemetry.service.js";
 import { preventSchedulerOverlap, staggerSchedulerExecution } from "../services/schedulerStagger.service.js";
 import { withSchedulerFailureIsolation } from "../utils/pipelineShape.js";
 import { recordSchedulerSuccess, recordSchedulerFailure } from "../services/telemetryAggregator.service.js";
+import { getMarketStateIST } from "../utils/time.js";
 
 let portfolioSchedulerStarted = false;
 
@@ -41,6 +42,7 @@ export function startPortfolioScheduler() {
   });
 
   cron.schedule("*/10 * * * *", async () => {
+    if (!getMarketStateIST().open) return;
     if (!preventSchedulerOverlap("portfolio_surveillance", 2 * 60 * 1000)) return;
     await staggerSchedulerExecution("portfolio_surveillance", async () => {});
     await runWithSchedulerLease("scheduler:portfolio_surveillance_10m", async ({ traceId }) => {

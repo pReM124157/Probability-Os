@@ -34,6 +34,7 @@ import {
 import { deliverMacroReport } from "../services/macroDelivery.service.js";
 import { withSchedulerFailureIsolation, makeSuccessResponse } from "../utils/pipelineShape.js";
 import { recordSchedulerSuccess, recordSchedulerFailure } from "../services/telemetryAggregator.service.js";
+let macroReportSchedulerStarted = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -144,6 +145,11 @@ export async function runMacroRiskAlertFlow({ traceId, assertLease, drivers, rec
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function startMacroReportScheduler() {
+  if (macroReportSchedulerStarted) {
+    console.log("📊 Macro Intelligence Report Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  macroReportSchedulerStarted = true;
   console.log("📊 Macro Intelligence Report Scheduler Started");
 
   // ── 1. DAILY AI MACRO INTELLIGENCE ──────────────────────────────────────

@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { runHistoricalReplay } from "../services/backtesting.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
+let backtestingSchedulerStarted = false;
 
 function isoDateDaysAgo(days) {
   const d = new Date();
@@ -10,6 +11,11 @@ function isoDateDaysAgo(days) {
 }
 
 export function startBacktestingScheduler() {
+  if (backtestingSchedulerStarted) {
+    console.log("🧪 Backtesting Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  backtestingSchedulerStarted = true;
   console.log("🧪 Backtesting Scheduler Started");
 
   cron.schedule("15 18 * * *", async () => {

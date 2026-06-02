@@ -5,8 +5,14 @@ import { runWithSchedulerLease } from "../services/schedulerLease.service.js";
 import { logError, logEvent } from "../services/telemetry.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+let spikeHookSchedulerStarted = false;
 
 export function startSpikeHook() {
+  if (spikeHookSchedulerStarted) {
+    console.log("⏰ Random Spike Hook Scheduler already started — skipping duplicate registration");
+    return;
+  }
+  spikeHookSchedulerStarted = true;
   console.log("⏰ Random Spike Hook Scheduler Started");
 
   // Run at 14:00 IST (which is 08:30 UTC) every day, targeting the afternoon session
