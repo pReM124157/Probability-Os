@@ -104,6 +104,28 @@ const telegramRuntimeState = {
   lastSuccessfulConnection: null
 };
 
+function buildLiveDataFailureNotice(symbol, liveData = {}) {
+  const diagnosticReasons = Array.isArray(liveData?.failureDiagnostics?.reasons)
+    ? liveData.failureDiagnostics.reasons.filter(Boolean)
+    : [];
+  const reasons = diagnosticReasons.length > 0
+    ? diagnosticReasons
+    : [
+        "Live market data could not be validated from the available providers",
+        "No valid positive price could be confirmed"
+      ];
+
+  return (
+    `*FINSIGHT DATA NOTICE*\n` +
+    `${symbol} could not be analyzed right now because live market data could not be validated.\n` +
+    `Reason:\n` +
+    `${reasons.map((reason) => `• ${reason}`).join("\n")}\n` +
+    `Action:\n` +
+    `Try again shortly or use another ticker.\n` +
+    `No trade verdict generated because price validation failed.`
+  );
+}
+
 function getRetryDelayMs(attempt) {
   const idx = Math.max(0, Math.min(attempt, TELEGRAM_RETRY_DELAYS_MS.length - 1));
   return TELEGRAM_RETRY_DELAYS_MS[idx];
@@ -2124,18 +2146,7 @@ bot.on("text", async (ctx) => {
         }
 
         // No usable data at all — show institutional unavailability message
-        await send(
-          `*FINSIGHT DATA NOTICE*\n` +
-          `${cleanTicker} could not be analyzed right now because live market data could not be validated.\n` +
-          `Reason:\n` +
-          `• Yahoo provider cooling down\n` +
-          `• Alpha/Finnhub/TwelveData returned unusable quote data\n` +
-          `• No valid price confirmed\n` +
-          `Action:\n` +
-          `Try again shortly or use another ticker.\n` +
-          `No trade verdict generated because price validation failed.`,
-          { parse_mode: "Markdown" }
-        );
+        await send(buildLiveDataFailureNotice(cleanTicker, liveData), { parse_mode: "Markdown" });
         return;
       }
 

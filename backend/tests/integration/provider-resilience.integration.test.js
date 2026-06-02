@@ -74,7 +74,7 @@ describe("Institutional Provider Resilience (Failover & Graceful Degradation)", 
         regularMarketChangePercent: 1.5
       });
 
-      const data = await getLiveMarketData("TCS");
+      const data = await getLiveMarketData("TECHM");
       expect(data.priceSource).toBe("YAHOO");
       expect(data.price).toBe(3500);
       expect(data.availabilityState).toBe(DATA_AVAILABILITY_STATES.LIVE);
@@ -184,6 +184,31 @@ describe("Institutional Provider Resilience (Failover & Graceful Degradation)", 
       
       const metrics = dataMetrics;
       expect(metrics.yahooFail).toBeGreaterThan(0);
+    });
+
+    it("should attach real failure diagnostics when all live quote providers fail", async () => {
+      mockYahooInstance.quote.mockRejectedValue(new Error("401 Unauthorized"));
+
+      global.fetch = vi.fn().mockImplementation(async (url, options) => {
+        if (typeof url === "string" && (url.includes("alphavantage") || url.includes("twelvedata") || url.includes("finnhub"))) {
+          return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return originalFetch(url, options);
+      });
+
+      const data = await getLiveMarketData("TCS");
+
+      expect(data.priceSource).toBe("FAILED");
+      expect(data.status).toBe("FALLBACK_SAFE");
+      expect(data.failureDiagnostics?.reasons).toEqual(
+        expect.arrayContaining([
+          "Yahoo failed authentication or hit a rate limit: authentication or rate-limit failure",
+          "Alpha Vantage returned unusable quote data",
+          "TwelveData returned unusable quote data",
+          "Finnhub returned unusable quote data",
+          "No valid positive price could be confirmed"
+        ])
+      );
     });
   });
 });

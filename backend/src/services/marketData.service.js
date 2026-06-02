@@ -141,6 +141,7 @@ const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
 const HTTP_PROVIDER_TIMEOUT_MS = 5000;
 const YAHOO_TIMEOUT_MS = 8000;
+const LIVE_FALLBACK_PROVIDER_TIMEOUT_MS = 2500;
 const providerFailureScore = new Map();
 // Symbols that must only be fetched via .NS — .BO returns stale/zero prices for these.
 // Covers all Nifty50 constituents with known Yahoo BSE feed issues.
@@ -342,6 +343,50 @@ function logProviderError(provider, context = {}, error) {
     responseStatus: error?.response?.status || null,
     responseData: error?.response?.data ? safeSubstring(JSON.stringify(error.response.data), 300) : null
   });
+}
+
+function pushProviderDiagnostic(list, provider, status, detail = null) {
+  if (!Array.isArray(list)) return;
+  list.push({
+    provider,
+    status,
+    detail: detail || null
+  });
+}
+
+function describeProviderFailure(error) {
+  const message = String(error?.message || "").trim() || "Unknown provider error";
+  if (error?.code === "PROVIDER_COOLDOWN_ACTIVE" || /cooling down/i.test(message)) {
+    return { status: "COOLING_DOWN", detail: "provider cooling down" };
+  }
+  if (/timeout|abort/i.test(message)) {
+    return { status: "TIMEOUT", detail: "request timed out" };
+  }
+  if (/401|403|unauthorized|csrf|crumb|too many requests|rate/i.test(message)) {
+    return { status: "AUTH_OR_RATE_LIMIT", detail: "authentication or rate-limit failure" };
+  }
+  return { status: "ERROR", detail: safeSubstring(message, 160) };
+}
+
+function buildProviderFailureReason(diagnostic) {
+  const providerName = String(diagnostic?.provider || "Provider");
+  const detail = diagnostic?.detail ? `: ${diagnostic.detail}` : "";
+  switch (diagnostic?.status) {
+    case "COOLING_DOWN":
+      return `${providerName} is cooling down${detail}`;
+    case "AUTH_OR_RATE_LIMIT":
+      return `${providerName} failed authentication or hit a rate limit${detail}`;
+    case "TIMEOUT":
+      return `${providerName} timed out${detail}`;
+    case "MISSING_KEY":
+      return `${providerName} API key is missing`;
+    case "UNUSABLE_QUOTE":
+      return `${providerName} returned unusable quote data${detail}`;
+    case "ERROR":
+      return `${providerName} request failed${detail}`;
+    default:
+      return `${providerName} could not provide a usable quote${detail}`;
+  }
 }
 
 export function toNumber(value) {
@@ -555,6 +600,7 @@ function createFallbackLiveData(symbol, extra = {}) {
     volume: 0,
     marketCap: 0,
     peRatio: 0,
+    priceSource: "FAILED",
     source: "fallback",
     status: "FALLBACK_SAFE",
     ...extra
@@ -1067,11 +1113,13 @@ async function retry(fn, retries = 3, initialDelay = 500) {
     }
 }
 
-async function alphaQuoteFetch(symbol) {
+async function alphaQuoteFetch(symbol, opts = {}) {
+  const { timeoutMs = HTTP_PROVIDER_TIMEOUT_MS, diagnostics = null } = opts;
   try {
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
     if (!apiKey) {
       console.warn("[FALLBACK] Alpha Vantage API key missing. Skipping provider.");
+      pushProviderDiagnostic(diagnostics, "Alpha Vantage", "MISSING_KEY");
       return null;
     }
     
@@ -1079,7 +1127,7 @@ async function alphaQuoteFetch(symbol) {
     const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${avSymbol}&apikey=${apiKey}`;
 
     const payload = await withProviderGuard("alpha_vantage", async () =>
-      fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+      fetchJsonWithTimeout(url, {}, timeoutMs)
     , { successOnOperation: false });
     logEvent("provider.http.success", { provider: "alpha_vantage", symbol });
     const normalized = normalizeAlphaQuote(payload, symbol);
@@ -1090,12 +1138,15 @@ async function alphaQuoteFetch(symbol) {
         hasPrice: Boolean(normalized?.regularMarketPrice),
         hasPrevClose: Boolean(normalized?.regularMarketPreviousClose || normalized?.previousClose)
       });
+      pushProviderDiagnostic(diagnostics, "Alpha Vantage", "UNUSABLE_QUOTE");
       return null;
     }
     await recordProviderSuccess("alpha_vantage");
     return normalized;
   } catch (err) {
     logProviderError("alpha", { stage: "quote", symbol }, err);
+    const failure = describeProviderFailure(err);
+    pushProviderDiagnostic(diagnostics, "Alpha Vantage", failure.status, failure.detail);
     return null;
   }
 }
@@ -1121,11 +1172,13 @@ async function alphaOverviewFetch(symbol) {
   }
 }
 
-async function twelveDataQuoteFetch(symbol) {
+async function twelveDataQuoteFetch(symbol, opts = {}) {
+  const { timeoutMs = HTTP_PROVIDER_TIMEOUT_MS, diagnostics = null } = opts;
   try {
     const apiKey = process.env.TWELVEDATA_API_KEY;
     if (!apiKey) {
       console.warn("[FALLBACK] TwelveData API key missing. Skipping provider.");
+      pushProviderDiagnostic(diagnostics, "TwelveData", "MISSING_KEY");
       return null;
     }
 
@@ -1139,7 +1192,7 @@ async function twelveDataQuoteFetch(symbol) {
     for (const url of attempts) {
       try {
         const payload = await withProviderGuard("twelvedata", async () =>
-          fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+          fetchJsonWithTimeout(url, {}, timeoutMs)
         , { successOnOperation: false });
         logEvent("provider.http.success", { provider: "twelvedata", symbol });
         if (payload?.status === "error") continue;
@@ -1157,19 +1210,27 @@ async function twelveDataQuoteFetch(symbol) {
         return normalized;
       } catch (err) {
         logProviderError("twelvedata", { stage: "quote-attempt", symbol, url }, err);
+        const failure = describeProviderFailure(err);
+        pushProviderDiagnostic(diagnostics, "TwelveData", failure.status, failure.detail);
+        return null;
       }
     }
   } catch (err) {
     logProviderError("twelvedata", { stage: "quote", symbol }, err);
+    const failure = describeProviderFailure(err);
+    pushProviderDiagnostic(diagnostics, "TwelveData", failure.status, failure.detail);
   }
+  pushProviderDiagnostic(diagnostics, "TwelveData", "UNUSABLE_QUOTE");
   return null;
 }
 
-async function finnhubQuoteFetch(symbol) {
+async function finnhubQuoteFetch(symbol, opts = {}) {
+  const { timeoutMs = HTTP_PROVIDER_TIMEOUT_MS, diagnostics = null } = opts;
   try {
     const apiKey = process.env.FINNHUB_API_KEY;
     if (!apiKey) {
       console.warn("[FALLBACK] Finnhub API key missing. Skipping provider.");
+      pushProviderDiagnostic(diagnostics, "Finnhub", "MISSING_KEY");
       return null;
     }
 
@@ -1180,7 +1241,7 @@ async function finnhubQuoteFetch(symbol) {
       try {
         const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(candidate)}&token=${apiKey}`;
         const payload = await withProviderGuard("finnhub", async () =>
-          fetchJsonWithTimeout(url, {}, HTTP_PROVIDER_TIMEOUT_MS)
+          fetchJsonWithTimeout(url, {}, timeoutMs)
         , { successOnOperation: false });
         logEvent("provider.http.success", { provider: "finnhub", symbol: candidate });
         const normalized = normalizeFinnhubQuote(payload, candidate);
@@ -1197,11 +1258,17 @@ async function finnhubQuoteFetch(symbol) {
         return normalized;
       } catch (err) {
         logProviderError("finnhub", { stage: "quote-attempt", symbol: candidate }, err);
+        const failure = describeProviderFailure(err);
+        pushProviderDiagnostic(diagnostics, "Finnhub", failure.status, failure.detail);
+        return null;
       }
     }
   } catch (err) {
     logProviderError("finnhub", { stage: "quote", symbol }, err);
+    const failure = describeProviderFailure(err);
+    pushProviderDiagnostic(diagnostics, "Finnhub", failure.status, failure.detail);
   }
+  pushProviderDiagnostic(diagnostics, "Finnhub", "UNUSABLE_QUOTE");
   return null;
 }
 
@@ -1305,6 +1372,9 @@ export async function getLiveMarketData(symbol) {
           let priceField = "UNKNOWN";
           let dataConfidence = "LIVE_VERIFIED";
           let completeness = "FULL";
+          const providerDiagnostics = [];
+          const failureReasons = [];
+          let staleCacheDiagnostic = null;
 
           // 2. PRIMARY FETCH (Yahoo) with Circuit Breaker + auth detection
           const yahooAvailable = Date.now() >= yahooCooldownUntil && !(await isProviderCoolingDown("yahoo"));
@@ -1332,6 +1402,7 @@ export async function getLiveMarketData(symbol) {
                         fetchSymbol = sym;
                         priceSource = "YAHOO";
                         priceField = resolvedYahooPrice.field || "UNKNOWN";
+                        pushProviderDiagnostic(providerDiagnostics, "Yahoo", "SUCCESS");
                         reportYahooStatus(true);
                         break;
                     }
@@ -1345,6 +1416,7 @@ export async function getLiveMarketData(symbol) {
                       // Auth failure — skip all remaining Yahoo retries immediately
                       yahooAuthFailed = true;
                       logEvent("provider.yahoo.auth_failure", { symbol: sym, error: e?.message });
+                      pushProviderDiagnostic(providerDiagnostics, "Yahoo", "AUTH_OR_RATE_LIMIT", "authentication or rate-limit failure");
                       console.warn(`[YAHOO] Auth failure detected. Skipping remaining Yahoo retries for ${upperSymbol}.`);
                       break;
                     }
@@ -1354,9 +1426,15 @@ export async function getLiveMarketData(symbol) {
                 }
                 await new Promise(r => setTimeout(r, 300));
             }
+            if (!result) {
+              if (!yahooAuthFailed) {
+                pushProviderDiagnostic(providerDiagnostics, "Yahoo", "UNUSABLE_QUOTE");
+              }
+            }
           } else {
             logProviderSkipped("yahoo", "cooldown_active", { symbol: upperSymbol });
             console.warn(`[CIRCUIT BREAKER] Skipping Yahoo variants/retries for ${upperSymbol} (cooling down)`);
+            pushProviderDiagnostic(providerDiagnostics, "Yahoo", "COOLING_DOWN", "provider cooling down");
           }
 
           if (!result) reportYahooStatus(false);
@@ -1364,25 +1442,32 @@ export async function getLiveMarketData(symbol) {
           // 3. FALLBACK FETCH (Alpha Vantage -> Twelve Data -> Finnhub)
           if (!result) {
             const fallbackProviders = [
-              { name: "ALPHA_VANTAGE", fetch: () => alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`) },
-              { name: "TWELVEDATA", fetch: () => twelveDataQuoteFetch(upperSymbol) },
-              { name: "FINNHUB", fetch: () => finnhubQuoteFetch(upperSymbol) }
+              { name: "ALPHA_VANTAGE", fetch: () => alphaQuoteFetch(upperSymbol.includes(".") ? upperSymbol : `${upperSymbol}.NS`, { timeoutMs: LIVE_FALLBACK_PROVIDER_TIMEOUT_MS, diagnostics: providerDiagnostics }) },
+              { name: "TWELVEDATA", fetch: () => twelveDataQuoteFetch(upperSymbol, { timeoutMs: LIVE_FALLBACK_PROVIDER_TIMEOUT_MS, diagnostics: providerDiagnostics }) },
+              { name: "FINNHUB", fetch: () => finnhubQuoteFetch(upperSymbol, { timeoutMs: LIVE_FALLBACK_PROVIDER_TIMEOUT_MS, diagnostics: providerDiagnostics }) }
             ];
-            for (const provider of fallbackProviders) {
-              console.log(`[DATA] attempt=${provider.name.toLowerCase()} symbol=${upperSymbol}`);
-              const candidate = await provider.fetch();
-              if (candidate && toPositiveNumber(candidate.regularMarketPrice) > 0) {
-                result = candidate;
-                priceSource = provider.name;
-                dataConfidence = "DEGRADED_SOURCE";
-                completeness = "PARTIAL";
-                fetchSymbol = candidate.symbol;
-                if (provider.name === "ALPHA_VANTAGE") dataMetrics.alphaSuccess++;
-                if (provider.name === "TWELVEDATA") dataMetrics.twelvedataSuccess++;
-                if (provider.name === "FINNHUB") dataMetrics.finnhubSuccess++;
-                console.log(`[DATA] source=${provider.name.toLowerCase()} symbol=${upperSymbol} status=fallback`);
-                break;
-              }
+            const firstValid = await Promise.any(
+              fallbackProviders.map(async (provider) => {
+                console.log(`[DATA] attempt=${provider.name.toLowerCase()} symbol=${upperSymbol}`);
+                const candidate = await provider.fetch();
+                if (candidate && toPositiveNumber(candidate.regularMarketPrice) > 0) {
+                  return { provider, candidate };
+                }
+                throw new Error(`${provider.name}_NO_VALID_QUOTE`);
+              })
+            ).catch(() => null);
+
+            if (firstValid) {
+              const { provider, candidate } = firstValid;
+              result = candidate;
+              priceSource = provider.name;
+              dataConfidence = "DEGRADED_SOURCE";
+              completeness = "PARTIAL";
+              fetchSymbol = candidate.symbol;
+              if (provider.name === "ALPHA_VANTAGE") dataMetrics.alphaSuccess++;
+              if (provider.name === "TWELVEDATA") dataMetrics.twelvedataSuccess++;
+              if (provider.name === "FINNHUB") dataMetrics.finnhubSuccess++;
+              console.log(`[DATA] source=${provider.name.toLowerCase()} symbol=${upperSymbol} status=fallback`);
             }
           }
 
@@ -1425,6 +1510,16 @@ export async function getLiveMarketData(symbol) {
           const validatedPrice = assertValidPrice(currentPrice, upperSymbol, priceSource);
           if (!validatedPrice) {
             console.warn(`[INVALID PRICE REJECTED] ${upperSymbol} chosenPrice=${currentPrice}. Falling back.`);
+            const failedProviders = providerDiagnostics.filter((entry) => entry.status !== "SUCCESS");
+            if (failedProviders.length > 0) {
+              const seen = new Set();
+              for (const diagnostic of failedProviders) {
+                const key = `${diagnostic.provider}:${diagnostic.status}:${diagnostic.detail || ""}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                failureReasons.push(buildProviderFailureReason(diagnostic));
+              }
+            }
             const staleRescue = await getHybridCache(cacheKey, "HIGH");
             if (staleRescue && staleRescue.currentPrice > 0 && staleRescue.timestamp) {
               const ageS = Math.floor((Date.now() - staleRescue.timestamp) / 1000);
@@ -1433,8 +1528,26 @@ export async function getLiveMarketData(symbol) {
                 logEvent("data.availability.stale", { symbol: upperSymbol, ageSeconds: ageS, state: policy.state });
                 return { ...staleRescue, dataAge: ageS, dataConfidence: policy.state, staleData: true, degradedMode: true };
               }
+              staleCacheDiagnostic = {
+                available: true,
+                ageSeconds: ageS,
+                state: policy.state,
+                acceptable: false,
+                governanceReason: policy.governance_reason
+              };
+              failureReasons.push(
+                `Stale cache was available but rejected because it was ${Math.round(ageS / 60)} min old while governance state was ${policy.state}`
+              );
             }
-            return createFallbackLiveData(upperSymbol, { degradedMode: true });
+            failureReasons.push("No valid positive price could be confirmed");
+            return createFallbackLiveData(upperSymbol, {
+              degradedMode: true,
+              failureDiagnostics: {
+                reasons: Array.from(new Set(failureReasons)),
+                providers: providerDiagnostics,
+                staleCache: staleCacheDiagnostic
+              }
+            });
           }
 
 
