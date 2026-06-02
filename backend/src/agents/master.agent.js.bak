@@ -1257,30 +1257,8 @@ CRITICAL RULES:
     let capitalAction = "Blocked by execution layer";
 
     // PHASE 1: Data Fetch
-    // Prefer the provider-resolved exchange symbol from buildAnalysisContext.
-    // Example: ICICIBANK -> ICICIBANK.NS. Using raw ticker can hit stale/invalid LIVE_ICICIBANK cache.
-    const marketDataSymbol = stockData?.Symbol || stockData?.symbol || ticker;
-    console.log(`[Phase 1] Fetching live market data for ${marketDataSymbol}...`);
-
-    const rawLiveMarketData = await getLiveMarketData(marketDataSymbol);
-
-    const resolvedLivePrice =
-      Number(rawLiveMarketData?.currentPrice) ||
-      Number(rawLiveMarketData?.regularMarketPrice) ||
-      Number(rawLiveMarketData?.price) ||
-      Number(rawLiveMarketData?.chosenPrice) ||
-      Number(rawLiveMarketData?.regularMarketPreviousClose) ||
-      Number(rawLiveMarketData?.previousClose) ||
-      0;
-
-    const liveMarketData = {
-      ...rawLiveMarketData,
-      currentPrice: resolvedLivePrice,
-      price: resolvedLivePrice,
-      regularMarketPrice: Number(rawLiveMarketData?.regularMarketPrice) || resolvedLivePrice,
-      Symbol: rawLiveMarketData?.Symbol || rawLiveMarketData?.symbol || marketDataSymbol,
-      symbol: rawLiveMarketData?.symbol || marketDataSymbol
-    };
+    console.log(`[Phase 1] Fetching live market data for ${ticker}...`);
+    const liveMarketData = await getLiveMarketData(ticker);
 
     // ── LAYER 4: Analysis Readiness (NOT a ticker validity check) ─────────────
     // This determines whether there is enough data for analysis — it is
