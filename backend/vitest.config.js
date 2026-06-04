@@ -10,6 +10,7 @@ export default defineConfig({
       setupFiles: "list"
     },
     include: [
+      "src/tests/outcome-lifecycle.test.js",
       "tests/integration/bootstrap-contamination.integration.test.js",
       "tests/integration/fundamental-normalization.integration.test.js",
       "tests/integration/institutional-output.integration.test.js",

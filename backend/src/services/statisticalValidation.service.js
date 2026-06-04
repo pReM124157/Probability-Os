@@ -88,6 +88,16 @@ function isClosed(status) {
   return ["TARGET_HIT", "STOP_HIT", "EXPIRED", "CLOSED_MANUAL"].includes(String(status || "").toUpperCase());
 }
 
+function isPerformanceClosed(status) {
+  return ["TARGET_HIT", "STOP_HIT"].includes(String(status || "").toUpperCase());
+}
+
+function getPerformanceReturn(row) {
+  return isClosed(row?.outcome_status)
+    ? Number(row?.realized_return_pct ?? 0)
+    : Number(row?.unrealized_return_pct ?? 0);
+}
+
 function isWin(row) {
   const status = String(row.outcome_status || "").toUpperCase();
   const realized = Number(row.realized_return_pct || 0);
@@ -113,20 +123,14 @@ function calcWindowFilter(rows, window) {
 
 function isProductionRecommendationRow(row) {
   const audit = row?.recommendation_audit || {};
-  const blob = JSON.stringify({
-    recommendation_id: row?.recommendation_id,
-    symbol: row?.symbol,
-    audit_symbol: audit?.symbol,
-    generated_by: audit?.generated_by,
-    provider_metadata: audit?.provider_metadata
-  }).toUpperCase();
+  const symbols = [row?.symbol, audit?.symbol]
+    .map((value) => String(value || "").trim().toUpperCase())
+    .filter(Boolean);
 
-  if (blob.includes("TEST")) return false;
-  if (blob.includes("TRIAL")) return false;
-  if (blob.includes("MANUAL.TEST")) return false;
-  if (blob.includes("MANUAL_TEST")) return false;
-  if (blob.includes("COPILOT.DELIVERY")) return false;
-  if (blob.includes("PRODUCTION.DELIVERY.VERIFICATION")) return false;
+  if (symbols.some((symbol) => symbol.includes("TEST"))) return false;
+  if (symbols.some((symbol) => symbol.includes("ALPHA"))) return false;
+  if (symbols.some((symbol) => symbol.includes("BETA"))) return false;
+  if (symbols.some((symbol) => symbol.includes("GAMMA"))) return false;
 
   return true;
 }
@@ -158,10 +162,11 @@ function computeGlobalStats(rows, window) {
   const total = scoped.length;
   if (total < 1) throw new StatisticalValidationError("Insufficient recommendations for statistical computation", "INSUFFICIENT_DATA", { window, total });
 
-  const closed = scoped.filter((r) => isClosed(r.outcome_status));
+  const expiredCount = scoped.filter((r) => String(r.outcome_status || "").toUpperCase() === "EXPIRED").length;
+  const closed = scoped.filter((r) => isPerformanceClosed(r.outcome_status));
   if (closed.length < 1) throw new StatisticalValidationError("Insufficient closed recommendations", "INSUFFICIENT_DATA", { window, closed: closed.length });
 
-  const returns = closed.map((r) => Number(r.realized_return_pct ?? r.unrealized_return_pct ?? 0));
+  const returns = closed.map((r) => getPerformanceReturn(r));
   returns.forEach((v) => ensureFinite(v, "return_pct"));
   const maxUpsides = closed.map((r) => Number(r.max_upside_pct ?? 0));
   const maxDrawdowns = closed.map((r) => Number(r.max_drawdown_pct ?? 0));
@@ -194,7 +199,8 @@ function computeGlobalStats(rows, window) {
     replay_metadata: {
       generated_at: new Date().toISOString(),
       window,
-      closed_count: closed.length
+      closed_count: closed.length,
+      expired_count: expiredCount
     }
   };
   Object.entries(result).forEach(([k, v]) => {
@@ -207,7 +213,7 @@ function computeGlobalStats(rows, window) {
 }
 
 function computeCalibration(rows) {
-  const closed = rows.filter((r) => isClosed(r.outcome_status));
+  const closed = rows.filter((r) => isPerformanceClosed(r.outcome_status));
   const out = [];
   for (const bucket of CONFIDENCE_BUCKETS) {
     const bucketRows = closed.filter((r) => {
@@ -241,7 +247,7 @@ function computeCalibration(rows) {
 }
 
 function computeStrategyPerformance(rows) {
-  const closed = rows.filter((r) => isClosed(r.outcome_status));
+  const closed = rows.filter((r) => isPerformanceClosed(r.outcome_status));
   const groups = new Map();
   for (const row of closed) {
     const strategy = String(row.recommendation_audit?.recommendation_type || "UNKNOWN");

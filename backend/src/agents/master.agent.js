@@ -1361,7 +1361,11 @@ CRITICAL RULES:
     });
 
     // PHASE 2.5: Exit Strategy Analysis
-    const parseCurrency = (str) => Number(str?.replace(/[^0-9.]/g, "")) || 0;
+    const parseCurrency = (str) => {
+      if (!str || str === "-" || str === "To be confirmed on open") return null;
+      const num = Number(String(str).replace(/[^0-9.]/g, ""));
+      return Number.isNaN(num) || num === 0 ? null : num;
+    };
     
     const exitSignal = await analyzeExitSignal({
       stock: ticker,
@@ -1839,6 +1843,10 @@ CRITICAL RULES:
     }
 
     // AUDIT FOUNDATION: immutable recommendation audit insertion (bounded + fail-safe)
+    const parsedStopLoss = parseCurrency(entryTiming.stopLoss);
+    const parsedTargetPrice = parseCurrency(entryTiming.initialTarget);
+    const parsedRewardRiskRatio = parseCurrency(entryTiming.rewardRiskRatio);
+
     const auditPayload = {
       symbol: ticker,
       exchange: "NSE",
@@ -1847,9 +1855,9 @@ CRITICAL RULES:
       confidence: Number(finalDecision.finalConfidenceScore || 0),
       conviction: finalDecision.conviction || "MEDIUM",
       entryPrice: activePrice,
-      stopLoss: parseCurrency(entryTiming.stopLoss),
-      targetPrice: parseCurrency(entryTiming.initialTarget),
-      rrRatio: parseCurrency(entryTiming.rewardRiskRatio),
+      stopLoss: parsedStopLoss,
+      targetPrice: parsedTargetPrice,
+      rrRatio: parsedRewardRiskRatio,
       horizon: "SWING",
       sector: stockData?.Sector || null,
       marketRegime: marketStatus.isMarketOpen ? "LIVE" : marketStatus.isPreMarket ? "PRE_MARKET" : marketStatus.isPostMarket ? "POST_MARKET" : "CLOSED",
@@ -1899,15 +1907,20 @@ CRITICAL RULES:
       telegramChatId: options?.telegramChatId ? String(options.telegramChatId) : null
     };
 
+    const hasValidAuditRiskLevels = parsedTargetPrice != null && parsedStopLoss != null;
     const isAuditableAction = auditPayload.action !== "HOLD";
     if (!skipAudit && isAuditableAction) {
-      try {
-        await Promise.race([
-          insertRecommendationAudit(auditPayload),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("recommendation audit timeout")), 2200))
-        ]);
-      } catch (auditError) {
-        console.error(`[AUDIT ERROR] ${ticker}:`, auditError.message);
+      if (!hasValidAuditRiskLevels) {
+        console.warn(`[Audit] Skipping ${ticker} - no valid target/SL`);
+      } else {
+        try {
+          await Promise.race([
+            insertRecommendationAudit(auditPayload),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("recommendation audit timeout")), 2200))
+          ]);
+        } catch (auditError) {
+          console.error(`[AUDIT ERROR] ${ticker}:`, auditError.message);
+        }
       }
     }
 
