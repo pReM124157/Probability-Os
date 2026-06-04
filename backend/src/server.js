@@ -416,6 +416,7 @@ app.listen(PORT, "0.0.0.0", () => {
       const { startSpikeHook } = await import("./scheduler/spikeHook.scheduler.js");
       const { startRecommendationTrackingScheduler } = await import("./scheduler/recommendationTracking.scheduler.js");
       const { startStatisticalValidationScheduler } = await import("./scheduler/statisticalValidation.scheduler.js");
+      const { startPriceAlertScheduler } = await import("./scheduler/priceAlert.scheduler.js");
 
       await staggerSchedulerExecution("portfolio_surveillance", async () => startSchedulerSafely("portfolio_surveillance", () => startPortfolioScheduler()));
       await staggerSchedulerExecution("monitoring", async () => startSchedulerSafely("monitoring", () => startMonitoringJob()));
@@ -423,6 +424,7 @@ app.listen(PORT, "0.0.0.0", () => {
       await staggerSchedulerExecution("spike_hook", async () => startSchedulerSafely("spike_hook", () => startSpikeHook()));
       await staggerSchedulerExecution("recommendation_tracking", async () => startSchedulerSafely("recommendation_tracking", () => startRecommendationTrackingScheduler()));
       await staggerSchedulerExecution("statistical_validation", async () => startSchedulerSafely("statistical_validation", () => startStatisticalValidationScheduler()));
+      await staggerSchedulerExecution("price_alert_scan", async () => startSchedulerSafely("price_alert_scan", () => startPriceAlertScheduler()));
       await staggerSchedulerExecution("public_analytics", async () => startSchedulerSafely("public_analytics", () => startPublicAnalyticsScheduler()));
       await staggerSchedulerExecution("backtesting", async () => startSchedulerSafely("backtesting", () => startBacktestingScheduler()));
       await staggerSchedulerExecution("adaptive_intelligence", async () => startSchedulerSafely("adaptive_intelligence", () => startAdaptiveIntelligenceScheduler()));

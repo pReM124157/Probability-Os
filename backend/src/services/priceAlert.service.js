@@ -58,3 +58,58 @@ export async function createPriceAlert({
 
   return data;
 }
+
+export async function getActivePriceAlerts(limit = 100) {
+  const { data, error } = await supabase
+    .from("price_alerts")
+    .select("*")
+    .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    if (isSupabaseSchemaMissing(error)) {
+      logInfraFallbackOnce(
+        "price_alerts_missing_read",
+        "[PRICE ALERTS] price_alerts table missing; trigger scanner disabled",
+        { code: error.code, message: error.message }
+      );
+      return [];
+    }
+
+    throw new Error(error.message || "Failed to fetch active price alerts");
+  }
+
+  return data || [];
+}
+
+export function isPriceAlertTriggered(alert, currentPrice) {
+  const price = Number(currentPrice);
+  const target = Number(alert?.target_price);
+
+  if (!price || price <= 0 || !target || target <= 0) return false;
+
+  if (alert.condition === "below") return price <= target;
+  return price >= target;
+}
+
+export async function markPriceAlertTriggered(alertId, currentPrice, source = "UNKNOWN") {
+  const { data, error } = await supabase
+    .from("price_alerts")
+    .update({
+      status: "triggered",
+      triggered_at: new Date().toISOString(),
+      trigger_price: currentPrice,
+      trigger_source: source
+    })
+    .eq("id", alertId)
+    .eq("status", "active")
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(error.message || "Failed to mark price alert triggered");
+  }
+
+  return data;
+}
