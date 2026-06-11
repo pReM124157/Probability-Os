@@ -1,4 +1,4 @@
-import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supabase.service.js";
+import supabase, { isSupabaseUnavailable, logInfraFallbackOnce } from "./supabase.service.js";
 import { claimEphemeralKey } from "./distributedState.service.js";
 import { logMetric } from "./telemetry.service.js";
 
@@ -36,7 +36,7 @@ export async function getSharedCache(cacheKey) {
     logMetric("cache.hit_rate", 1, { cacheKey });
     return data.payload;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("shared_cache_get", "[infra] shared_cache table missing, using local cache fallback");
     return getLocalCacheEntry(cacheKey)?.payload || null;
   }
@@ -67,7 +67,7 @@ export async function setSharedCache(cacheKey, cacheGroup, payload, ttlSeconds) 
     if (error) throw error;
     logMetric("cache.ttl_seconds", ttlSeconds, { cacheKey, cacheGroup });
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     localSharedCache.set(cacheKey, {
       cacheGroup,
       payload,
@@ -84,7 +84,7 @@ export async function deleteSharedCache(cacheKey) {
       .eq("cache_key", cacheKey);
     if (error) throw error;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     localSharedCache.delete(cacheKey);
   }
 }
@@ -97,7 +97,7 @@ export async function invalidateCacheGroup(cacheGroup) {
       .eq("cache_group", cacheGroup);
     if (error) throw error;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     for (const [cacheKey, entry] of localSharedCache.entries()) {
       if (entry.cacheGroup === cacheGroup) {
         localSharedCache.delete(cacheKey);

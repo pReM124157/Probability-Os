@@ -33,20 +33,26 @@ describe("Institutional Provider Resilience (Failover & Graceful Degradation)", 
     mockYahooInstance.quote.mockReset();
     mockYahooInstance.quoteSummary.mockReset();
     mockYahooInstance.historical.mockReset();
-    // Reset caches and provider health states before each run
-    await invalidateCacheGroup("live_market_data");
-    await invalidateCacheGroup("historical_candles");
-    await invalidateCacheGroup("market_snapshots");
-    await supabase.from("shared_cache").delete().neq("cache_key", "_nonexistent_");
+    // Reset caches and provider health states before each run.
+    // In sandboxed/offline environments, DB-backed cleanup may be unavailable.
+    try {
+      await invalidateCacheGroup("live_market_data");
+      await invalidateCacheGroup("historical_candles");
+      await invalidateCacheGroup("market_snapshots");
+      await supabase.from("shared_cache").delete().neq("cache_key", "_nonexistent_");
 
-    // Force clear provider health in DB
-    await supabase.from("provider_health").update({ cooldown_until: null, consecutive_failures: 0 }).in("provider", ["yahoo", "alpha_vantage", "twelvedata", "finnhub"]);
-    
-    // Call recover to clear local state if applicable
-    await recoverProviderHealth("yahoo");
-    await recoverProviderHealth("alpha_vantage");
-    await recoverProviderHealth("twelvedata");
-    await recoverProviderHealth("finnhub");
+      await supabase
+        .from("provider_health")
+        .update({ cooldown_until: null, consecutive_failures: 0 })
+        .in("provider", ["yahoo", "alpha_vantage", "twelvedata", "finnhub"]);
+
+      await recoverProviderHealth("yahoo");
+      await recoverProviderHealth("alpha_vantage");
+      await recoverProviderHealth("twelvedata");
+      await recoverProviderHealth("finnhub");
+    } catch (error) {
+      console.warn("[TEST SETUP] provider-resilience DB cleanup skipped:", error?.message);
+    }
     
     resetProviderHealthForTest("yahoo");
     resetProviderHealthForTest("alpha_vantage");

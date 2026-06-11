@@ -78,12 +78,15 @@ import { getInstitutionalRuntimeSnapshot } from "./institutionalStatus.service.j
 import { reconcileSubscriberEntitlement } from "./subscriptionReconciliation.service.js";
 import { classifyIntentWithHermes } from "./hermesIntent.service.js";
 import { createPriceAlert } from "./priceAlert.service.js";
+import { buildCasualReply } from "./casualReply.service.js";
+import { composeHumanReply } from "./llmResponseComposer.service.js";
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const TELEGRAM_RETRY_DELAYS_MS = [5000, 15000, 30000, 60000];
 const THROTTLE_MS = 2000; // 2s cooldown
 const ANALYZE_STATE_TTL_SECONDS = 10 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 24 * 60 * 60;
+const BILLING_CONTEXT_TTL_SECONDS = 10 * 60;
 const BOT_LEASE_NAME = "telegram_bot_polling";
 const BOT_LEASE_TTL_SECONDS = 120;
 const BOT_LEASE_HEARTBEAT_MS = 30000;
@@ -154,6 +157,67 @@ function buildLiveDataFailureNotice(symbol, liveData = {}) {
 function getRetryDelayMs(attempt) {
   const idx = Math.max(0, Math.min(attempt, TELEGRAM_RETRY_DELAYS_MS.length - 1));
   return TELEGRAM_RETRY_DELAYS_MS[idx];
+}
+
+function isBillingFollowUpMessage(text = "") {
+  const lower = String(text || "").trim().toLowerCase();
+  return /\b(yes|yeah|yep|ok|okay|sure|please|do it|do that|go ahead|proceed|continue|confirm|can you do it|do it for me|guide me|help me|walk me through it|what should i do|how do i do it)\b/i.test(lower);
+}
+
+function buildBillingSafeReply(intent = "BILLING_HELP") {
+  switch (intent) {
+    case "SUBSCRIPTION_CANCEL":
+      return (
+        "I can't cancel your subscription from a free-text chat message.\n\n" +
+        "Use `/cancel` to manage your subscription through the official flow."
+      );
+
+    case "SUBSCRIPTION_BUY":
+      return (
+        "I can't activate a paid plan from chat.\n\n" +
+        "Use `/subscribe` to open the official secure checkout flow."
+      );
+
+    case "SUBSCRIPTION_STATUS":
+      return (
+        "I can't verify subscription status from conversational chat alone.\n\n" +
+        "Use `/status` to check your backend-verified subscription details."
+      );
+
+    case "BILLING_HELP":
+    default:
+      return (
+        "For billing help, use the official billing or account flow.\n\n" +
+        "Don't share card numbers, OTPs, passwords, or private payment details here."
+      );
+  }
+}
+
+async function handleBillingIntent(chatId, intent) {
+  switch (intent) {
+    case "SUBSCRIPTION_CANCEL":
+      await sendCancelSubscriptionOptions(chatId);
+      return true;
+
+    case "SUBSCRIPTION_BUY":
+      await sendSubscriptionLink(chatId);
+      return true;
+
+    case "SUBSCRIPTION_STATUS":
+      await sendSubscriptionStatusMessage(chatId);
+      return true;
+
+    case "BILLING_HELP":
+      await bot.telegram.sendMessage(
+        chatId,
+        buildBillingSafeReply("BILLING_HELP"),
+        { parse_mode: "Markdown" }
+      );
+      return true;
+
+    default:
+      return false;
+  }
 }
 
 function setTelegramConnected() {
@@ -462,34 +526,49 @@ async function buildMarketOverviewText() {
   let sensexChange = null;
   let dataSource = "Yahoo";
 
-  try {
-    const niftyData = await getLiveMarketData("^NSEI");
-    const extractedNifty = extractIndexPriceAndChange(niftyData);
-    if (extractedNifty.price !== null) {
-      const formattedChange = extractedNifty.change !== null ? `${extractedNifty.change >= 0 ? "+" : ""}${extractedNifty.change.toFixed(2)}%` : "N/A";
-      niftyText = `NIFTY 50: ${extractedNifty.price.toLocaleString("en-IN")} | ${formattedChange}`;
-      niftyChange = extractedNifty.change;
-      if (niftyData.priceSource) {
-        dataSource = niftyData.priceSource;
+  // Fetch both indices in parallel — they are independent and getLiveMarketData
+  // has inflight dedup so parallel calls are safe.
+  const [niftyResult, sensexResult] = await Promise.allSettled([
+    getLiveMarketData("^NSEI"),
+    getLiveMarketData("^BSESN")
+  ]);
+
+  if (niftyResult.status === "fulfilled") {
+    try {
+      const niftyData = niftyResult.value;
+      const extractedNifty = extractIndexPriceAndChange(niftyData);
+      if (extractedNifty.price !== null) {
+        const formattedChange = extractedNifty.change !== null ? `${extractedNifty.change >= 0 ? "+" : ""}${extractedNifty.change.toFixed(2)}%` : "N/A";
+        niftyText = `NIFTY 50: ${extractedNifty.price.toLocaleString("en-IN")} | ${formattedChange}`;
+        niftyChange = extractedNifty.change;
+        if (niftyData.priceSource) {
+          dataSource = niftyData.priceSource;
+        }
       }
+    } catch (err) {
+      console.error("Error processing NIFTY:", err);
     }
-  } catch (err) {
-    console.error("Error fetching NIFTY:", err);
+  } else {
+    console.error("Error fetching NIFTY:", niftyResult.reason);
   }
 
-  try {
-    const sensexData = await getLiveMarketData("^BSESN");
-    const extractedSensex = extractIndexPriceAndChange(sensexData);
-    if (extractedSensex.price !== null) {
-      const formattedChange = extractedSensex.change !== null ? `${extractedSensex.change >= 0 ? "+" : ""}${extractedSensex.change.toFixed(2)}%` : "N/A";
-      sensexText = `SENSEX: ${extractedSensex.price.toLocaleString("en-IN")} | ${formattedChange}`;
-      sensexChange = extractedSensex.change;
-      if (sensexData.priceSource) {
-        dataSource = sensexData.priceSource;
+  if (sensexResult.status === "fulfilled") {
+    try {
+      const sensexData = sensexResult.value;
+      const extractedSensex = extractIndexPriceAndChange(sensexData);
+      if (extractedSensex.price !== null) {
+        const formattedChange = extractedSensex.change !== null ? `${extractedSensex.change >= 0 ? "+" : ""}${extractedSensex.change.toFixed(2)}%` : "N/A";
+        sensexText = `SENSEX: ${extractedSensex.price.toLocaleString("en-IN")} | ${formattedChange}`;
+        sensexChange = extractedSensex.change;
+        if (sensexData.priceSource) {
+          dataSource = sensexData.priceSource;
+        }
       }
+    } catch (err) {
+      console.error("Error processing SENSEX:", err);
     }
-  } catch (err) {
-    console.error("Error fetching SENSEX:", err);
+  } else {
+    console.error("Error fetching SENSEX:", sensexResult.reason);
   }
 
   const marketState = getMarketStateIST();
@@ -1265,40 +1344,10 @@ function formatPortfolioFitSection({ candidateSymbol, portfolioSymbols = [], opt
   return lines.join("\n");
 }
 
-function getCasualReply(text = "") {
-  const lower = safeString(text).trim().toLowerCase();
-
-  const asksCreator =
-    /\b(who made you|who created you|who built you|your creator|who is your founder|who developed you)\b/i.test(lower);
-
-  const asksIdentity =
-    /\b(who are you|what are you|introduce yourself|explain yourself)\b/i.test(lower);
-
-  if (asksCreator) {
-    return "I was built by Prem Ganatra.";
-  }
-
-  if (asksIdentity) {
-    return "I’m Finsight AI — a market intelligence and portfolio analysis agent.";
-  }
-
-  if (/^(hi|hello|hey|hi bro|yo|sup|bro)\b/i.test(lower)) {
-    return "I’m Finsight AI — a market intelligence and portfolio analysis agent. Ask me about a stock, portfolio, scanner, or market view.";
-  }
-
-  if (lower.includes("good morning") || lower.includes("good evening") || lower.includes("good afternoon")) {
-    return "Hello. I’m Finsight AI — ask me about a stock, portfolio, scanner, or market view.";
-  }
-
-  if (lower.includes("thanks") || lower.includes("thank you")) {
-    return "Anytime.";
-  }
-
-  return "Ask me about a stock, portfolio, scanner, or market view.";
-}
-
 async function performAnalysis(chatId, symbol, footer = "", options = {}) {
-  await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
+  if (!options.skipAck) {
+    await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${symbol}...\nPulling fundamentals, technicals, and risk profile.`);
+  }
   console.log("[ANALYZE]", { symbol });
 
   const result = await runAnalysisSafe(symbol, async (sym) => {
@@ -1336,6 +1385,103 @@ async function sendSubscriptionLink(chatId) {
 • Full analysis access
 • Priority insights
 👉 Pay here: ${url}`
+  );
+}
+
+async function sendCancelSubscriptionOptions(chatId) {
+  const { data } = await supabase
+    .from('subscribers')
+    .select('expires_at')
+    .eq('telegram_chat_id', chatId.toString())
+    .maybeSingle();
+
+  if (!data) {
+    await bot.telegram.sendMessage(chatId, '❌ No active subscription found.');
+    return;
+  }
+
+  const expiryDate = data.expires_at
+    ? formatIST(data.expires_at)
+    : 'Not set';
+
+  await bot.telegram.sendMessage(
+    chatId,
+    `⚙️ *Cancel Subscription*\n\n` +
+    `Your plan is active until: *${expiryDate}*\n\n` +
+    `Choose an option:`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel Now', 'cancel_now')],
+        [Markup.button.callback('⏳ Cancel Later', 'cancel_later')]
+      ])
+    }
+  );
+}
+
+async function sendSubscriptionStatusMessage(chatId) {
+  const { data } = await supabase
+    .from('subscribers')
+    .select('status, expires_at, cancel_at_period_end, plan, is_pro, subscription_end, razorpay_subscription_id')
+    .eq('telegram_chat_id', chatId.toString())
+    .maybeSingle();
+
+  const reconciledData = await reconcileSubscriberEntitlement(chatId.toString(), data);
+
+  const now = new Date();
+  const isActive =
+    (reconciledData?.status === 'active' || reconciledData?.status === 'grace') &&
+    (reconciledData?.expires_at && new Date(reconciledData.expires_at) > now);
+
+  if (!reconciledData || !isActive) {
+    await bot.telegram.sendMessage(
+      chatId,
+      `🆓 *Free Plan*\n\n` +
+      `You don't have an active Pro subscription.\n\n` +
+      `👉 Type /subscribe to unlock FinSight Pro for ₹599/month.`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (reconciledData.status === 'grace') {
+    await bot.telegram.sendMessage(
+      chatId,
+      `⚠️ *Payment Failed*\n\n` +
+      `Your subscription is in a 48-hour grace period.\n` +
+      `We'll retry the payment automatically.\n` +
+      `Update your payment method to avoid interruption.`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  const expiryDate = reconciledData.expires_at
+    ? formatIST(reconciledData.expires_at)
+    : 'Not set';
+
+  let expiryText = `Expires: ${expiryDate}`;
+  let autoRenewText = `Auto-renew: ${reconciledData.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}`;
+
+  if (reconciledData.razorpay_subscription_id && !reconciledData.cancel_at_period_end) {
+    expiryText = `Renews on: ${expiryDate}`;
+    autoRenewText = `Auto-renew: ✅ On`;
+  } else if (reconciledData.razorpay_subscription_id) {
+    expiryText = `Expires on: ${expiryDate}`;
+    autoRenewText = `Auto-renew: ❌ Off`;
+  }
+
+  const subIdText = reconciledData.razorpay_subscription_id ? `Sub ID: \`${reconciledData.razorpay_subscription_id}\`\n` : '';
+
+  await bot.telegram.sendMessage(
+    chatId,
+    `💎 *Pro Active*\n\n` +
+    `Plan: ${reconciledData.plan || 'Pro'}\n` +
+    `${expiryText}\n` +
+    `${autoRenewText}\n` +
+    `${subIdText}\n` +
+    `Type /cancel to manage your subscription.`,
+    { parse_mode: 'Markdown' }
   );
 }
 
@@ -1383,33 +1529,7 @@ bot.command('cancel', async (ctx) => {
     await ctx.reply("Portfolio add session cancelled.");
     return;
   }
-
-  const { data } = await supabase
-    .from('subscribers')
-    .select('expires_at')
-    .eq('telegram_chat_id', chatId)
-    .maybeSingle();
-
-  if (!data) {
-    return ctx.reply('❌ No active subscription found.');
-  }
-
-  const expiryDate = data.expires_at
-    ? formatIST(data.expires_at)
-    : 'Not set';
-
-  return ctx.reply(
-    `⚙️ *Cancel Subscription*\n\n` +
-    `Your plan is active until: *${expiryDate}*\n\n` +
-    `Choose an option:`,
-    {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('❌ Cancel Now', 'cancel_now')],
-        [Markup.button.callback('⏳ Cancel Later', 'cancel_later')]
-      ])
-    }
-  );
+  await sendCancelSubscriptionOptions(chatId);
 });
 
 // ─────────────────────────────────────────────
@@ -1419,65 +1539,7 @@ bot.command('cancel', async (ctx) => {
 // ─────────────────────────────────────────────
 
 bot.command('status', async (ctx) => {
-  const chatId = ctx.chat.id.toString();
-  const { data } = await supabase
-    .from('subscribers')
-    .select('status, expires_at, cancel_at_period_end, plan, is_pro, subscription_end, razorpay_subscription_id')
-    .eq('telegram_chat_id', chatId)
-    .maybeSingle();
-
-  const reconciledData = await reconcileSubscriberEntitlement(chatId, data);
-
-  const now = new Date();
-  const isActive =
-    (reconciledData?.status === 'active' || reconciledData?.status === 'grace') &&
-    (reconciledData.expires_at && new Date(reconciledData.expires_at) > now);
-
-  if (!reconciledData || !isActive) {
-    return ctx.reply(
-      `🆓 *Free Plan*\n\n` +
-      `You don't have an active Pro subscription.\n\n` +
-      `👉 Type /subscribe to unlock FinSight Pro for ₹599/month.`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  if (reconciledData.status === 'grace') {
-    return ctx.reply(
-      `⚠️ *Payment Failed*\n\n` +
-      `Your subscription is in a 48-hour grace period.\n` +
-      `We'll retry the payment automatically.\n` +
-      `Update your payment method to avoid interruption.`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  const expiryDate = reconciledData.expires_at
-    ? formatIST(reconciledData.expires_at)
-    : 'Not set';
-
-  let expiryText = `Expires: ${expiryDate}`;
-  let autoRenewText = `Auto-renew: ${reconciledData.cancel_at_period_end ? '❌ Off (cancels at expiry)' : '✅ On'}`;
-  
-  if (reconciledData.razorpay_subscription_id && !reconciledData.cancel_at_period_end) {
-    expiryText = `Renews on: ${expiryDate}`;
-    autoRenewText = `Auto-renew: ✅ On`;
-  } else if (reconciledData.razorpay_subscription_id) {
-    expiryText = `Expires on: ${expiryDate}`;
-    autoRenewText = `Auto-renew: ❌ Off`;
-  }
-
-  const subIdText = reconciledData.razorpay_subscription_id ? `Sub ID: \`${reconciledData.razorpay_subscription_id}\`\n` : '';
-
-  return ctx.reply(
-    `💎 *Pro Active*\n\n` +
-    `Plan: ${reconciledData.plan || 'Pro'}\n` +
-    `${expiryText}\n` +
-    `${autoRenewText}\n` +
-    `${subIdText}\n` +
-    `Type /cancel to manage your subscription.`,
-    { parse_mode: 'Markdown' }
-  );
+  await sendSubscriptionStatusMessage(ctx.chat.id);
 });
 
 // ─────────────────────────────────────────────
@@ -1550,20 +1612,43 @@ bot.action('cancel_later', async (ctx) => {
 });
 
 // ─────────────────────────────────────────────
+// TYPING INDICATOR HELPER
+// Sends the Telegram "typing..." action immediately and refreshes it every
+// 4 s (Telegram clears it after 5 s). Returns a stop() function that must
+// be called when the reply is sent or on error.
+// ─────────────────────────────────────────────
+
+function keepTyping(chatId) {
+  let stopped = false;
+  // Fire immediately so the indicator appears before any await
+  bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
+  const timer = setInterval(() => {
+    if (stopped) return;
+    bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
+  }, 4000);
+  return function stop() {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+// ─────────────────────────────────────────────
 // MAIN MESSAGE HANDLER
 // ─────────────────────────────────────────────
 
 bot.on("text", async (ctx) => {
+  const chatId = ctx.chat.id.toString();
+  const stopTyping = keepTyping(chatId);
   try {
-    const chatId = ctx.chat.id.toString();
 
     const traceId = createTraceId("tg");
     logEvent("telegram.message.received", { traceId, chatId });
 
-    if (!(await canCall(ctx.chat.id))) return;
+    if (!(await canCall(ctx.chat.id))) { stopTyping(); return; }
 
     const text = ctx.message.text?.trim() || "";
-    if (!text) return;
+    if (!text) { stopTyping(); return; }
+    const billingContext = await getState("billing_guard", chatId);
 
     // Hermes intent router shadow mode.
     // This logs intent classification and allows safe-routing below.
@@ -1583,6 +1668,18 @@ bot.on("text", async (ctx) => {
       console.warn("[HERMES INTENT SHADOW ERROR]", {
         message: hermesIntentError?.message || String(hermesIntentError)
       });
+    }
+
+    if (
+      billingContext?.intent &&
+      isBillingFollowUpMessage(text) &&
+      !["SUBSCRIPTION_CANCEL", "SUBSCRIPTION_BUY", "SUBSCRIPTION_STATUS", "BILLING_HELP"].includes(hermesIntent?.intent)
+    ) {
+      const handled = await handleBillingIntent(chatId, billingContext.intent);
+      if (!handled) {
+        await send(buildBillingSafeReply(billingContext.intent), { parse_mode: "Markdown" });
+      }
+      return;
     }
 
     // ── Single DB fetch ─────────────────────────────────────────────
@@ -2138,6 +2235,13 @@ bot.on("text", async (ctx) => {
         await send("Please enter a valid NSE ticker like TCS, RELIANCE, or INFY.");
         return;
       }
+
+      const existenceResult = await checkSymbolExistence(syntaxCheck.cleanTicker, { getCompanyOverview });
+      if (existenceResult.state === EXISTENCE_STATE.UNKNOWN) {
+        await send(`⚠️ *${syntaxCheck.cleanTicker}* does not look like a valid NSE ticker.\nPlease try something like *TCS*, *RELIANCE*, or *INFY*.`);
+        return;
+      }
+
       await performAnalysis(chatId, syntaxCheck.cleanTicker, footer, { mode: "full" });
       return;
     }
@@ -2145,7 +2249,39 @@ bot.on("text", async (ctx) => {
     // ── Hermes safe intent routing ─────────────────────────────────
     // Only route low-risk intents here. Stock analysis/trade decisions still use old flow.
     if (hermesIntent?.intent === "CASUAL_CHAT") {
-      await send("Hi 👋 Send me a stock like *TCS*, *RELIANCE*, or *INFY*, or ask me to analyze one.");
+      const reply = await composeHumanReply({
+        intent: "CASUAL_CHAT",
+        userText: text,
+        backendResult: {
+          message: "General user message. Reply naturally and invite the user to ask about stocks, alerts, prices, or portfolio if relevant."
+        }
+      });
+
+      await send(reply, { parse_mode: "Markdown" });
+      return;
+    }
+
+    if (hermesIntent?.intent === "SUBSCRIPTION_CANCEL") {
+      await putState("billing_guard", chatId, { intent: "SUBSCRIPTION_CANCEL" }, BILLING_CONTEXT_TTL_SECONDS);
+      await handleBillingIntent(chatId, "SUBSCRIPTION_CANCEL");
+      return;
+    }
+
+    if (hermesIntent?.intent === "SUBSCRIPTION_BUY") {
+      await putState("billing_guard", chatId, { intent: "SUBSCRIPTION_BUY" }, BILLING_CONTEXT_TTL_SECONDS);
+      await handleBillingIntent(chatId, "SUBSCRIPTION_BUY");
+      return;
+    }
+
+    if (hermesIntent?.intent === "SUBSCRIPTION_STATUS") {
+      await putState("billing_guard", chatId, { intent: "SUBSCRIPTION_STATUS" }, BILLING_CONTEXT_TTL_SECONDS);
+      await handleBillingIntent(chatId, "SUBSCRIPTION_STATUS");
+      return;
+    }
+
+    if (hermesIntent?.intent === "BILLING_HELP") {
+      await putState("billing_guard", chatId, { intent: "BILLING_HELP" }, BILLING_CONTEXT_TTL_SECONDS);
+      await send(buildBillingSafeReply("BILLING_HELP"), { parse_mode: "Markdown" });
       return;
     }
 
@@ -2177,12 +2313,19 @@ bot.on("text", async (ctx) => {
           ? "\n⚠️ Data reliability is degraded; using last verified available quote."
           : "";
 
-      await send(
-        `📈 *${cleanTicker} Price*\n` +
-        `₹${price}\n` +
-        `Source: ${source}${staleNote}`,
-        { parse_mode: "Markdown" }
-      );
+      const reply = await composeHumanReply({
+        intent: "PRICE_CHECK",
+        userText: text,
+        symbol: cleanTicker,
+        backendResult: {
+          price,
+          source,
+          staleNote,
+          degraded: Boolean(liveData?.degradedMode || liveData?.staleData || liveData?.isStale)
+        }
+      });
+
+      await send(reply, { parse_mode: "Markdown" });
       return;
     }
 
@@ -2205,13 +2348,20 @@ bot.on("text", async (ctx) => {
           targetPrice: price
         });
 
-        await send(
-          `✅ Price alert created\n` +
-          `Stock: *${alert.symbol}*\n` +
-          `Condition: *${alert.condition} ₹${alert.target_price}*\n` +
-          `Status: *${alert.status}*`,
-          { parse_mode: "Markdown" }
-        );
+        const reply = await composeHumanReply({
+          intent: "ALERT_CREATE",
+          userText: text,
+          symbol: alert.symbol,
+          backendResult: {
+            symbol: alert.symbol,
+            condition: alert.condition,
+            price: alert.target_price,
+            status: alert.status,
+            message: "The price alert was successfully saved and will be monitored automatically."
+          }
+        });
+
+        await send(reply, { parse_mode: "Markdown" });
       } catch (alertError) {
         console.error("[PRICE ALERT CREATE FAILED]", {
           chatId,
@@ -2249,10 +2399,26 @@ bot.on("text", async (ctx) => {
 
       const cleanTicker = normalizeTickerAlias(syntaxResult.cleanTicker);
 
-      // ── LAYER 2: Symbol existence (overview/registry, NO live price needed) ─
-      const existenceResult = await checkSymbolExistence(cleanTicker, { getCompanyOverview });
+      // ── EARLY ACK: User sees feedback immediately after syntax check ──────
+      // Validation (Layers 2+3) runs in parallel below. If they fail, we
+      // send a follow-up error. Sending now makes the bot feel instant.
+      await bot.telegram.sendMessage(chatId, `🔍 Analyzing ${cleanTicker}...\nPulling fundamentals, technicals, and risk profile.`);
+
+      // ── LAYERS 2 + 3: Parallelize existence and availability checks ───────
+      const [existenceResult, availabilityResult] = await Promise.all([
+        checkSymbolExistence(cleanTicker, { getCompanyOverview }),
+        checkMarketAvailability(cleanTicker, { getLiveMarketData })
+      ]);
 
       if (existenceResult.state === EXISTENCE_STATE.UNKNOWN) {
+        if (intent.source === "raw_ticker") {
+          await send(
+            `⚠️ *${cleanTicker}* does not look like a valid NSE ticker.\n` +
+            `Please try a stock like *TCS*, *RELIANCE*, or *INFY*.`
+          );
+          return;
+        }
+
         // We could not confirm existence (either due to provider outage or truly invalid).
         // FAIL-OPEN: Let it proceed. Layer 3 and Layer 4 will catch it if there's no price.
         console.warn(`[VALIDATION] Symbol ${cleanTicker} returned UNKNOWN existence. Allowing to proceed to Layer 3.`);
@@ -2263,9 +2429,6 @@ bot.on("text", async (ctx) => {
 
       // If REGISTRY_ERROR — we cannot confirm non-existence, so allow through
       // with a note. Do NOT block valid tickers due to registry lookup failures.
-
-      // ── LAYER 3: Market availability (provider health, separate from existence) ─
-      const availabilityResult = await checkMarketAvailability(cleanTicker, { getLiveMarketData });
 
       if (availabilityResult.availability === MARKET_AVAILABILITY.PROVIDER_UNAVAILABLE) {
         // Try stale cache data from the live result before hard-failing
@@ -2285,8 +2448,8 @@ bot.on("text", async (ctx) => {
               cacheAgeMinutes: Math.round(ageSeconds / 60)
             });
             if (stateMsg) await send(stateMsg);
-            // Proceed with degraded analysis using stale data
-            await performAnalysis(chatId, cleanTicker, footer, { mode: "full" });
+            // Ack already sent above; skip it inside performAnalysis
+            await performAnalysis(chatId, cleanTicker, footer, { mode: "full", skipAck: true });
             return;
           }
         }
@@ -2297,8 +2460,8 @@ bot.on("text", async (ctx) => {
       }
 
       // ── LAYER 4 is enforced inside performAnalysis via validateAnalysisReadiness() ─
-      // Proceed to analysis — availability is LIVE or DEGRADED (acceptable).
-      await performAnalysis(chatId, cleanTicker, footer, { mode: "full" });
+      // Ack already sent above; skip it inside performAnalysis.
+      await performAnalysis(chatId, cleanTicker, footer, { mode: "full", skipAck: true });
       return;
     }
 
@@ -2313,7 +2476,20 @@ bot.on("text", async (ctx) => {
       });
 
       if (routed.intent === "CASUAL_CHAT") {
-        await send(getCasualReply(text));
+        const reply = await composeHumanReply({
+          intent: "CASUAL_CHAT",
+          userText: text,
+          backendResult: {
+            message: "General user message. Reply naturally and invite the user to ask about stocks, alerts, prices, or portfolio if relevant."
+          }
+        });
+        await send(reply, { parse_mode: "Markdown" });
+        return;
+      }
+
+      if (routed.intent === "SUBSCRIPTION_OR_ACCOUNT") {
+        await putState("billing_guard", chatId, { intent: "BILLING_HELP" }, BILLING_CONTEXT_TTL_SECONDS);
+        await send(buildBillingSafeReply("BILLING_HELP"), { parse_mode: "Markdown" });
         return;
       }
 
@@ -2454,6 +2630,8 @@ bot.on("text", async (ctx) => {
   } catch (error) {
     console.error("Telegram Bot Error:", error);
     await ctx.reply("⚠️ Temporary issue processing your request. Please try again in a moment.");
+  } finally {
+    stopTyping();
   }
 });
 

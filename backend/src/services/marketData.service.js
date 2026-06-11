@@ -1618,19 +1618,13 @@ export async function getLiveMarketData(symbol) {
               { name: "TWELVEDATA", fetch: () => twelveDataQuoteFetch(upperSymbol, { timeoutMs: LIVE_FALLBACK_PROVIDER_TIMEOUT_MS, diagnostics: providerDiagnostics }) },
               { name: "FINNHUB", fetch: () => finnhubQuoteFetch(upperSymbol, { timeoutMs: LIVE_FALLBACK_PROVIDER_TIMEOUT_MS, diagnostics: providerDiagnostics }) }
             ];
-            const firstValid = await Promise.any(
-              fallbackProviders.map(async (provider) => {
-                console.log(`[DATA] attempt=${provider.name.toLowerCase()} symbol=${upperSymbol}`);
-                const candidate = await provider.fetch();
-                if (candidate && toPositiveNumber(candidate.regularMarketPrice) > 0) {
-                  return { provider, candidate };
-                }
-                throw new Error(`${provider.name}_NO_VALID_QUOTE`);
-              })
-            ).catch(() => null);
+            for (const provider of fallbackProviders) {
+              console.log(`[DATA] attempt=${provider.name.toLowerCase()} symbol=${upperSymbol}`);
+              const candidate = await provider.fetch();
+              if (!candidate || toPositiveNumber(candidate.regularMarketPrice) <= 0) {
+                continue;
+              }
 
-            if (firstValid) {
-              const { provider, candidate } = firstValid;
               result = candidate;
               priceSource = provider.name;
               dataConfidence = "DEGRADED_SOURCE";
@@ -1640,6 +1634,7 @@ export async function getLiveMarketData(symbol) {
               if (provider.name === "TWELVEDATA") dataMetrics.twelvedataSuccess++;
               if (provider.name === "FINNHUB") dataMetrics.finnhubSuccess++;
               console.log(`[DATA] source=${provider.name.toLowerCase()} symbol=${upperSymbol} status=fallback`);
+              break;
             }
           }
 
@@ -1706,6 +1701,7 @@ export async function getLiveMarketData(symbol) {
               const ageS = Math.floor((Date.now() - staleRescue.timestamp) / 1000);
               const policy = buildStaleCachePolicy({ cacheAgeSeconds: safeCacheAgeSeconds(ageS), isMarketOpen: marketStatus.isMarketOpen });
               if (policy.acceptable) {
+                failureReasons.push("No valid positive price could be confirmed");
                 logEvent("data.availability.stale", { symbol: upperSymbol, ageSeconds: ageS, state: policy.state });
                 return {
                   ...staleRescue,
@@ -1719,10 +1715,21 @@ export async function getLiveMarketData(symbol) {
                   dataAge: ageS,
                   dataConfidence: policy.state,
                   priceSource: "STALE_CACHE_RESCUE",
+                  status: "STALE_RESCUE",
                   staleData: true,
                   degradedMode: true,
                   reliability: "DEGRADED",
                   dataQuality: "STALE_RESCUE",
+                  failureDiagnostics: {
+                    reasons: Array.from(new Set(failureReasons)),
+                    providers: providerDiagnostics,
+                    staleCache: {
+                      available: true,
+                      ageSeconds: ageS,
+                      state: policy.state,
+                      acceptable: true
+                    }
+                  },
 
                   explanation:
                     "Live provider price unavailable. Using last verified cached/close price with degraded reliability."

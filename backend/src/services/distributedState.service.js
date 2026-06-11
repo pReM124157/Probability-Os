@@ -1,4 +1,4 @@
-import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supabase.service.js";
+import supabase, { isSupabaseUnavailable, logInfraFallbackOnce } from "./supabase.service.js";
 import { safeString } from "../core/safety.js";
 
 const localStateStore = new Map();
@@ -35,7 +35,7 @@ export async function putState(namespace, id, value, ttlSeconds = null) {
     });
     if (error) throw error;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("distributed_state_put", "[infra] distributed_state RPC missing, using local state fallback");
     setLocalEntry(key, value, ttlSeconds);
   }
@@ -54,7 +54,7 @@ export async function getState(namespace, id) {
     if (data.expires_at && new Date(data.expires_at) <= new Date()) return null;
     return data.state_value;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("distributed_state_get", "[infra] distributed_state table missing, reading from local state fallback");
     return getLocalEntry(key)?.value || null;
   }
@@ -69,7 +69,7 @@ export async function deleteState(namespace, id) {
       .eq("state_key", key);
     if (error) throw error;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     localStateStore.delete(key);
   }
 }
@@ -83,7 +83,7 @@ export async function consumeState(namespace, id) {
     if (error) throw error;
     return data || null;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("distributed_state_consume", "[infra] consume_distributed_state RPC missing, consuming local state fallback");
     const entry = getLocalEntry(key);
     localStateStore.delete(key);
@@ -102,7 +102,7 @@ export async function claimEphemeralKey(namespace, id, ownerId, ttlSeconds) {
     if (error) throw error;
     return data === true;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("distributed_state_claim", "[infra] claim_ephemeral_key RPC missing, using local ephemeral claims");
     const existing = getLocalEntry(key);
     if (existing && existing.value?.owner_id !== ownerId) return false;
@@ -127,7 +127,7 @@ export async function appendChatMemory(chatId, userMessage, assistantMessage, tt
     if (error) throw error;
     return Array.isArray(data) ? data : [];
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("distributed_state_chat_memory", "[infra] append_chat_memory RPC missing, using local chat memory");
     const existing = getLocalEntry(key)?.value?.messages || [];
     const next = [

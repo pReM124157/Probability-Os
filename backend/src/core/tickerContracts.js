@@ -55,7 +55,8 @@ export function validateTickerSyntax(input) {
     "HI", "HEY", "OK", "YES", "NO", "THE", "AND", "FOR", "ARE", "BUT",
     "NOT", "YOU", "ALL", "CAN", "WHO", "WHY", "HOW", "DID", "BUY", "GET",
     "HIM", "HIS", "HER", "ITS", "WAS", "HAD", "LET", "SAY", "SHE", "HE",
-    "HELP", "GOOD", "NICE", "COOL", "OKAY", "THANKS", "HELLO", "BYE"
+    "HELP", "GOOD", "NICE", "COOL", "OKAY", "THANKS", "HELLO", "BYE",
+    "MY", "BRO", "SUP", "YO"
   ]);
 
   const base = clean.split(".")[0];

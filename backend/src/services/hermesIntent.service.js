@@ -24,6 +24,10 @@ const INTENTS = {
   POSITION_EXIT: "POSITION_EXIT",
   RISK_EXPLAIN: "RISK_EXPLAIN",
   EDUCATIONAL_QUERY: "EDUCATIONAL_QUERY",
+  SUBSCRIPTION_BUY: "SUBSCRIPTION_BUY",
+  SUBSCRIPTION_CANCEL: "SUBSCRIPTION_CANCEL",
+  SUBSCRIPTION_STATUS: "SUBSCRIPTION_STATUS",
+  BILLING_HELP: "BILLING_HELP",
   CASUAL_CHAT: "CASUAL_CHAT",
   UNKNOWN: "UNKNOWN"
 };
@@ -137,6 +141,50 @@ function deterministicIntentFallback(message) {
       symbols: [],
       exchange: "NSE",
       confidence: 0.9,
+      source: "deterministic"
+    };
+  }
+
+  if (/\b(cancel|unsubscribe|stop|end)\b.*\b(subscription|plan|pro)\b|\b(subscription|plan|pro)\b.*\b(cancel|unsubscribe|stop|end)\b/i.test(lower)) {
+    return {
+      intent: INTENTS.SUBSCRIPTION_CANCEL,
+      symbol: null,
+      symbols: [],
+      exchange: "NSE",
+      confidence: 0.95,
+      source: "deterministic"
+    };
+  }
+
+  if (/\b(am i subscribed|is my subscription active|what plan am i on|subscription status|current plan|my plan|am i on pro)\b/i.test(lower)) {
+    return {
+      intent: INTENTS.SUBSCRIPTION_STATUS,
+      symbol: null,
+      symbols: [],
+      exchange: "NSE",
+      confidence: 0.95,
+      source: "deterministic"
+    };
+  }
+
+  if (/\b(refund|invoice|payment failed|charged|billing|payment issue|billing issue)\b/i.test(lower)) {
+    return {
+      intent: INTENTS.BILLING_HELP,
+      symbol: null,
+      symbols: [],
+      exchange: "NSE",
+      confidence: 0.95,
+      source: "deterministic"
+    };
+  }
+
+  if (/\b(buy pro|upgrade|subscribe|activate pro|purchase plan|go pro)\b/i.test(lower)) {
+    return {
+      intent: INTENTS.SUBSCRIPTION_BUY,
+      symbol: null,
+      symbols: [],
+      exchange: "NSE",
+      confidence: 0.95,
       source: "deterministic"
     };
   }
@@ -318,8 +366,10 @@ You ARE allowed to:
 - infer intent from wording
 - normalize Indian stock names into NSE symbols
 - detect whether the user wants analysis, price, alert, news, comparison, portfolio review, risk, or education
+- detect whether the user wants to buy, cancel, check, or get help with a subscription or billing issue
 - extract timeframe, condition, target price, and requested action
 - decide which backend route should handle the request
+- classify billing/subscription intent only; backend must perform billing actions
 
 Available intents:
 ${Object.values(INTENTS).join(", ")}
@@ -336,6 +386,10 @@ Intent definitions:
 - POSITION_EXIT: user asks exit, stop loss, trim, book profit, reduce.
 - RISK_EXPLAIN: user asks risk, safety, downside, danger.
 - EDUCATIONAL_QUERY: user asks meaning/explanation of a finance concept.
+- SUBSCRIPTION_BUY: user wants to buy, upgrade, subscribe, activate Pro, or purchase a plan.
+- SUBSCRIPTION_CANCEL: user wants to cancel, stop, unsubscribe, end Pro, or avoid future charges.
+- SUBSCRIPTION_STATUS: user asks whether they are subscribed, active, paid, trialing, cancelled, or what plan they have.
+- BILLING_HELP: user asks about payment, invoice, refund, billing issue, failed payment, or charge.
 - CASUAL_CHAT: greeting/small talk.
 - UNKNOWN: unsupported, unclear, or no actionable financial intent.
 
@@ -375,8 +429,13 @@ Decision rules:
 - If user mentions "vs", "compare", "which is better" with 2 stocks -> COMPARE_STOCKS.
 - If user asks "portfolio", "holdings", "positions" -> PORTFOLIO_REVIEW.
 - If user asks "stop loss", "exit", "sell", "trim", "book profit" -> POSITION_EXIT.
+- If user says "buy pro", "upgrade", "subscribe", "activate pro" -> SUBSCRIPTION_BUY.
+- If user says "cancel subscription", "unsubscribe", "stop pro", "end my plan" -> SUBSCRIPTION_CANCEL.
+- If user asks "am I subscribed", "what plan am I on", "is my subscription active" -> SUBSCRIPTION_STATUS.
+- If user asks "refund", "invoice", "payment failed", "charged", "billing" -> BILLING_HELP.
 - If multiple intents are possible, choose the intent that best matches the user's action request.
 - If no ticker is present but intent needs one, return symbol null and lower confidence.
+- Never claim a subscription was bought, cancelled, refunded, upgraded, downgraded, or changed. Only classify the intent. Backend must perform billing actions.
 
 Return ONLY JSON. No markdown. No explanation.
 
@@ -403,6 +462,9 @@ export async function classifyIntentWithHermes(message) {
     };
   }
 
+  const hermesController = new AbortController();
+  const hermesTimeoutId = setTimeout(() => hermesController.abort(), 2500);
+
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -410,6 +472,7 @@ export async function classifyIntentWithHermes(message) {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
       },
+      signal: hermesController.signal,
       body: JSON.stringify({
         model,
         temperature: 0,
@@ -470,10 +533,18 @@ export async function classifyIntentWithHermes(message) {
 
     return normalized;
   } catch (error) {
+    if (error?.name === "AbortError") {
+      return {
+        ...fallback,
+        hermesError: "Hermes timeout (2.5s) — deterministic fallback used"
+      };
+    }
     return {
       ...fallback,
       hermesError: error?.message || String(error)
     };
+  } finally {
+    clearTimeout(hermesTimeoutId);
   }
 }
 

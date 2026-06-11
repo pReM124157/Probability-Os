@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import {
   safeString,
   safeSubstring,
@@ -6,36 +7,45 @@ import {
   safeObject
 } from "../src/core/safety.js";
 
-function assert(name, condition) {
-  if (!condition) {
-    console.error("❌ FAIL:", name);
-    process.exit(1);
-  } else {
-    console.log("✅", name);
-  }
-}
+describe("safety helpers", () => {
+  it("safeString returns empty string for null", () => {
+    expect(safeString(null)).toBe("");
+  });
 
-// safeString
-assert("safeString null", safeString(null) === "");
-assert("safeString valid", safeString("abc") === "abc");
+  it("safeString returns valid strings unchanged", () => {
+    expect(safeString("abc")).toBe("abc");
+  });
 
-// safeSubstring
-assert("safeSubstring null", safeSubstring(null) === "");
-assert("safeSubstring cut", safeSubstring("abcdef", 3) === "abc");
+  it("safeSubstring returns empty string for null", () => {
+    expect(safeSubstring(null)).toBe("");
+  });
 
-// extractSymbol
-assert("extractSymbol analyze", extractSymbol("ANALYZE TCS") === "TCS");
-assert("extractSymbol slash", extractSymbol("/analyze reliance") === "RELIANCE");
-assert("extractSymbol uppercase", extractSymbol("tcs") === "TCS");
-assert("extractSymbol spaces", extractSymbol("   tcs   ") === "TCS");
-assert("extractSymbol mixed", extractSymbol("Analyze   reliance") === "RELIANCE");
-assert("extractSymbol invalid", extractSymbol("hi") === null);
+  it("safeSubstring truncates strings", () => {
+    expect(safeSubstring("abcdef", 3)).toBe("abc");
+  });
 
-// shouldAnalyze
-assert("shouldAnalyze valid", shouldAnalyze("TCS") === true);
-assert("shouldAnalyze ignore", shouldAnalyze("HI") === false);
+  it("extractSymbol parses common analyze commands", () => {
+    expect(extractSymbol("ANALYZE TCS")).toBe("TCS");
+    expect(extractSymbol("/analyze reliance")).toBe("RELIANCE");
+    expect(extractSymbol("tcs")).toBe("TCS");
+    expect(extractSymbol("   tcs   ")).toBe("TCS");
+    expect(extractSymbol("Analyze   reliance")).toBe("RELIANCE");
+  });
 
-// safeObject
-assert("safeObject null", typeof safeObject(null) === "object");
+  it("extractSymbol rejects invalid short inputs", () => {
+    expect(extractSymbol("hi")).toBeNull();
+  });
 
-console.log("🔥 All safety tests passed");
+  it("shouldAnalyze accepts valid symbols", () => {
+    expect(shouldAnalyze("TCS")).toBe(true);
+  });
+
+  it("shouldAnalyze rejects ignored or invalid tokens", () => {
+    expect(shouldAnalyze("HI")).toBe(false);
+  });
+
+  it("safeObject returns an object for null", () => {
+    expect(typeof safeObject(null)).toBe("object");
+    expect(safeObject(null)).toEqual({});
+  });
+});

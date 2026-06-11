@@ -1,4 +1,4 @@
-import supabase, { isSupabaseSchemaMissing, logInfraFallbackOnce } from "./supabase.service.js";
+import supabase, { isSupabaseUnavailable, logInfraFallbackOnce } from "./supabase.service.js";
 import { logEvent } from "./telemetry.service.js";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export async function canUseProvider(provider) {
     if (!data?.cooldown_until) return true;
     return new Date(data.cooldown_until) <= new Date();
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     logInfraFallbackOnce("provider_health_can_use", "[infra] provider_health table missing, using local fallback");
     const local = localProviderHealth.get(provider);
     if (!local?.cooldownUntil) return true;
@@ -78,7 +78,7 @@ export async function recordProviderSuccess(provider) {
       }, { onConflict: "provider" });
     if (error) throw error;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     localProviderHealth.set(provider, {
       consecutiveFailures: 0,
       cooldownUntil: null,
@@ -136,7 +136,7 @@ export async function recordProviderFailure(provider, errorMessage, threshold = 
       }, { onConflict: "provider" });
     if (upsertError) throw upsertError;
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) throw error;
+    if (!isSupabaseUnavailable(error)) throw error;
     const current = localProviderHealth.get(provider) || { consecutiveFailures: 0 };
     failures = Number(current.consecutiveFailures || 0) + 1;
     const derivedCooldown = computeCooldownSeconds(failures, isAuth);
@@ -188,7 +188,7 @@ export async function recoverProviderHealth(provider) {
       return true; // Now usable
     }
   } catch (error) {
-    if (!isSupabaseSchemaMissing(error)) return false;
+    if (!isSupabaseUnavailable(error)) return false;
     const local = localProviderHealth.get(provider);
     if (local?.cooldownUntil && new Date(local.cooldownUntil) <= new Date()) {
       localProviderHealth.set(provider, {

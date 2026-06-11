@@ -75,36 +75,113 @@ describe("assertValidPrice", () => {
 // ─── INTEGRATION: Formatter failure returns correct shape ─────────────────────
 describe("Formatter failure isolation", () => {
   it("scanner pipeline returns FORMATTER_FAILURE shape when formatter throws", async () => {
-    // Mock the formatter to throw
-    vi.mock("../scanner/scannerFormatter.js", () => ({
+    vi.resetModules();
+
+    vi.doMock("../scanner/scannerFormatter.js", () => ({
       formatMorningScannerReport: () => {
         throw new Error("Simulated formatter crash");
       }
     }));
 
-    // Import AFTER mocking
+    vi.doMock("../services/marketData.service.js", () => ({
+      getHistoricalCandles: async () => Array.from({ length: 60 }, (_, index) => ({
+        close: 100 + index,
+        high: 101 + index,
+        volume: 100000 + index
+      })),
+      getLiveMarketData: async (symbol) => ({
+        currentPrice: 170,
+        previousClose: 168,
+        symbol
+      })
+    }));
+
+    vi.doMock("../scanner/marketOverview.js", () => ({
+      getMarketOverview: async () => ({ sectors: {} })
+    }));
+
+    vi.doMock("../core/analysisContext.js", () => ({
+      buildAnalysisContext: async (symbol) => ({
+        stockData: { Symbol: symbol, Sector: "IT", Name: `${symbol} Ltd` }
+      })
+    }));
+
+    vi.doMock("../agents/master.agent.js", () => ({
+      masterAgent: async () => ({
+        validation: { approved: true }
+      })
+    }));
+
+    vi.doMock("../scanner/newsEngine.js", () => ({
+      buildTickerNewsIntel: async () => ({ sentiment: "NEUTRAL" })
+    }));
+
+    vi.doMock("../scanner/stockRanker.js", () => ({
+      buildRankedStock: ({ ticker }) => ({
+        ticker,
+        sector: "IT",
+        decision: "BUY",
+        convictionScore: 8,
+        convictionScore10: 8,
+        conviction: "HIGH",
+        allocation: "10%",
+        currentPrice: 170,
+        idealEntryZone: "165-170",
+        stopLoss: 160,
+        target1: 180,
+        target2: 185,
+        target3: 190,
+        rr: 2,
+        volumeRatio: 1.5,
+        rsi: 58,
+        trend: "UPTREND",
+        trendStrength: "STRONG",
+        momentumConfirmed: true,
+        strategy: "Breakout",
+        thesis: "Test setup"
+      }),
+      rankAndDiversifyStocks: (stocks) => stocks.slice(0, 1)
+    }));
+
+    vi.doMock("../scanner/signalGuards.js", () => ({
+      validateSignal: () => ({ approved: true, reasons: [] }),
+      shouldRejectSignal: () => false
+    }));
+
+    vi.doMock("../scanner/sectorRotation.js", () => ({
+      buildSectorRotation: async () => []
+    }));
+
+    vi.doMock("../scanner/watchlistEngine.js", () => ({
+      buildWatchlists: () => ({ highRiskWatchlist: [], weakSetupWatchlist: [] })
+    }));
+
+    vi.doMock("../scanner/institutionalFlows.js", () => ({
+      buildInstitutionalFlows: () => ({ flowBias: "BALANCED", note: "" })
+    }));
+
     const { runMorningScannerPipeline } = await import("../agents/scanner.agent.js?t=" + Date.now());
 
-    // Feed a minimal valid context: empty shortlist triggers NO_ACTIONABLE_SETUPS before formatter
-    // We need at least one ranked stock to reach the formatter
-    vi.mock("../core/analysisContext.js", () => ({
-      buildAnalysisContext: async () => ({ stockData: { Symbol: "TCS", Sector: "IT" } })
-    }));
+    const result = await runMorningScannerPipeline(1);
 
-    const result = await runMorningScannerPipeline(1).catch(() => ({
-      status: "PIPELINE_CRASH",
-      recommendations: [],
-      suppressed: true
-    }));
-
-    // Must NOT throw — must return suppressed result
     expect(result).toBeDefined();
+    expect(result.status).toBe("FORMATTER_FAILURE");
     expect(result.suppressed).toBe(true);
     expect(result.recommendations).toBeDefined();
     expect(Array.isArray(result.recommendations)).toBe(true);
 
-    vi.restoreAllMocks();
-  });
+    vi.doUnmock("../scanner/scannerFormatter.js");
+    vi.doUnmock("../services/marketData.service.js");
+    vi.doUnmock("../scanner/marketOverview.js");
+    vi.doUnmock("../core/analysisContext.js");
+    vi.doUnmock("../agents/master.agent.js");
+    vi.doUnmock("../scanner/newsEngine.js");
+    vi.doUnmock("../scanner/stockRanker.js");
+    vi.doUnmock("../scanner/signalGuards.js");
+    vi.doUnmock("../scanner/sectorRotation.js");
+    vi.doUnmock("../scanner/watchlistEngine.js");
+    vi.doUnmock("../scanner/institutionalFlows.js");
+  }, 15000);
 });
 
 // ─── INTEGRATION: Empty shortlist → NO_ACTIONABLE_SETUPS ─────────────────────

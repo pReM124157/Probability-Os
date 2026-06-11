@@ -1,19 +1,37 @@
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import { getOrPopulateSharedCache, getSharedCache, setSharedCache } from "./sharedCache.service.js";
 import { logError, logEvent, logMetric } from "./telemetry.service.js";
 import { decisionSchema } from "../core/agentSchemas.js";
 import { buildDecisionContext } from "../core/analysisContext.js";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const primaryGroq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
-const backupGroq = new Groq({
-  apiKey: process.env.GROQ_API_KEY_BACKUP,
-});
+let primaryGroq = null;
+let backupGroq = null;
+
+function getGroqClient(kind = "primary") {
+  const isPrimary = kind === "primary";
+  const existingClient = isPrimary ? primaryGroq : backupGroq;
+  if (existingClient) return existingClient;
+
+  const envKey = isPrimary ? "GROQ_API_KEY" : "GROQ_API_KEY_BACKUP";
+  const apiKey = process.env[envKey];
+
+  if (!apiKey) {
+    throw new Error(`${envKey} environment variable is missing or empty.`);
+  }
+
+  const client = new Groq({ apiKey });
+  if (isPrimary) primaryGroq = client;
+  else backupGroq = client;
+  return client;
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,7 +78,7 @@ export const generateTieredAnalysis = async (userPrompt, isPro) => {
   const maxTokens = isPro ? 1200 : 250;
 
   try {
-    const response = await primaryGroq.chat.completions.create({
+    const response = await getGroqClient("primary").chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
         { role: "system", content: systemPrompt },
@@ -73,7 +91,7 @@ export const generateTieredAnalysis = async (userPrompt, isPro) => {
   } catch (err) {
     console.error('[TIERED LLM] Primary failed, falling back:', err.message);
     try {
-      const response = await backupGroq.chat.completions.create({
+      const response = await getGroqClient("backup").chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
           { role: "system", content: systemPrompt },
@@ -99,7 +117,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
 
   // LAYER 1: Primary Model + Primary Key
   try {
-    const response = await primaryGroq.chat.completions.create({
+    const response = await getGroqClient("primary").chat.completions.create({
       model: PRIMARY_MODEL,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1, // Lower temperature for more deterministic financial analysis
@@ -117,7 +135,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
       
       // LAYER 2: Fallback Model + Primary Key
       try {
-        const response = await primaryGroq.chat.completions.create({
+        const response = await getGroqClient("primary").chat.completions.create({
           model: FALLBACK_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
@@ -134,7 +152,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
           // LAYER 3: Primary Model + Backup Key
           try {
             console.log(`[LEVEL 3] Using Primary Model (${PRIMARY_MODEL}) on Backup Key...`);
-            const response = await backupGroq.chat.completions.create({
+            const response = await getGroqClient("backup").chat.completions.create({
               model: PRIMARY_MODEL,
               messages: [{ role: "user", content: prompt }],
               temperature: 0.1,
@@ -152,7 +170,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
               
               // LAYER 4: Fallback Model + Backup Key
               try {
-                const response = await backupGroq.chat.completions.create({
+                const response = await getGroqClient("backup").chat.completions.create({
                   model: FALLBACK_MODEL,
                   messages: [{ role: "user", content: prompt }],
                   temperature: 0.1,
@@ -175,7 +193,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
     } else {
       // Non-rate limit error (e.g. invalid request) - move to fallback model or safety
       try {
-        const response = await primaryGroq.chat.completions.create({
+        const response = await getGroqClient("primary").chat.completions.create({
           model: FALLBACK_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
@@ -191,7 +209,7 @@ export const generateInvestmentAnalysis = async (prompt) => {
 
 export async function callGroq(prompt, { maxTokens = 500, temperature = 0.1 } = {}) {
   try {
-    const response = await primaryGroq.chat.completions.create({
+    const response = await getGroqClient("primary").chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: String(prompt || "") }],
       temperature,
@@ -200,7 +218,7 @@ export async function callGroq(prompt, { maxTokens = 500, temperature = 0.1 } = 
     return response?.choices?.[0]?.message?.content || "";
   } catch (error) {
     try {
-      const fallback = await backupGroq.chat.completions.create({
+      const fallback = await getGroqClient("backup").chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [{ role: "user", content: String(prompt || "") }],
         temperature,
@@ -256,11 +274,11 @@ export async function generateStructuredJson({ prompt, schema, schemaName, maxTo
   };
 
   try {
-    return await call(primaryGroq, "llama-3.3-70b-versatile");
+    return await call(getGroqClient("primary"), "llama-3.3-70b-versatile");
   } catch (firstError) {
     try {
       logEvent("llm.structured.retry", { schemaName, reason: firstError.message });
-      return await call(backupGroq, "llama-3.1-8b-instant");
+      return await call(getGroqClient("backup"), "llama-3.1-8b-instant");
     } catch (secondError) {
       logError("llm.structured.fail_closed", secondError, { schemaName });
       throw new Error(`Structured output unavailable for ${schemaName}`);
@@ -403,7 +421,7 @@ export const analyzeStock = async (stock) => {
   }`;
 
   try {
-    const response = await primaryGroq.chat.completions.create({
+    const response = await getGroqClient("primary").chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },

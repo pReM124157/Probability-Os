@@ -1,8 +1,11 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { describe, expect, it } from "vitest";
 
-const migrationsDir = path.resolve("supabase/migrations");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const migrationsDir = path.resolve(__dirname, "../../supabase/migrations");
 
 function readMigration(name) {
   return fs.readFileSync(path.join(migrationsDir, name), "utf8");
