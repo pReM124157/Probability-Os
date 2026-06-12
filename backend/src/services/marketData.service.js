@@ -45,8 +45,9 @@ export const yahooFinance = new YahooFinance({
   suppressNotices: ["yahooSurvey", "ripHistorical"]
 });
 
-// Warm Yahoo session at boot to pre-load crumb/cookie
-(async () => {
+// Warm Yahoo session explicitly from server.js after app.listen.
+// Do not auto-run on import.
+export async function warmupYahooSession() {
   try {
     await yahooFinance.search("RELIANCE");
     logEvent("provider.yahoo.session_warmup.success", { ts: new Date().toISOString() });
@@ -55,7 +56,7 @@ export const yahooFinance = new YahooFinance({
     logEvent("provider.yahoo.session_warmup.failed", { error: err?.message });
     console.warn("[YAHOO] Session warmup failed:", err?.message);
   }
-})();
+}
 
 // STEP 2 — Boot-time provider config verification
 // Expected output: alpha: true, twelvedata: true, finnhub: true
@@ -137,6 +138,10 @@ let yahooCooldownUntil = 0;
 export function resetYahooCircuitBreakerForTest() {
   yahooFailureCount = 0;
   yahooCooldownUntil = 0;
+}
+
+export function clearDataCacheForTest() {
+  dataCache.clear();
 }
 const MAX_YAHOO_FAILURES = 5;
 const YAHOO_COOLDOWN_MS = 60000;
@@ -2093,13 +2098,7 @@ export async function getHistoricalCandles(symbol, options = {}) {
 
 // --- Warm Cache Strategy (Institutional Boot) ---
 const POPULAR_SYMBOLS = ["TCS", "RELIANCE", "INFY", "HDFCBANK", "ICICIBANK"];
-setTimeout(() => {
-  console.log(`[BOOT] Warming up data cache for ${POPULAR_SYMBOLS.length} symbols...`);
-  POPULAR_SYMBOLS.forEach(async (symbol) => {
-    try {
-      await getLiveMarketData(symbol);
-    } catch (err) {
-      // Silent fail for warm boot
-    }
-  });
-}, 5000);
+// Warmup moved out of marketData.service.js to avoid import side effects.
+// server.js should call warmup explicitly after app.listen.
+// Removed top-level cache warmup block.
+
