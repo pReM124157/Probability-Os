@@ -21,10 +21,36 @@ import supabase from '../services/supabase.service.js';
 import { logEvent, logError } from '../services/telemetry.service.js';
 import { fetchProviderSubscription, reconcileSubscriberEntitlement } from '../services/subscriptionReconciliation.service.js';
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
-});
+const hasRazorpayConfig =
+  Boolean(process.env.RAZORPAY_KEY_ID) &&
+  Boolean(process.env.RAZORPAY_KEY_SECRET);
+
+const razorpay = hasRazorpayConfig
+  ? new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET
+    })
+  : null;
+
+if (!hasRazorpayConfig) {
+  console.warn('[PAYMENT] Razorpay disabled: missing RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET');
+}
+
+function createPaymentProviderNotConfiguredError() {
+  const error = new Error('Razorpay is not configured in this environment.');
+  error.code = 'PAYMENT_PROVIDER_NOT_CONFIGURED';
+  error.statusCode = 503;
+  error.success = false;
+  return error;
+}
+
+function requireRazorpay() {
+  if (!razorpay) {
+    throw createPaymentProviderNotConfiguredError();
+  }
+
+  return razorpay;
+}
 
 /**
  * Creates a Razorpay Subscription and returns its hosted payment page URL.
@@ -35,6 +61,7 @@ const razorpay = new Razorpay({
  * @returns {{ url: string, subscriptionId: string }}
  */
 export async function createSubscriptionLink(chatId) {
+  const configuredRazorpay = requireRazorpay();
   const planId = process.env.RAZORPAY_PLAN_ID;
   if (!planId) {
     throw new Error('RAZORPAY_PLAN_ID environment variable is not set');
@@ -65,7 +92,7 @@ export async function createSubscriptionLink(chatId) {
   // Create a Razorpay Subscription object
   // total_count=120 means 120 billing cycles (10 years) — effectively perpetual.
   // The subscription fires subscription.activated, then invoice.paid on each renewal.
-  const subscription = await razorpay.subscriptions.create({
+  const subscription = await configuredRazorpay.subscriptions.create({
     plan_id: planId,
     total_count: 120,
     quantity: 1,
@@ -123,7 +150,8 @@ export const createPaymentLink = createSubscriptionLink;
  * Razorpay will fire subscription.cancelled which the webhook handles.
  */
 export async function cancelSubscriptionNow(subscriptionId) {
-  return await razorpay.subscriptions.cancel(subscriptionId, false);
+  const configuredRazorpay = requireRazorpay();
+  return await configuredRazorpay.subscriptions.cancel(subscriptionId, false);
 }
 
 /**
@@ -131,5 +159,6 @@ export async function cancelSubscriptionNow(subscriptionId) {
  * Razorpay fires subscription.cancelled after the cycle ends.
  */
 export async function cancelSubscriptionLater(subscriptionId) {
-  return await razorpay.subscriptions.cancel(subscriptionId, true);
+  const configuredRazorpay = requireRazorpay();
+  return await configuredRazorpay.subscriptions.cancel(subscriptionId, true);
 }

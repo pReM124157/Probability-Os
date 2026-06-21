@@ -1,12 +1,22 @@
 import Groq from "groq-sdk";
 import { appendChatMemory, getState } from "./distributedState.service.js";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+const groq = process.env.GROQ_API_KEY
+  ? new Groq({
+      apiKey: process.env.GROQ_API_KEY,
+    })
+  : null;
+
+if (!groq) {
+  console.warn("[CHAT] Groq disabled: missing GROQ_API_KEY");
+}
 
 export async function generateChatReply(chatId, message) {
   try {
+    if (!groq) {
+      return "Markets are interesting today — IT is showing strength. Want a quick stock breakdown?";
+    }
+
     const memory = await getState("chat_memory", chatId);
     const history = Array.isArray(memory?.messages) ? memory.messages : [];
     const messages = [

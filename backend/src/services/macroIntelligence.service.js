@@ -18,8 +18,20 @@ import { getIndianIndices, getIndianSectors, getIndianMarketNews } from "./marke
 import { logError, logEvent } from "./telemetry.service.js";
 import { formatMacro } from "./telegramFormatter.service.js";
 
-const primaryGroq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const backupGroq  = new Groq({ apiKey: process.env.GROQ_API_KEY_BACKUP });
+const primaryGroq = process.env.GROQ_API_KEY
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null;
+const backupGroq = process.env.GROQ_API_KEY_BACKUP
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY_BACKUP })
+  : null;
+
+if (!primaryGroq) {
+  console.warn("[MACRO] Primary Groq disabled: missing GROQ_API_KEY");
+}
+
+if (!backupGroq) {
+  console.warn("[MACRO] Backup Groq disabled: missing GROQ_API_KEY_BACKUP");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 1: MARKET DATA COLLECTION
@@ -175,6 +187,10 @@ Rules:
 `.trim();
 
   const call = async (client, model) => {
+    if (!client) {
+      throw new Error("Groq client not configured");
+    }
+
     const res = await client.chat.completions.create({
       model,
       messages: [{ role: "user", content: prompt }],
@@ -220,6 +236,10 @@ Rules:
 `.trim();
 
   const call = async (client, model) => {
+    if (!client) {
+      throw new Error("Groq client not configured");
+    }
+
     const res = await client.chat.completions.create({
       model,
       messages: [{ role: "user", content: prompt }],
