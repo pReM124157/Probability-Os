@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "dev": "npm run test && node src/server.js",
     "test": "vitest run tests/safety.test.js",
+    "kalshi:data": "node scripts/testKalshiDataLayer.js",
     "test:integration": "vitest run tests/integration --reporter=verbose",
     "validate:phase1": "node scripts/validation/generatePhase1Inventory.mjs",
     "validate:baseline": "npm run test && npm run test:integration && npm run validate:phase1",
