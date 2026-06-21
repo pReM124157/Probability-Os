@@ -18,6 +18,7 @@
     "kalshi:replay": "node scripts/testReplayEngine.js",
     "kalshi:risk": "node scripts/testKalshiRiskEngine.js",
     "kalshi:flow": "node scripts/testPaperDecisionFlow.js",
+    "kalshi:settlement": "node scripts/testSettlementEngine.js",
     "test:integration": "vitest run tests/integration --reporter=verbose",
     "validate:phase1": "node scripts/validation/generatePhase1Inventory.mjs",
     "validate:baseline": "npm run test && npm run test:integration && npm run validate:phase1",
