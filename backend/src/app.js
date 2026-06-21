@@ -10,6 +10,7 @@ import backtestingRouter from "./routes/backtesting.routes.js";
 import adaptiveRouter from "./routes/adaptive.routes.js";
 import infraRouter from "./routes/infra.routes.js";
 import reportRouter from "./routes/report.routes.js";
+import kalshiRoutes from "./kalshi/routes/kalshi.routes.js";
 import { buildAnalysisContext } from "./core/analysisContext.js";
 import { createTraceId, logError, logEvent } from "./services/telemetry.service.js";
 
@@ -90,6 +91,7 @@ app.use('/adaptive', adaptiveRouter);
 app.use('/infra', infraRouter);
 app.use('/api/report', reportRouter);
 app.use(express.json());
+app.use("/api/kalshi", kalshiRoutes);
 
 
 
