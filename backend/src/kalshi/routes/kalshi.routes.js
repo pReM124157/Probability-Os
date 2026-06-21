@@ -35,6 +35,7 @@ import {
   getMarketSnapshots,
   getSnapshotStats,
 } from "../data/snapshotStore.js";
+import { buildKalshiPerformanceReport } from "../backtest/performanceReportEngine.js";
 
 const router = express.Router();
 
@@ -191,6 +192,22 @@ router.get("/paper/stats", async (req, res) => {
     res.status(500).json({
       ok: false,
       reason: "PAPER_STATS_FAILED",
+      error: error.message,
+    });
+  }
+});
+
+router.get("/paper/performance", async (req, res) => {
+  try {
+    const report = buildKalshiPerformanceReport({
+      limit: req.query.limit || 10000,
+    });
+
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      reason: "PAPER_PERFORMANCE_FAILED",
       error: error.message,
     });
   }
