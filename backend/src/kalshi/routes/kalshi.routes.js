@@ -12,6 +12,10 @@ import {
   calculateMispricing,
   extractMarketProbabilityFromOrderbook,
 } from "../agents/mispricingEngine.js";
+import {
+  buildHumanSignalExplanation,
+  buildSignalFromDecisionFlowResult,
+} from "../agents/signalExplanationEngine.js";
 
 import { runPaperDecisionFlow } from "../execution/paperDecisionFlow.js";
 import {
@@ -221,6 +225,44 @@ router.post("/paper/decision", async (req, res) => {
     res.status(500).json({
       ok: false,
       reason: "PAPER_DECISION_FAILED",
+      error: error.message,
+    });
+  }
+});
+
+router.post("/signal/explain", async (req, res) => {
+  try {
+    const result = await runPaperDecisionFlow(req.body || {});
+
+    res.json({
+      ok: true,
+      decision: result,
+      signal: buildSignalFromDecisionFlowResult({
+        ...result,
+        marketTicker: req.body?.marketTicker || result.paperTrade?.trade?.marketTicker || null,
+        targetPrice: req.body?.targetPrice ?? result.targetPrice,
+        minutesRemaining: req.body?.minutesRemaining ?? result.minutesRemaining,
+      }),
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      reason: "SIGNAL_EXPLAIN_FAILED",
+      error: error.message,
+    });
+  }
+});
+
+router.post("/signal/from-decision", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      signal: buildSignalFromDecisionFlowResult(req.body || {}),
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      reason: "SIGNAL_FROM_DECISION_FAILED",
       error: error.message,
     });
   }

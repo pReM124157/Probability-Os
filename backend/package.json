@@ -23,6 +23,7 @@
     "kalshi:scan": "node scripts/testMarketScanner.js",
     "kalshi:scheduler": "node scripts/testKalshiScannerScheduler.js",
     "kalshi:performance": "node scripts/testPerformanceReportEngine.js",
+    "kalshi:signal": "node scripts/testSignalExplanationEngine.js",
     "test:integration": "vitest run tests/integration --reporter=verbose",
     "validate:phase1": "node scripts/validation/generatePhase1Inventory.mjs",
     "validate:baseline": "npm run test && npm run test:integration && npm run validate:phase1",
