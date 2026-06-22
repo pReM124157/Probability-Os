@@ -5,6 +5,7 @@ import { startInstitutionalWorkers } from "./workers/index.js";
 import { warmupYahooSession } from "./services/marketData.service.js";
 import { startBot } from "./services/telegram.service.js";
 import { startKalshiScannerScheduler } from "./kalshi/scheduler/kalshiScannerScheduler.js";
+import { startPaperSettlementScheduler } from "./kalshi/scheduler/paperSettlementScheduler.js";
 import app from "./app.js";
 
 const PORT = process.env.PORT || 5000;
@@ -33,6 +34,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("✅ Health check path / is now responsive.");
 
   startKalshiScannerScheduler();
+  startPaperSettlementScheduler();
 
   startBot();
 

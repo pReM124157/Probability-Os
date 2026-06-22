@@ -36,6 +36,10 @@ import {
   runKalshiScannerOnce,
 } from "../scheduler/kalshiScannerScheduler.js";
 import {
+  getPaperSettlementSchedulerStatus,
+  runPaperSettlementOnce,
+} from "../scheduler/paperSettlementScheduler.js";
+import {
   getMarketSnapshots,
   getSnapshotStats,
 } from "../data/snapshotStore.js";
@@ -293,6 +297,35 @@ router.post("/paper/resolve-outcome", async (req, res) => {
     res.status(500).json({
       ok: false,
       reason: "OUTCOME_RESOLUTION_FAILED",
+      error: error.message,
+    });
+  }
+});
+
+router.get("/settlement-scheduler/status", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      scheduler: getPaperSettlementSchedulerStatus(),
+      stats: getPaperTradingStats(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      reason: "SETTLEMENT_SCHEDULER_STATUS_FAILED",
+      error: error.message,
+    });
+  }
+});
+
+router.post("/settlement-scheduler/run", async (req, res) => {
+  try {
+    const result = await runPaperSettlementOnce();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      reason: "SETTLEMENT_SCHEDULER_RUN_FAILED",
       error: error.message,
     });
   }
