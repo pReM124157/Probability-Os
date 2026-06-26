@@ -236,8 +236,8 @@ function normalizeRows(featureRows = [], labeledRows = [], scale = 100) {
       );
       const currentStrategyZone =
         currentEdge !== null &&
-        currentEdge >= 0.10 &&
-        currentEdge <= 0.20 &&
+        currentEdge >= 0.06 &&
+        currentEdge <= 0.10 &&
         minutesRemaining >= 8 &&
         minutesRemaining <= 12;
 
@@ -257,7 +257,7 @@ function normalizeRows(featureRows = [], labeledRows = [], scale = 100) {
         edgeDelta: currentEdge === null ? null : round(vigAdjustedEdge - currentEdge, 4),
         isCurrentlyAccepted: currentStrategyZone,
         isVigPositive: vigAdjustedEdge !== null ? vigAdjustedEdge > 0 : false,
-        isVigEdgeMet: vigAdjustedEdge !== null ? vigAdjustedEdge >= 0.10 : false,
+        isVigEdgeMet: vigAdjustedEdge !== null ? vigAdjustedEdge >= 0.06 : false,
         outcome,
       };
     })
@@ -360,7 +360,7 @@ export async function generateVigAuditReport() {
   const avgVigAdjustedEdge = mean(strategyZoneRows.map((row) => row.vigAdjustedEdge));
   let verdict = "INSUFFICIENT_DATA";
   if (validSnapshots >= 20 && strategyZoneRows.length > 0 && avgVigAdjustedEdge !== null) {
-    if (avgVigAdjustedEdge >= 0.10) {
+    if (avgVigAdjustedEdge >= 0.06) {
       verdict = "VIG_FLOOR_INTACT";
     } else if (avgVigAdjustedEdge >= 0.05) {
       verdict = "VIG_ERODES_EDGE";
@@ -375,10 +375,10 @@ export async function generateVigAuditReport() {
       "0 valid snapshots had canonical model_prob_yes populated. Fix the feature snapshot pipeline first, then re-run the vig audit.";
   }
   if (verdict === "VIG_FLOOR_INTACT") {
-    recommendation = "Current 10% edge floor is meaningful after vig. No change needed.";
+    recommendation = "Current 6% edge floor is meaningful after vig. No change needed.";
   } else if (verdict === "VIG_ERODES_EDGE") {
     recommendation =
-      "Raise the YES strategy floor to roughly 15-18%. The live zone definition is currently in backend/src/kalshi/risk/strategyZoneGuard.js at minEdgePct default 10.";
+      "Raise the YES strategy floor modestly if needed. The live zone definition is currently in backend/src/kalshi/risk/strategyZoneGuard.js at minEdgePct default 6.";
   } else if (verdict === "VIG_KILLS_EDGE") {
     recommendation =
       "Current strategy zone has negative or near-zero EV after vig. Do not go live until the entry filter is recalibrated.";
@@ -419,7 +419,7 @@ export async function generateVigAuditReport() {
     recommendation,
     suggestedChange:
       verdict === "VIG_ERODES_EDGE"
-        ? 'backend/src/kalshi/risk/strategyZoneGuard.js -> minEdgePct: safeNumber(..., 10) // consider 15-18'
+        ? 'backend/src/kalshi/risk/strategyZoneGuard.js -> minEdgePct: safeNumber(..., 6) // consider small upward adjustment only if new data supports it'
         : null,
   };
 }
@@ -443,13 +443,13 @@ export function printVigAuditReport(report) {
   console.log(`Avg spread (vig): ${formatPct(report.totals.avgSpread, 2)}`);
   console.log(`Avg half-spread: ${formatPct(report.totals.avgHalfSpread, 2)}`);
   console.log("");
-  console.log("--- Strategy Zone (current: edge 10-20%, 8-12 min) ---");
+  console.log("--- Strategy Zone (current: edge 6-10%, 8-12 min) ---");
   console.log(`Snapshots in zone: ${report.totals.currentStrategyZone}`);
   console.log(`Avg stored/current edge: ${formatPct(report.totals.avgCurrentEdge)}`);
   console.log(`Avg vig-adjusted edge: ${formatPct(report.totals.avgVigAdjustedEdge)}`);
   console.log(`Avg edge eaten by vig: ${formatPct(report.totals.avgEdgeDelta)}`);
   console.log(`Still vig-positive: ${report.totals.vigPositiveCount} (${formatPct(report.totals.pctCurrentZoneStillPositive, 0)})`);
-  console.log(`Still meets 10% floor after vig: ${report.totals.vigEdgeMetCount} (${formatPct(report.totals.pctCurrentZoneStillMeetsFloor, 0)})`);
+  console.log(`Still meets 6% floor after vig: ${report.totals.vigEdgeMetCount} (${formatPct(report.totals.pctCurrentZoneStillMeetsFloor, 0)})`);
   console.log("");
   console.log("--- Spread Band Breakdown ---");
   console.log("Spread band | Count | Avg vig-edge | % Positive");

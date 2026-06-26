@@ -25,11 +25,11 @@ export function getStrategyZoneConfig(overrides = {}) {
     ),
     minEdgePct: safeNumber(
       overrides.minEdgePct ?? process.env.KALSHI_STRATEGY_MIN_EDGE_PCT,
-      10
+      6
     ),
     maxEdgePct: safeNumber(
       overrides.maxEdgePct ?? process.env.KALSHI_STRATEGY_MAX_EDGE_PCT,
-      20
+      10
     ),
     minMinutesRemaining: safeNumber(
       overrides.minMinutesRemaining ?? process.env.KALSHI_STRATEGY_MIN_MINUTES_REMAINING,

@@ -71,10 +71,11 @@ function main() {
   console.log(`  13-14 min: ${bucketCount(rows, (row) => Number(row.minutes_remaining) >= 13 && Number(row.minutes_remaining) <= 14)}`);
   console.log("");
   console.log("Edge breakdown of rejections:");
-  console.log(`  0-5%:   ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 0 && Number(row.best_adjusted_edge) < 5)}`);
-  console.log(`  5-10%:  ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 5 && Number(row.best_adjusted_edge) < 10)}`);
-  console.log(`  10-20%: ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 10 && Number(row.best_adjusted_edge) <= 20)}`);
-  console.log(`  20%+:   ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 20)}`);
+  console.log(`  0-3%:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 0 && Number(row.best_adjusted_edge) < 3)} (too low)`);
+  console.log(`  3-6%:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 3 && Number(row.best_adjusted_edge) < 6)} (below new floor)`);
+  console.log(`  6-10%:   ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 6 && Number(row.best_adjusted_edge) <= 10)} (NEW STRATEGY ZONE)`);
+  console.log(`  10-20%:  ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 10 && Number(row.best_adjusted_edge) <= 20)} (old zone, now watch-only)`);
+  console.log(`  20%+:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 20)} (danger zone)`);
 }
 
 main();
