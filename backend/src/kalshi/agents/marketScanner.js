@@ -228,6 +228,10 @@ function buildReasonBucket({
     reasons.push("TIME_OUTSIDE_WINDOW");
   }
 
+  if (zoneReason === "PRICE_BELOW_FLOOR") {
+    reasons.push("PRICE_BELOW_FLOOR");
+  }
+
   if (zoneReason === "STRATEGY_ZONE_ENTRY_TOO_EXPENSIVE" || zoneReason === "STRATEGY_ZONE_CROSSED_TARGET_OVERPRICED") {
     reasons.push("PRICE_TOO_HIGH");
   }

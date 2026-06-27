@@ -39,6 +39,10 @@ export function getStrategyZoneConfig(overrides = {}) {
       overrides.maxMinutesRemaining ?? process.env.KALSHI_STRATEGY_MAX_MINUTES_REMAINING,
       12
     ),
+    minEntryPrice: safeNumber(
+      overrides.minEntryPrice ?? process.env.KALSHI_STRATEGY_MIN_ENTRY_PRICE,
+      60
+    ),
     maxEntryPrice: safeNumber(
       overrides.maxEntryPrice ?? process.env.KALSHI_STRATEGY_MAX_ENTRY_PRICE,
       94
@@ -149,6 +153,19 @@ export function evaluateStrategyZoneGuard({
       status: "BLOCKED",
       reason: "STRATEGY_ZONE_MISSING_ENTRY_PRICE",
       tags,
+      config,
+    };
+  }
+
+  // Price floor added 2026-06-27: analysis of 26 settled trades shows
+  // below-50c entries win ~30% (losing). Above-60c entries win 80%.
+  // Economic reason: high YES price = BTC already above target = continuation.
+  if (entry < config.minEntryPrice) {
+    return {
+      ok: false,
+      status: "BLOCKED",
+      reason: "PRICE_BELOW_FLOOR",
+      tags: ["price_below_floor"],
       config,
     };
   }

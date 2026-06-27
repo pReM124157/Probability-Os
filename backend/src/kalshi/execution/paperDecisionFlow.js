@@ -194,10 +194,10 @@ export async function runPaperDecisionFlow({
   }
 
   const entryProbability = getEntryProbabilityForSide({ side, mispricing });
-  // Strategy zone updated 2026-06-26 based on 75-trade analysis:
-  // 6-10% disagreement: 66.7% win rate (18 trades)
-  // 10-20% disagreement: 52.0% win rate (25 trades) - old zone
-  // 20%+ disagreement: 0.0% win rate (4 trades) - danger confirmed
+  // Strategy zone updated 2026-06-27:
+  // keep 6-10% edge and 8-12 min window, but require 60c <= YES ask < 95c.
+  // Settled-trade review showed sub-50c entries losing while 60c+ entries
+  // behaved like continuation bets and won materially more often.
   const strategyZoneGuard = evaluateStrategyZoneGuard({
     side,
     adjustedEdge: mispricing.bestAdjustedEdge,
