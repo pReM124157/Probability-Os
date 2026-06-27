@@ -36,6 +36,7 @@ function countByReason(rows) {
     "EDGE_TOO_LOW",
     "TIME_OUTSIDE_WINDOW",
     "EDGE_TOO_HIGH",
+    "PRICE_BELOW_FLOOR",
     "PRICE_TOO_HIGH",
     "NO_MODEL_OUTPUT",
     "ONE_SIDED_BOOK",

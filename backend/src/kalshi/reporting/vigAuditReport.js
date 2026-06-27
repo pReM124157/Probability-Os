@@ -238,6 +238,8 @@ function normalizeRows(featureRows = [], labeledRows = [], scale = 100) {
         currentEdge !== null &&
         currentEdge >= 0.06 &&
         currentEdge <= 0.10 &&
+        yesAsk >= 0.6 &&
+        yesAsk < 0.95 &&
         minutesRemaining >= 8 &&
         minutesRemaining <= 12;
 
