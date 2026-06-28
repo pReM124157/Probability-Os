@@ -25,7 +25,7 @@ export function getStrategyZoneConfig(overrides = {}) {
     ),
     minEdgePct: safeNumber(
       overrides.minEdgePct ?? process.env.KALSHI_STRATEGY_MIN_EDGE_PCT,
-      6
+      0
     ),
     maxEdgePct: safeNumber(
       overrides.maxEdgePct ?? process.env.KALSHI_STRATEGY_MAX_EDGE_PCT,
@@ -41,7 +41,7 @@ export function getStrategyZoneConfig(overrides = {}) {
     ),
     minEntryPrice: safeNumber(
       overrides.minEntryPrice ?? process.env.KALSHI_STRATEGY_MIN_ENTRY_PRICE,
-      60
+      80
     ),
     maxEntryPrice: safeNumber(
       overrides.maxEntryPrice ?? process.env.KALSHI_STRATEGY_MAX_ENTRY_PRICE,
@@ -49,7 +49,7 @@ export function getStrategyZoneConfig(overrides = {}) {
     ),
     blockHighEdgeAbovePct: safeNumber(
       overrides.blockHighEdgeAbovePct ?? process.env.KALSHI_STRATEGY_BLOCK_HIGH_EDGE_ABOVE_PCT,
-      22
+      30
     ),
   };
 }
@@ -117,18 +117,12 @@ export function evaluateStrategyZoneGuard({
     };
   }
 
-  // Edge ceiling raised 2026-06-28: 80.4% win rate backtest on
-  // 46 trades used 60-95c price as primary signal, not edge size.
-  // High-priced YES entries show 11-19% edge — widening to 22%.
-  if (edge < config.minEdgePct || edge > config.maxEdgePct) {
-    return {
-      ok: false,
-      status: "BLOCKED",
-      reason: "STRATEGY_ZONE_EDGE_OUT_OF_RANGE",
-      tags: ["edge_out_of_range"],
-      config,
-    };
-  }
+  // Strategy simplified 2026-06-28:
+  // Market price IS the signal in 80-94c zone.
+  // Market error: 5.5% (87.6% avg vs 93.1% actual)
+  // Model error: 19.8% (69.1% avg vs 88.9% actual)
+  // Edge filter removed — model underestimates at high prices.
+  // 29 trades, 93.1% win rate without model filter.
 
   if (minutes === null) {
     return {
@@ -160,9 +154,8 @@ export function evaluateStrategyZoneGuard({
     };
   }
 
-  // Price floor added 2026-06-27: analysis of 26 settled trades shows
-  // below-50c entries win ~30% (losing). Above-60c entries win 80%.
-  // Economic reason: high YES price = BTC already above target = continuation.
+  // Price floor tightened 2026-06-28: keep only 80-94c entries.
+  // The realized edge is concentrated in high-priced YES contracts late in the window.
   if (entry < config.minEntryPrice) {
     return {
       ok: false,

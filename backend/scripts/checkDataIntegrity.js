@@ -62,7 +62,7 @@ function main() {
   console.log(`Locked markets (bid=0/ask=100): ${lockedMarkets} (${pct(lockedMarkets, total)}%)`);
   console.log(`Snapshots at mins=15 (open artifacts): ${openArtifacts} (${pct(openArtifacts, total)}%) -- these are now filtered`);
   console.log(`Snapshots with null ask/bid: ${nullAskBid} (${pct(nullAskBid, total)}%) -- these are now filtered`);
-  console.log("Strategy zone: 6-10% edge, 8-12 min, YES, 60c-95c entry");
+  console.log("Strategy zone: 80-94c YES, 8-12min, market-price-signal");
   console.log(
     `Pipeline: ${Array.from(pipelineCounts.entries()).map(([key, count]) => `${key}: ${count}`).join(", ")}`
   );

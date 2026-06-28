@@ -73,10 +73,10 @@ function main() {
   console.log("");
   console.log("Edge breakdown of rejections:");
   console.log(`  0-3%:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 0 && Number(row.best_adjusted_edge) < 3)} (too low)`);
-  console.log(`  3-6%:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 3 && Number(row.best_adjusted_edge) < 6)} (below new floor)`);
-  console.log(`  6-10%:   ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 6 && Number(row.best_adjusted_edge) <= 10)} (lower zone)`);
-  console.log(`  10-22%:  ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 10 && Number(row.best_adjusted_edge) <= 22)} (live strategy zone extension)`);
-  console.log(`  22%+:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 22)} (danger zone)`);
+  console.log(`  3-6%:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 3 && Number(row.best_adjusted_edge) < 6)} (too low)`);
+  console.log(`  6-12%:   ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 6 && Number(row.best_adjusted_edge) < 12)} (informational only)`);
+  console.log(`  12-30%:  ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) >= 12 && Number(row.best_adjusted_edge) <= 30)} (market-price zone if 80-94c / 8-12 min / YES)`);
+  console.log(`  30%+:    ${bucketCount(rows, (row) => Number(row.best_adjusted_edge) > 30)} (danger zone)`);
 }
 
 main();

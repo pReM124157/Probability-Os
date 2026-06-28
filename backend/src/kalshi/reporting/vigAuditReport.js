@@ -235,10 +235,7 @@ function normalizeRows(featureRows = [], labeledRows = [], scale = 100) {
         getField(labeled, ["label", "settlementOutcome", "settlement_outcome"])
       );
       const currentStrategyZone =
-        currentEdge !== null &&
-        currentEdge >= 0.06 &&
-        currentEdge <= 0.22 &&
-        yesAsk >= 0.6 &&
+        yesAsk >= 0.8 &&
         yesAsk < 0.95 &&
         minutesRemaining >= 8 &&
         minutesRemaining <= 12;
@@ -259,7 +256,7 @@ function normalizeRows(featureRows = [], labeledRows = [], scale = 100) {
         edgeDelta: currentEdge === null ? null : round(vigAdjustedEdge - currentEdge, 4),
         isCurrentlyAccepted: currentStrategyZone,
         isVigPositive: vigAdjustedEdge !== null ? vigAdjustedEdge > 0 : false,
-        isVigEdgeMet: vigAdjustedEdge !== null ? vigAdjustedEdge >= 0.06 : false,
+        isVigEdgeMet: vigAdjustedEdge !== null ? vigAdjustedEdge > 0 : false,
         outcome,
       };
     })
@@ -362,9 +359,9 @@ export async function generateVigAuditReport() {
   const avgVigAdjustedEdge = mean(strategyZoneRows.map((row) => row.vigAdjustedEdge));
   let verdict = "INSUFFICIENT_DATA";
   if (validSnapshots >= 20 && strategyZoneRows.length > 0 && avgVigAdjustedEdge !== null) {
-    if (avgVigAdjustedEdge >= 0.06) {
+    if (avgVigAdjustedEdge > 0) {
       verdict = "VIG_FLOOR_INTACT";
-    } else if (avgVigAdjustedEdge >= 0.05) {
+    } else if (avgVigAdjustedEdge >= -0.02) {
       verdict = "VIG_ERODES_EDGE";
     } else {
       verdict = "VIG_KILLS_EDGE";
@@ -377,10 +374,10 @@ export async function generateVigAuditReport() {
       "0 valid snapshots had canonical model_prob_yes populated. Fix the feature snapshot pipeline first, then re-run the vig audit.";
   }
   if (verdict === "VIG_FLOOR_INTACT") {
-    recommendation = "Current 6% edge floor is meaningful after vig. No change needed.";
+    recommendation = "Current market-price zone remains positive after vig. No change needed.";
   } else if (verdict === "VIG_ERODES_EDGE") {
     recommendation =
-      "Raise the YES strategy floor modestly if needed. The live zone definition is currently in backend/src/kalshi/risk/strategyZoneGuard.js at minEdgePct default 6.";
+      "The 80-94c market-price zone is marginal after vig. Monitor more data before increasing size.";
   } else if (verdict === "VIG_KILLS_EDGE") {
     recommendation =
       "Current strategy zone has negative or near-zero EV after vig. Do not go live until the entry filter is recalibrated.";
@@ -421,7 +418,7 @@ export async function generateVigAuditReport() {
     recommendation,
     suggestedChange:
       verdict === "VIG_ERODES_EDGE"
-        ? 'backend/src/kalshi/risk/strategyZoneGuard.js -> minEdgePct: safeNumber(..., 6) // consider small upward adjustment only if new data supports it'
+        ? 'backend/src/kalshi/risk/strategyZoneGuard.js -> market-price zone only (80-94c, 8-12 min, YES) // monitor vig drift before adding filters'
         : null,
   };
 }
@@ -445,13 +442,13 @@ export function printVigAuditReport(report) {
   console.log(`Avg spread (vig): ${formatPct(report.totals.avgSpread, 2)}`);
   console.log(`Avg half-spread: ${formatPct(report.totals.avgHalfSpread, 2)}`);
   console.log("");
-  console.log("--- Strategy Zone (current: edge 6-22%, 8-12 min) ---");
+  console.log("--- Strategy Zone (current: 80-94c, YES, 8-12 min, market-price signal) ---");
   console.log(`Snapshots in zone: ${report.totals.currentStrategyZone}`);
   console.log(`Avg stored/current edge: ${formatPct(report.totals.avgCurrentEdge)}`);
   console.log(`Avg vig-adjusted edge: ${formatPct(report.totals.avgVigAdjustedEdge)}`);
   console.log(`Avg edge eaten by vig: ${formatPct(report.totals.avgEdgeDelta)}`);
   console.log(`Still vig-positive: ${report.totals.vigPositiveCount} (${formatPct(report.totals.pctCurrentZoneStillPositive, 0)})`);
-  console.log(`Still meets 6% floor after vig: ${report.totals.vigEdgeMetCount} (${formatPct(report.totals.pctCurrentZoneStillMeetsFloor, 0)})`);
+  console.log(`Still vig-positive after vig: ${report.totals.vigEdgeMetCount} (${formatPct(report.totals.pctCurrentZoneStillMeetsFloor, 0)})`);
   console.log("");
   console.log("--- Spread Band Breakdown ---");
   console.log("Spread band | Count | Avg vig-edge | % Positive");

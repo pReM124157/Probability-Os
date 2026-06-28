@@ -211,10 +211,8 @@ export async function runPaperDecisionFlow({
   }
 
   const entryProbability = getEntryProbabilityForSide({ side, mispricing });
-  // Strategy zone updated 2026-06-27:
-  // keep 6-10% edge and 8-12 min window, but require 60c <= YES ask < 95c.
-  // Settled-trade review showed sub-50c entries losing while 60c+ entries
-  // behaved like continuation bets and won materially more often.
+  // Strategy simplified 2026-06-28:
+  // in the 80-94c YES zone, market price is the signal and model edge is informational only.
   const strategyZoneGuard = evaluateStrategyZoneGuard({
     side,
     adjustedEdge: mispricing.bestAdjustedEdge,
@@ -228,23 +226,6 @@ export async function runPaperDecisionFlow({
       stage: "STRATEGY_ZONE_GUARD",
       action: "NO_PAPER_TRADE",
       reason: strategyZoneGuard.reason,
-      btc,
-      reachability,
-      distanceGuard,
-      mispricing,
-      shadowNoTrade,
-      strategyZoneGuard,
-      risk: null,
-      paperTrade: null,
-    };
-  }
-
-  if (mispricing.decision !== "TRADE") {
-    return {
-      ok: true,
-      stage: "DECISION",
-      action: "NO_PAPER_TRADE",
-      reason: `MISPRICING_DECISION_${mispricing.decision}`,
       btc,
       reachability,
       distanceGuard,
