@@ -19,3 +19,5 @@ backend/data/kalshi-calibration-report.json
 backend/data/kalshi-no-side-shadow-audit.jsonl
 backend/data/kalshi-trade-lessons.jsonl
 backend/data/lessons.jsonl
+data/*.json
+data/*.jsonl
