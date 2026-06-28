@@ -19,6 +19,11 @@ export const PAPER_TRADE_SOURCES = {
 
 export const LIVE_STRATEGY_NAME = "zone-v3-60c-floor";
 
+// Canonical strategy identity stamped on every new paper trade so downstream
+// stats can be filtered to a single strategy/version and stay trustworthy.
+export const STRATEGY_NAME = "yes_80_94_late_window";
+export const STRATEGY_VERSION = "v1";
+
 function ensureLedgerDir() {
   const dir = path.dirname(PAPER_LEDGER_PATH);
   if (!fs.existsSync(dir)) {
@@ -207,6 +212,8 @@ export function createPaperTrade({
   strategySessionId = null,
   strategyName = null,
   isStrategyTrade = null,
+  strategy_name = STRATEGY_NAME,
+  strategy_version = STRATEGY_VERSION,
 } = {}) {
   const entryProb = safeNumber(entryProbability);
 
@@ -277,6 +284,8 @@ export function createPaperTrade({
     strategySessionId: normalizeString(strategySessionId),
     strategyName: normalizeString(strategyName),
     isStrategyTrade: isStrategyTrade === null ? null : Boolean(isStrategyTrade),
+    strategy_name: normalizeString(strategy_name) || STRATEGY_NAME,
+    strategy_version: normalizeString(strategy_version) || STRATEGY_VERSION,
   };
 
   const ledger = readLedger();

@@ -18,6 +18,7 @@ import {
 } from "../agents/signalExplanationEngine.js";
 
 import { runPaperDecisionFlow } from "../execution/paperDecisionFlow.js";
+import { buildPaperRiskLimits } from "../execution/paperTradingConfig.js";
 import {
   getPaperTrades,
   getPaperTradingStats,
@@ -532,7 +533,14 @@ router.get("/mongo/latest", async (req, res) => {
 
 router.post("/paper/decision", async (req, res) => {
   try {
-    const result = await runPaperDecisionFlow(req.body || {});
+    const body = req.body || {};
+    // Manual endpoints must use the paper risk limits (kill switch OFF, env-driven
+    // caps) — NOT defaultKalshiRiskLimits, whose killSwitchEnabled defaults to true
+    // and would reject every manually-triggered trade.
+    const result = await runPaperDecisionFlow({
+      ...body,
+      riskLimits: body.riskLimits || buildPaperRiskLimits(),
+    });
     res.json(result);
   } catch (error) {
     res.status(500).json({
@@ -545,7 +553,14 @@ router.post("/paper/decision", async (req, res) => {
 
 router.post("/signal/explain", async (req, res) => {
   try {
-    const result = await runPaperDecisionFlow(req.body || {});
+    const body = req.body || {};
+    // Manual endpoints must use the paper risk limits (kill switch OFF, env-driven
+    // caps) — NOT defaultKalshiRiskLimits, whose killSwitchEnabled defaults to true
+    // and would reject every manually-triggered trade.
+    const result = await runPaperDecisionFlow({
+      ...body,
+      riskLimits: body.riskLimits || buildPaperRiskLimits(),
+    });
 
     res.json({
       ok: true,
