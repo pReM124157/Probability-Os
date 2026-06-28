@@ -23,14 +23,11 @@ export function getStrategyZoneConfig(overrides = {}) {
       process.env.KALSHI_STRATEGY_ALLOWED_SIDE ??
       "YES"
     ),
-    minEdgePct: safeNumber(
-      overrides.minEdgePct ?? process.env.KALSHI_STRATEGY_MIN_EDGE_PCT,
-      0
-    ),
-    maxEdgePct: safeNumber(
-      overrides.maxEdgePct ?? process.env.KALSHI_STRATEGY_MAX_EDGE_PCT,
-      22
-    ),
+    // NOTE: edge is intentionally NOT used as a min/max gate inside the zone —
+    // market price is the signal in the 80-94c zone. The only edge control is
+    // `blockHighEdgeAbovePct` below (a suspiciously high edge => stale quote).
+    // The old minEdgePct/maxEdgePct config was never read by the guard and was
+    // removed to avoid implying knobs that do nothing.
     minMinutesRemaining: safeNumber(
       overrides.minMinutesRemaining ?? process.env.KALSHI_STRATEGY_MIN_MINUTES_REMAINING,
       8
