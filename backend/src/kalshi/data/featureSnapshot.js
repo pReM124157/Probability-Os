@@ -124,6 +124,7 @@ export async function buildFeatureSnapshot(
     reachability = null,
     snapshotId = null,
     btcReference = null,
+    finalDecision = null,
   } = {},
   modelOutputs = {}
 ) {
@@ -220,6 +221,12 @@ export async function buildFeatureSnapshot(
     yes_spread: roundNumber(yesSpread, 2),
     edge_grade: modelOutputs?.mispricing?.edgeGrade || null,
     mispricing_decision: modelOutputs?.mispricing?.decision || null,
+    decision_stage: finalDecision?.stage || null,
+    decision_action: finalDecision?.action || null,
+    decision_reason: finalDecision?.reason || null,
+    strategy_name: finalDecision?.strategy?.name || null,
+    strategy_guard_status: finalDecision?.strategyZoneGuard?.status || null,
+    strategy_guard_reason: finalDecision?.strategyZoneGuard?.reason || null,
 
     session_bucket: buildSessionBucket(now),
     provider_quotes: Array.isArray(btcRef?.quotes)

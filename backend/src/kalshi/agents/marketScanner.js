@@ -620,6 +620,7 @@ export async function scanKalshiBtcMarkets({
           reachability,
           snapshotId: snapshot.id,
           btcReference: btc,
+          finalDecision: decision,
         },
         {
           modelYesProbability: reachability?.modelProbability ?? null,
