@@ -34,9 +34,12 @@ import { startMacroReportScheduler } from "./scheduler/macroReport.scheduler.js"
 import { buildKalshiPerformanceReport } from "./kalshi/backtest/performanceReportEngine.js";
 import {
   getPaperTradingStats,
+  hydrateLedgerFromMongo,
   LIVE_STRATEGY_NAME,
   PAPER_TRADE_SOURCES,
 } from "./kalshi/execution/paperTradingEngine.js";
+import { hydrateMarketSnapshotsFromMongo } from "./kalshi/data/snapshotStore.js";
+import { hydrateFeatureSnapshotsFromMongo } from "./kalshi/data/featureSnapshotStore.js";
 import { buildPaperRiskLimits, getPaperTradingConfig } from "./kalshi/execution/paperTradingConfig.js";
 import { hasSupabaseConfig } from "./services/supabase.service.js";
 import app from "./app.js";
@@ -231,6 +234,18 @@ async function warmKalshiRuntime() {
 async function startServer() {
   try {
     await connectMongo();
+    // Mongo is the source of truth: reconcile local caches from Mongo before any
+    // scan/settlement reads them, so residual local data can never drive decisions.
+    const [ledger, marketSnaps, featureSnaps] = await Promise.all([
+      hydrateLedgerFromMongo(),
+      hydrateMarketSnapshotsFromMongo(),
+      hydrateFeatureSnapshotsFromMongo(),
+    ]);
+    console.log("[BOOT] Hydrated local caches from MongoDB (source of truth)", {
+      paperTrades: ledger,
+      marketSnapshots: marketSnaps,
+      featureSnapshots: featureSnaps,
+    });
   } catch (error) {
     console.warn("[mongo] startup connection failed, continuing without MongoDB:", error.message);
   }

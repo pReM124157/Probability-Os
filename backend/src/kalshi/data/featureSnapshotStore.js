@@ -4,6 +4,7 @@ import { CURRENT_FEATURE_PIPELINE_VERSION } from "./featureSnapshot.js";
 import {
   isMongoDualWriteEnabled,
   saveFeatureSnapshotMongo,
+  loadAllFeatureSnapshotsMongo,
 } from "../storage/mongoPersistence.js";
 
 const FEATURE_SNAPSHOT_PATH =
@@ -14,6 +15,25 @@ function ensureDir() {
   const dir = path.dirname(FEATURE_SNAPSHOT_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+// Mongo is the source of truth: rebuild the local feature-snapshot JSONL cache
+// from Mongo at boot (most-recent window), discarding any residual local data.
+export async function hydrateFeatureSnapshotsFromMongo() {
+  try {
+    const rows = await loadAllFeatureSnapshotsMongo();
+    if (!rows) {
+      return { ok: false, skipped: true, reason: "MONGO_NOT_READY" };
+    }
+    const maxSnapshots = Number(process.env.KALSHI_MAX_SNAPSHOTS || 5000);
+    const trimmed = rows.slice(-maxSnapshots);
+    ensureDir();
+    const body = trimmed.map((r) => JSON.stringify(r)).join("\n");
+    fs.writeFileSync(FEATURE_SNAPSHOT_PATH, trimmed.length ? `${body}\n` : "");
+    return { ok: true, count: trimmed.length };
+  } catch (error) {
+    return { ok: false, reason: "HYDRATE_FAILED", error: error.message };
   }
 }
 
