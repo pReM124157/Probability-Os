@@ -193,7 +193,11 @@ export async function runPaperDecisionFlow({
 
   // A skipped distance guard is an explicit pass for the 80-94c continuation zone.
 
-  const side = mispricing.bestSide;
+  // Strategy 2026-06-28: in the 80-94c YES zone, market price is the signal.
+  // Model underestimates YES probability at high prices (19.8% avg error).
+  // Force YES side when market already says 80c+ - don't let model pick NO.
+  const rawSide = mispricing.bestSide;
+  const side = (safeNumber(yesAskPrice) >= 80) ? "YES" : rawSide;
 
   if (side === "NO") {
     return {
