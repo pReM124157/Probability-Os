@@ -120,6 +120,7 @@ export async function runPaperDecisionFlow({
   const distanceGuard = evaluateTargetDistanceGuard({
     currentPrice,
     targetPrice: target,
+    yesAsk: yesAskPrice,
     minutesRemaining,
   });
 
@@ -189,6 +190,8 @@ export async function runPaperDecisionFlow({
       paperTrade: null,
     };
   }
+
+  // A skipped distance guard is an explicit pass for the 80-94c continuation zone.
 
   const side = mispricing.bestSide;
 
