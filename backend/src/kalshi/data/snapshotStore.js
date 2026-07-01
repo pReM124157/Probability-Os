@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   isMongoDualWriteEnabled,
   saveMarketSnapshotMongo,
+  loadAllMarketSnapshotsMongo,
 } from "../storage/mongoPersistence.js";
 
 const SNAPSHOT_PATH =
@@ -30,6 +31,23 @@ function readSnapshots() {
 function writeSnapshots(snapshots) {
   ensureDir();
   fs.writeFileSync(SNAPSHOT_PATH, JSON.stringify(snapshots, null, 2) + "\n");
+}
+
+// Mongo is the source of truth: reconcile the local market-snapshot cache from
+// Mongo at boot (most-recent window), discarding any residual local data.
+export async function hydrateMarketSnapshotsFromMongo() {
+  try {
+    const rows = await loadAllMarketSnapshotsMongo();
+    if (!rows) {
+      return { ok: false, skipped: true, reason: "MONGO_NOT_READY" };
+    }
+    const maxSnapshots = Number(process.env.KALSHI_MAX_SNAPSHOTS || 5000);
+    const trimmed = rows.slice(-maxSnapshots);
+    writeSnapshots(trimmed);
+    return { ok: true, count: trimmed.length };
+  } catch (error) {
+    return { ok: false, reason: "HYDRATE_FAILED", error: error.message };
+  }
 }
 
 export function saveMarketSnapshot(snapshot) {

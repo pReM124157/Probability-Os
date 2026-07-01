@@ -261,6 +261,33 @@ export async function updateSystemSessionMongo(sessionId, updates = {}) {
   }
 }
 
+// --- Mongo as source of truth: bulk loaders used to hydrate local caches at boot ---
+
+function stripMongoMeta(doc = {}) {
+  const { _id, __v, _mongoKey, updatedAtMongo, ...rest } = doc;
+  return rest;
+}
+
+async function loadAllMongo(Model, sort = { createdAt: 1 }) {
+  if (!canWriteMongo()) {
+    return null; // signal MONGO_NOT_READY -> caller keeps existing local cache
+  }
+  const docs = await Model.find({}).sort(sort).lean();
+  return docs.map(stripMongoMeta);
+}
+
+export async function loadAllPaperTradesMongo() {
+  return loadAllMongo(PaperTrade, { openedAt: 1, createdAt: 1 });
+}
+
+export async function loadAllMarketSnapshotsMongo() {
+  return loadAllMongo(MarketSnapshot, { createdAt: 1, capturedAt: 1 });
+}
+
+export async function loadAllFeatureSnapshotsMongo() {
+  return loadAllMongo(FeatureSnapshot, { createdAt: 1, capturedAt: 1 });
+}
+
 export async function getMongoStats() {
   const state = getMongoConnectionState();
   if (!canWriteMongo()) {

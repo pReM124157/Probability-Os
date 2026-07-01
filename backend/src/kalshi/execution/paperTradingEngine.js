@@ -5,6 +5,7 @@ import {
   isMongoDualWriteEnabled,
   savePaperTradeMongo,
   updatePaperTradeMongo,
+  loadAllPaperTradesMongo,
 } from "../storage/mongoPersistence.js";
 
 const PAPER_LEDGER_PATH =
@@ -50,6 +51,23 @@ function readLedger() {
 function writeLedger(trades) {
   ensureLedgerDir();
   fs.writeFileSync(PAPER_LEDGER_PATH, JSON.stringify(trades, null, 2) + "\n");
+}
+
+// Mongo is the source of truth. At boot we overwrite the local ledger cache with
+// the authoritative set from Mongo, so no residual/stale local rows can drive
+// decisions. If Mongo is unavailable, the existing local cache is left untouched.
+export async function hydrateLedgerFromMongo() {
+  try {
+    const rows = await loadAllPaperTradesMongo();
+    if (!rows) {
+      return { ok: false, skipped: true, reason: "MONGO_NOT_READY" };
+    }
+    const normalized = rows.map(normalizeTradeRecord);
+    writeLedger(normalized);
+    return { ok: true, count: normalized.length };
+  } catch (error) {
+    return { ok: false, reason: "HYDRATE_FAILED", error: error.message };
+  }
 }
 
 function dualWritePaperTrade(trade) {
