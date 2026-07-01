@@ -123,7 +123,19 @@ function getTradeEntryPrice(trade = {}) {
 }
 
 function getTradeStakeUsd(trade = {}) {
-  return safeNumber(trade.stakeUsd ?? trade.stake ?? trade.costUsd ?? trade.sizeUsd, 0);
+  return safeNumber(trade.stakeUsd ?? trade.stake ?? trade.sizeUsd ?? trade.costUsd, 0);
+}
+
+function calculateSettledPnlUsd({ isWin, entryPrice, stakeUsd, contracts, maxProfitUsd }) {
+  if (!isWin) {
+    return -stakeUsd;
+  }
+
+  if (contracts > 0 && entryPrice !== null) {
+    return contracts * (1 - entryPrice / 100);
+  }
+
+  return safeNumber(maxProfitUsd, 0);
 }
 
 function tradeMatchesFilters(trade, filters = {}) {
@@ -254,7 +266,7 @@ export function createPaperTrade({
   const costUsd = Number(((contracts * entryProb) / 100).toFixed(2));
   const maxPayoutUsd = Number(contracts.toFixed(2));
   const maxProfitUsd = Number((maxPayoutUsd - costUsd).toFixed(2));
-  const maxLossUsd = costUsd;
+  const maxLossUsd = finalSizeUsd;
 
   const trade = {
     id: generateTradeId(),
@@ -275,8 +287,8 @@ export function createPaperTrade({
     minutesRemaining: safeNumber(minutesRemaining),
 
     sizeUsd: finalSizeUsd,
-    stake: costUsd,
-    stakeUsd: costUsd,
+    stake: finalSizeUsd,
+    stakeUsd: finalSizeUsd,
     contracts,
     costUsd,
     maxPayoutUsd,
@@ -348,11 +360,13 @@ export function settlePaperTrade({
     actualOutcome === "YES" ? "YES_WIN" : actualOutcome === "NO" ? "YES_LOSS" : isWin ? "YES_WIN" : "YES_LOSS";
   const exitPrice =
     actualOutcome === "YES" ? 100 : actualOutcome === "NO" ? 0 : safeNumber(settlementPrice);
-  const pnlUsd = isWin
-    ? contracts > 0 && entryPrice !== null
-      ? contracts * (1 - entryPrice / 100)
-      : safeNumber(trade.maxProfitUsd, 0)
-    : -stakeUsd;
+  const pnlUsd = calculateSettledPnlUsd({
+    isWin,
+    entryPrice,
+    stakeUsd,
+    contracts,
+    maxProfitUsd: trade.maxProfitUsd,
+  });
   const roundedPnlUsd = Number(pnlUsd.toFixed(2));
   const returnPct = stakeUsd > 0 ? (roundedPnlUsd / stakeUsd) * 100 : null;
   const settledAt = new Date().toISOString();
