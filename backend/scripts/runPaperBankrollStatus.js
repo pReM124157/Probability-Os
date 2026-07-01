@@ -41,13 +41,17 @@ function getUtcDayRange(date = new Date()) {
   };
 }
 
+function getTradePnl(trade = {}) {
+  return safeNumber(trade.pnl ?? trade.pnlUsd, 0);
+}
+
 function buildSummary(trades = [], startingBankrollUsd = 50) {
   const settledTrades = trades.filter((trade) => trade.status === "WON" || trade.status === "LOST");
   const openTrades = trades.filter((trade) => trade.status === "OPEN");
   const wins = settledTrades.filter((trade) => trade.status === "WON").length;
   const losses = settledTrades.filter((trade) => trade.status === "LOST").length;
   const totalStaked = trades.reduce((sum, trade) => sum + safeNumber(trade.costUsd), 0);
-  const netPnl = settledTrades.reduce((sum, trade) => sum + safeNumber(trade.pnlUsd), 0);
+  const netPnl = settledTrades.reduce((sum, trade) => sum + getTradePnl(trade), 0);
   const winRate = settledTrades.length ? (wins / settledTrades.length) * 100 : 0;
 
   return {

@@ -118,6 +118,14 @@ function normalizeTradeRecord(trade = {}) {
   };
 }
 
+function getTradeEntryPrice(trade = {}) {
+  return safeNumber(trade.entryPrice ?? trade.entryProbability);
+}
+
+function getTradeStakeUsd(trade = {}) {
+  return safeNumber(trade.stakeUsd ?? trade.stake ?? trade.costUsd ?? trade.sizeUsd, 0);
+}
+
 function tradeMatchesFilters(trade, filters = {}) {
   const normalized = normalizeTradeRecord(trade);
 
@@ -267,16 +275,24 @@ export function createPaperTrade({
     minutesRemaining: safeNumber(minutesRemaining),
 
     sizeUsd: finalSizeUsd,
+    stake: costUsd,
+    stakeUsd: costUsd,
     contracts,
     costUsd,
     maxPayoutUsd,
     maxProfitUsd,
     maxLossUsd,
 
+    entryPrice: Number(entryProb.toFixed(2)),
+
     openedAt: new Date().toISOString(),
     closedAt: null,
     settlement: null,
-    pnlUsd: null,
+    exitPrice: null,
+    settlementOutcome: null,
+    settledAt: null,
+    pnl: 0,
+    pnlUsd: 0,
     returnPct: null,
     notes,
     strategy: strategy && typeof strategy === "object" ? strategy : null,
@@ -320,20 +336,45 @@ export function settlePaperTrade({
   }
 
   const isWin = Boolean(won);
-  const pnlUsd = isWin ? trade.maxProfitUsd : -trade.maxLossUsd;
-  const returnPct = trade.costUsd > 0 ? (pnlUsd / trade.costUsd) * 100 : null;
+  const entryPrice = getTradeEntryPrice(trade);
+  const stakeUsd = getTradeStakeUsd(trade);
+  const contracts =
+    safeNumber(trade.contracts) && safeNumber(trade.contracts) > 0
+      ? safeNumber(trade.contracts)
+      : entryPrice && stakeUsd > 0
+        ? stakeUsd / (entryPrice / 100)
+        : 0;
+  const settlementOutcome =
+    actualOutcome === "YES" ? "YES_WIN" : actualOutcome === "NO" ? "YES_LOSS" : isWin ? "YES_WIN" : "YES_LOSS";
+  const exitPrice =
+    actualOutcome === "YES" ? 100 : actualOutcome === "NO" ? 0 : safeNumber(settlementPrice);
+  const pnlUsd = isWin
+    ? contracts > 0 && entryPrice !== null
+      ? contracts * (1 - entryPrice / 100)
+      : safeNumber(trade.maxProfitUsd, 0)
+    : -stakeUsd;
+  const roundedPnlUsd = Number(pnlUsd.toFixed(2));
+  const returnPct = stakeUsd > 0 ? (roundedPnlUsd / stakeUsd) * 100 : null;
+  const settledAt = new Date().toISOString();
 
   const updated = normalizeTradeRecord({
     ...trade,
     status: isWin ? "WON" : "LOST",
-    closedAt: new Date().toISOString(),
+    closedAt: settledAt,
+    settledAt,
     settlement: {
       won: isWin,
       settlementPrice,
       settlementBtcPrice: safeNumber(settlementBtcPrice),
       actualOutcome: actualOutcome || null,
     },
-    pnlUsd: Number(pnlUsd.toFixed(2)),
+    entryPrice,
+    exitPrice,
+    settlementOutcome,
+    stake: stakeUsd,
+    stakeUsd,
+    pnl: roundedPnlUsd,
+    pnlUsd: roundedPnlUsd,
     returnPct: returnPct === null ? null : Number(returnPct.toFixed(2)),
   });
 
