@@ -7,6 +7,12 @@ import {
   saveNoSideShadowAuditMongo,
 } from "../storage/mongoPersistence.js";
 
+// NO-side shadow audit measures: 3-8 min remaining, BTC below target.
+// This is NOT the mirror of the YES strategy (8-12 min, BTC above target).
+// Do not use this data to justify NO-side trading in the YES strategy zone.
+// Reconciliation run 2026-07-01: 80-85c YES zone shows 90.3% YES wins.
+// NO side requires separate validation with correct filters before enabling.
+
 const NO_SIDE_SHADOW_AUDIT_PATH =
   process.env.KALSHI_NO_SIDE_SHADOW_AUDIT_PATH ||
   path.resolve("data/kalshi-no-side-shadow-audit.jsonl");
