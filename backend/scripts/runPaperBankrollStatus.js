@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const CLEAN_PIPELINE_START = "2026-06-26T00:00:00.000Z";
+const STAKE_NOTE = "Stake per trade:   $10 (raised from $5 on 2026-07-01, after 31 trades at 90.3%)";
 
 function safeNumber(value, fallback = 0) {
   const n = Number(value);
@@ -70,6 +71,7 @@ function buildSummary(trades = [], startingBankrollUsd = 50) {
 function printBankrollSection(title, summary) {
   console.log(title);
   console.log(`Starting bankroll:   ${formatUsd(summary.startingBankrollUsd)}`);
+  console.log(STAKE_NOTE);
   console.log(`Trades:              ${summary.settledTrades} settled, ${summary.openTrades} open`);
   console.log(`Win rate:            ${formatPct(summary.winRate)}`);
   console.log(`Net P&L:             ${formatSignedUsd(summary.netPnl)}`);

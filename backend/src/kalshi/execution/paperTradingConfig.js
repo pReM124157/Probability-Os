@@ -4,7 +4,7 @@ function safeNumber(value, fallback) {
 }
 
 export function getPaperTradingConfig() {
-  const requestedSizeUsd = Math.max(1, safeNumber(process.env.KALSHI_FIXED_TRADE_SIZE_USD, 5));
+  const requestedSizeUsd = Math.max(1, safeNumber(process.env.KALSHI_FIXED_TRADE_SIZE_USD, 10));
   const paperBankrollUsd = Math.max(requestedSizeUsd, safeNumber(process.env.PAPER_BANKROLL_USD, 50));
   const maxPositionSizeUsd = Math.max(
     requestedSizeUsd,
